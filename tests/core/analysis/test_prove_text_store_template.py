@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.click import ClickBlocks
-from pyrung.core import Bool, Program, Rung, copy, out, to_text
+from pyrung.core import Bool, Program, copy, out, rung, to_text
 
 
 def _program(read: str) -> Program:
@@ -17,13 +17,13 @@ def _program(read: str) -> Program:
     ds, txt = blocks.ds, blocks.txt
     b, y = Bool("B"), Bool("Y")
     with Program(strict=False) as prog:
-        with Rung(b):
+        with rung(b):
             copy(12, ds[1])
-        with Rung(~b):
+        with rung(~b):
             copy(3, ds[1])
-        with Rung():
+        with rung():
             copy(ds[1], txt[1], convert=to_text())
-        with Rung(txt[1] == read):
+        with rung(txt[1] == read):
             out(y)
     return prog
 

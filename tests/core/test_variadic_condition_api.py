@@ -7,13 +7,13 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     count_down,
     count_up,
     event_drum,
     on_delay,
+    rung,
     shift,
     time_drum,
 )
@@ -30,7 +30,7 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions(runner_facto
     reset_b = Bool("ResetB")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             count_up(Counter[1], preset=10).down(down_a, down_b).reset(reset_a, reset_b)
 
     runner = runner_factory(logic)
@@ -76,7 +76,7 @@ def test_shift_clock_and_reset_accept_variadic_grouped_conditions(runner_factory
     bits = Block("C", TagType.BOOL, 1, 8)
 
     with Program() as logic:
-        with Rung(data):
+        with rung(data):
             shift(bits.select(1, 3)).clock(clock_a, clock_b).reset(reset_a, reset_b)
 
     runner = runner_factory(logic)
@@ -116,7 +116,7 @@ def test_on_delay_reset_accepts_variadic_conditions(runner_factory) -> None:
     reset_b = Bool("ResetB")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(Timer[1], preset=100).reset(reset_a, reset_b)
 
     runner = runner_factory(logic, dt=0.1)
@@ -140,7 +140,7 @@ def test_count_down_reset_accepts_variadic_grouped_conditions(runner_factory) ->
     reset_b = Bool("ResetB")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             count_down(Counter2, preset=5).reset(reset_a, reset_b)
 
     runner = runner_factory(logic)
@@ -174,7 +174,7 @@ def test_event_drum_reset_and_jog_accept_variadic_conditions(runner_factory) -> 
     e2 = Bool("E2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[y1, y2],
                 events=[e1, e2],
@@ -228,7 +228,7 @@ def test_time_drum_reset_and_jog_accept_variadic_conditions(runner_factory) -> N
     y2 = Bool("Y2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[y1, y2],
                 presets=[1000, 1000],
@@ -281,7 +281,7 @@ def test_event_drum_jump_accepts_variadic_grouped_conditions(runner_factory) -> 
     e2 = Bool("E2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[y1, y2],
                 events=[e1, e2],
@@ -325,7 +325,7 @@ def test_time_drum_jump_accepts_variadic_grouped_conditions(runner_factory) -> N
     y2 = Bool("Y2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[y1, y2],
                 presets=[1000, 1000],
@@ -387,7 +387,7 @@ def test_single_condition_forms_remain_supported_for_program_backed_instructions
     enable = Bool("Enable")
     reset = Bool("Reset")
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             count_down(Counter3, preset=5).reset(reset)
 
     runner = runner_factory(logic)

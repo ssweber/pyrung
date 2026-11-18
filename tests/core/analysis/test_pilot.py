@@ -19,7 +19,6 @@ from pyrung import (
     Or,
     Physical,
     Program,
-    Rung,
     TagType,
     Timer,
     call,
@@ -1151,7 +1150,7 @@ def _simple_latch_prog():
     Start = Bool("Start", external=True)
     Running = Bool("Running")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Running)
     return prog, Start, Running
 
@@ -1162,9 +1161,9 @@ def _two_step_latch():
     Ready = Bool("Ready")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Ready)
-        with Rung(Ready, Confirm):
+        with rung(Ready, Confirm):
             latch(Done)
     return prog, Start, Confirm, Ready, Done
 
@@ -1177,11 +1176,11 @@ def _three_step_program():
     B = Bool("B")
     C = Bool("C")
     with Program() as prog:
-        with Rung(CmdA):
+        with rung(CmdA):
             latch(A)
-        with Rung(A, CmdB):
+        with rung(A, CmdB):
             latch(B)
-        with Rung(B, CmdC):
+        with rung(B, CmdC):
             latch(C)
     return prog, CmdA, CmdB, CmdC, A, B, C
 
@@ -1251,11 +1250,11 @@ def test_engine_independent_and_dependent():
     B = Bool("B")
     C = Bool("C")
     with Program() as prog:
-        with Rung(CmdA):
+        with rung(CmdA):
             latch(A)
-        with Rung(CmdB):
+        with rung(CmdB):
             latch(B)
-        with Rung(A, CmdC):
+        with rung(A, CmdC):
             latch(C)
     plc = PLC(prog, dt=0.010)
     path = plc.how(C)
@@ -1281,25 +1280,25 @@ def _cmd_protocol_program():
     Output = Bool("Output")
 
     with Program() as prog:
-        with Rung(CmdReset):
+        with rung(CmdReset):
             copy(1, CtrlCmd)
             copy(1, CmdRequest)
-        with Rung(CmdStart):
+        with rung(CmdStart):
             copy(2, CtrlCmd)
             copy(1, CmdRequest)
 
-        with Rung(CmdRequest == 1, CtrlCmd == 1, StateCurrent == 0):
+        with rung(CmdRequest == 1, CtrlCmd == 1, StateCurrent == 0):
             copy(1, StateRequested)
-        with Rung(CmdRequest == 1, CtrlCmd == 2, StateCurrent == 1):
+        with rung(CmdRequest == 1, CtrlCmd == 2, StateCurrent == 1):
             copy(2, StateRequested)
 
-        with Rung(StateRequested != 0):
+        with rung(StateRequested != 0):
             copy(StateRequested, StateCurrent)
             copy(0, StateRequested)
             copy(0, CmdRequest)
             copy(0, CtrlCmd)
 
-        with Rung(StateCurrent == 2):
+        with rung(StateCurrent == 2):
             out(Output)
 
     return prog, Output
@@ -1325,7 +1324,7 @@ def _return_early_program():
             out(Output)
 
     with Program() as prog:
-        with Rung():
+        with rung():
             call(my_sfc)
 
     return prog, Output
@@ -1347,15 +1346,15 @@ def _step_sequencer_program():
     Output = Bool("Output")
 
     with Program() as prog:
-        with Rung(CurStep == 1, Advance):
+        with rung(CurStep == 1, Advance):
             copy(1, Trans)
-        with Rung(CurStep == 3):
+        with rung(CurStep == 3):
             out(Output)
-        with Rung():
+        with rung():
             math(CurStep % 2, ValIsOdd)
-        with Rung(ValIsOdd != 1):
+        with rung(ValIsOdd != 1):
             math(CurStep + 1, CurStep)
-        with Rung(Trans == 1):
+        with rung(Trans == 1):
             math(CurStep + 1, CurStep)
             copy(0, Trans)
 
@@ -1414,21 +1413,21 @@ def _deep_call_program():
             copy(0, Trans)
 
     with Program() as prog:
-        with Rung(CmdProd):
+        with rung(CmdProd):
             copy(1, Mode)
 
-        with Rung(CmdReset, StateCurrent == 0):
+        with rung(CmdReset, StateCurrent == 0):
             copy(1, StateRequested)
-        with Rung(CmdStart, StateCurrent == 1):
+        with rung(CmdStart, StateCurrent == 1):
             copy(2, StateRequested)
-        with Rung(StateRequested != 0):
+        with rung(StateRequested != 0):
             copy(StateRequested, StateCurrent)
             copy(0, StateRequested)
 
-        with Rung(Mode == 1):
+        with rung(Mode == 1):
             call(production)
 
-        with Rung(SfcCall == 1):
+        with rung(SfcCall == 1):
             call(my_sfc)
 
     return prog, Output

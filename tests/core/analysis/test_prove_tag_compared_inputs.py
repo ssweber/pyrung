@@ -17,11 +17,11 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     Timer,
     latch,
     on_delay,
     out,
+    rung,
 )
 from pyrung.core.analysis.prove import (
     Intractable,
@@ -39,15 +39,15 @@ def _timer_equals_input() -> tuple[Program, Bool, list[tuple[dict[str, Any], int
     timer = Timer.clone("KT")
     window, first, second, bad = Bool("KY"), Bool("KA"), Bool("KB"), Bool("KBad")
     with Program(strict=False) as logic:
-        with Rung(en):
+        with rung(en):
             on_delay(timer, 40)
-        with Rung(value > 5, value < 36):
+        with rung(value > 5, value < 36):
             out(window)
-        with Rung(timer.Acc == value, timer.Acc < 15, window):
+        with rung(timer.Acc == value, timer.Acc < 15, window):
             latch(first)
-        with Rung(first, timer.Acc == value, timer.Acc > 15, timer.Acc < 25, window):
+        with rung(first, timer.Acc == value, timer.Acc > 15, timer.Acc < 25, window):
             latch(second)
-        with Rung(second, timer.Acc == value, timer.Acc > 25, window):
+        with rung(second, timer.Acc == value, timer.Acc > 25, window):
             latch(bad)
     # The accumulator moves 10 ms a scan, so it reads 10, then 20, then 30.
     seq = [({"KEn": True, "KIn": 10}, 1), ({"KIn": 20}, 1), ({"KIn": 30}, 1)]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, call, copy, out, subroutine
+from pyrung.core import Bool, Int, Program, call, copy, out, rung, subroutine
 
 
 class TestSubroutineCall:
@@ -12,12 +12,12 @@ class TestSubroutineCall:
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         runner = runner_factory(logic)
@@ -31,11 +31,11 @@ class TestSubroutineCall:
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         runner = runner_factory(logic)
@@ -49,11 +49,11 @@ class TestSubroutineCall:
 
         @subroutine("init")
         def init_sequence():
-            with Rung():
+            with rung():
                 out(SubLight)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call(init_sequence)
 
         runner = runner_factory(logic)
@@ -66,12 +66,12 @@ class TestSubroutineCall:
         Counter = Int("Counter")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Counter + 1, Counter)
                 call("add_more")
 
             with subroutine("add_more"):
-                with Rung():
+                with rung():
                     copy(Counter + 10, Counter)
 
         runner = runner_factory(logic)
@@ -85,16 +85,16 @@ class TestSubroutineCall:
         B = Bool("B")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 call("sub_a")
                 call("sub_b")
 
             with subroutine("sub_a"):
-                with Rung():
+                with rung():
                     out(A)
 
             with subroutine("sub_b"):
-                with Rung():
+                with rung():
                     out(B)
 
         runner = runner_factory(logic)
@@ -108,15 +108,15 @@ class TestSubroutineCall:
         Deep = Bool("Deep")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 call("outer")
 
             with subroutine("outer"):
-                with Rung():
+                with rung():
                     call("inner")
 
             with subroutine("inner"):
-                with Rung():
+                with rung():
                     out(Deep)
 
         runner = runner_factory(logic)

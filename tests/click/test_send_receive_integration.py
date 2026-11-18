@@ -30,10 +30,10 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     Tag,
     TagType,
     Word,
+    rung,
 )
 
 pytestmark = pytest.mark.integration
@@ -132,7 +132,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
     node_b = ModbusTcpTarget("node_b", "127.0.0.1", port=port_b)
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=node_b,
                 remote_start="C101",
@@ -272,7 +272,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
     node_a = ModbusTcpTarget("node_a", "127.0.0.1", port=port_a)
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=node_a,
                 remote_start="C1",
@@ -408,7 +408,7 @@ def _build_outage_node_a(port_b: int) -> _OutageNodeAConfig:
     target_b = ModbusTcpTarget("node_b", "127.0.0.1", port=port_b)
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=target_b,
                 remote_start="DS101",

@@ -10,7 +10,6 @@ from pyrung import (
     Int,
     Physical,
     Program,
-    Rung,
     Timer,
     call,
     copy,
@@ -20,6 +19,7 @@ from pyrung import (
     on_delay,
     out,
     reset,
+    rung,
     subroutine,
     system,
 )
@@ -37,15 +37,15 @@ def _coil_chain(length: int, *, plant: bool = False) -> tuple[PLC, Bool]:
             feedback = Bool(
                 "Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En"
             )
-            with Rung(go):
+            with rung(go):
                 out(enable)
-            with Rung(feedback):
+            with rung(feedback):
                 out(links[0])
         else:
-            with Rung(go):
+            with rung(go):
                 out(links[0])
         for before, after in zip(links, links[1:], strict=False):
-            with Rung(before):
+            with rung(before):
                 out(after)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -94,11 +94,11 @@ def test_a_count_the_program_runs_every_other_scan_is_waited_for_without_the_las
     """
     osc, count, hit = Bool("Osc"), Int("Count"), Bool("Hit")
     with Program(strict=False) as logic:
-        with Rung(~osc):
+        with rung(~osc):
             out(osc)
-        with Rung(osc):
+        with rung(osc):
             math(count + 1, count)
-        with Rung(count == 40):
+        with rung(count == 40):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -118,13 +118,13 @@ def test_a_count_the_program_runs_for_itself_is_a_stated_wait() -> None:
     with Program(strict=False) as logic:
         # A Johnson ring: each bit takes the one before it, the first the last one's inverse.
         for i in range(4, 0, -1):
-            with Rung(ring[i - 1]):
+            with rung(ring[i - 1]):
                 out(ring[i])
-        with Rung(~ring[-1]):
+        with rung(~ring[-1]):
             out(ring[0])
-        with Rung(ring[0], ~ring[1]):
+        with rung(ring[0], ~ring[1]):
             math(count + 1, count)
-        with Rung(count == 40):
+        with rung(count == 40):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -146,13 +146,13 @@ def test_a_coil_above_the_timer_it_reads_is_waited_for_without_the_last_resort()
     """
     timer, block, hit, go = Timer.clone("T"), Bool("Block"), Bool("Hit"), Bool("Go")
     with Program(strict=False) as logic:
-        with Rung(~timer.Done):
+        with rung(~timer.Done):
             out(block)
-        with Rung():
+        with rung():
             on_delay(timer, 1, "s")
-        with Rung(block):
+        with rung(block):
             reset(hit)
-        with Rung(go, ~block):
+        with rung(go, ~block):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -171,13 +171,13 @@ def _call_in_a_loop() -> tuple[PLC, Bool, Bool]:
     btn = Bool("Btn", external=True)
     y, alarm = Bool("Y"), Bool("Alarm")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(count):
                 call("work")
         with subroutine("work"):
-            with Rung(btn):
+            with rung(btn):
                 latch(y)
-            with Rung(~btn):
+            with rung(~btn):
                 out(alarm)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -219,26 +219,26 @@ def _door_guards_the_run(shape: str) -> tuple[PLC, Bool]:
     timer = Timer.clone("Tr")
     with Program(strict=False) as logic:
         if shape == "inline":
-            with Rung(run, ~door):
+            with rung(run, ~door):
                 latch(alarm)
         elif shape == "call":
-            with Rung():
+            with rung():
                 call("faults")
         else:
-            with Rung():
+            with rung():
                 with forloop(count):
                     call("faults")
-        with Rung(start, ~alarm):
+        with rung(start, ~alarm):
             latch(run)
-        with Rung(alarm):
+        with rung(alarm):
             reset(run)
-        with Rung(run):
+        with rung(run):
             on_delay(timer, 500)
-        with Rung(timer.Done):
+        with rung(timer.Done):
             latch(done)
         if shape != "inline":
             with subroutine("faults"):
-                with Rung(run, ~door):
+                with rung(run, ~door):
                     latch(alarm)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -276,15 +276,15 @@ def test_the_press_that_would_trip_the_alarm_is_let_go_without_the_last_resort()
     run, alarm, done = Bool("Run"), Bool("Alarm"), Bool("Done")
     timer = Timer.clone("Tr")
     with Program(strict=False) as logic:
-        with Rung(run, start):
+        with rung(run, start):
             latch(alarm)
-        with Rung(start, ~alarm):
+        with rung(start, ~alarm):
             latch(run)
-        with Rung(alarm):
+        with rung(alarm):
             reset(run)
-        with Rung(run):
+        with rung(run):
             on_delay(timer, 500)
-        with Rung(timer.Done):
+        with rung(timer.Done):
             latch(done)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -301,7 +301,7 @@ def test_the_press_that_would_trip_the_alarm_is_let_go_without_the_last_resort()
 def test_a_plan_the_pilot_had_a_reason_for_has_no_last_resort() -> None:
     go, hit = Bool("Go"), Bool("Hit")
     with Program(strict=False) as logic:
-        with Rung(go):
+        with rung(go):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -315,7 +315,7 @@ def test_a_plan_the_pilot_had_a_reason_for_has_no_last_resort() -> None:
 def test_nothing_is_tried_for_a_goal_no_input_can_reach() -> None:
     lamp, other = Bool("Lamp"), Bool("Other", external=True)
     with Program(strict=False) as logic:
-        with Rung(lamp):
+        with rung(lamp):
             out(other)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -334,9 +334,9 @@ def test_an_input_that_reaches_the_goal_through_the_plant_is_in_its_cone() -> No
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
     hit = Bool("Hit")
     with Program(strict=False) as logic:
-        with Rung(go):
+        with rung(go):
             out(enable)
-        with Rung(feedback):
+        with rung(feedback):
             out(hit)
     plc = PLC(logic, dt=0.01)
     work = plc.fork()
@@ -354,9 +354,9 @@ def test_a_wait_for_a_goal_on_a_tag_no_scan_has_written_runs_until_the_program_w
 
     count = Int("Count")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             math(count + 1, count)
-        with Rung(count == 50):
+        with rung(count == 50):
             copy(30, system.rtc.new_second)
     plc = PLC(logic, dt=0.01)
     goal = api._goal_check((system.rtc.new_second == 30,))

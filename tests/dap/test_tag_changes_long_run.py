@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out
+from pyrung.core import PLC, Bool, Program, TimeMode, out, rung
 from pyrung.core import runner as runner_module
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.handlers import history_seek
@@ -23,7 +23,7 @@ LOADED_MACHINE_CLOCK_S = 300.0
 WATCHED = ["Lamp", "Stage", "T2_Done", "Held", "Mirror", "Patched"]
 
 _SCRIPT = """
-from pyrung.core import PLC, Bool, Int, Program, Rung, Timer, copy, latch, on_delay, out
+from pyrung.core import PLC, Bool, Int, Program, rung, Timer, copy, latch, on_delay, out
 
 Enable = Bool("Enable")
 Lamp = Bool("Lamp")
@@ -35,14 +35,14 @@ T1 = Timer.clone("T1")
 T2 = Timer.clone("T2")
 
 with Program(strict=False) as prog:
-    with Rung(Enable):
+    with rung(Enable):
         on_delay(T1, preset=30050)
-    with Rung(T1.Done):
+    with rung(T1.Done):
         latch(Lamp)
         copy(5, Stage)
-    with Rung(Enable, ~T2.Done):
+    with rung(Enable, ~T2.Done):
         on_delay(T2, preset=1000)
-    with Rung(Held):
+    with rung(Held):
         out(Mirror)
 
 runner = PLC(prog, dt=0.01)
@@ -59,7 +59,7 @@ runner.run_for(20.0, jit=JIT)
 SEAM_WATCHED = ["Alarm", "Count", "T1_Done", "T2_Done"]
 
 _SEAM_SCRIPT = """
-from pyrung.core import PLC, Bool, Int, Program, Rung, Timer, latch, math, on_delay, reset, rise
+from pyrung.core import PLC, Bool, Int, Program, rung, Timer, latch, math, on_delay, reset, rise
 
 Enable = Bool("Enable")
 Alarm = Bool("Alarm")
@@ -69,15 +69,15 @@ T1 = Timer.clone("T1")
 T2 = Timer.clone("T2")
 
 with Program(strict=False) as prog:
-    with Rung(Enable, ~T2.Done):
+    with rung(Enable, ~T2.Done):
         on_delay(T2, preset=1000)
-    with Rung(rise(T2.Done)):
+    with rung(rise(T2.Done)):
         math(Count + 1, Count)
-    with Rung(Enable):
+    with rung(Enable):
         on_delay(T1, preset=15000)
-    with Rung(T1.Done):
+    with rung(T1.Done):
         latch(Alarm)
-    with Rung(Ack):
+    with rung(Ack):
         reset(Alarm)
 
 runner = PLC(prog, dt=0.01)
@@ -318,7 +318,7 @@ def test_stepping_on_after_a_long_run(tmp_path: Path, compiled: Session) -> None
 def test_a_timestamp_added_up_is_the_scans_own(realtime: bool) -> None:
     Tick = Bool("Tick")
     with Program(strict=False) as program:
-        with Rung(~Tick):
+        with rung(~Tick):
             out(Tick)
     runner = PLC(program, realtime=True) if realtime else PLC(program, dt=0.01)
     assert runner.time_mode == (TimeMode.REALTIME if realtime else TimeMode.FIXED_STEP)
@@ -334,7 +334,7 @@ def test_a_timestamp_added_up_is_the_scans_own(realtime: bool) -> None:
 def test_a_fork_reads_its_parents_timestamps() -> None:
     Tick = Bool("Tick")
     with Program(strict=False) as program:
-        with Rung(~Tick):
+        with rung(~Tick):
             out(Tick)
     runner = PLC(program, dt=0.01)
     runner.run(cycles=450)

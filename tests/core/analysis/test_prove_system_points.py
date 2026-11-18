@@ -14,11 +14,11 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     copy,
     latch,
     math,
     out,
+    rung,
     system,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -51,7 +51,7 @@ class TestFreeSystemPoints:
         enable = Bool("Enable", external=True)
         hit = Bool("Hit")
         with Program(strict=False) as logic:
-            with Rung(S.clock_1s, S.scan_counter == 3, enable):
+            with rung(S.clock_1s, S.scan_counter == 3, enable):
                 out(hit)
         ctx = _build_prior_facts(logic)
         assert not set(ctx.nondeterministic_dims) & set(SYSTEM_TAGS_BY_NAME)
@@ -83,7 +83,7 @@ class TestRuntimeValues:
         quotient = Int("Quotient")
         divisor = _divisor("Divisor")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(100 / divisor, quotient)
         starts = (
             datetime(2026, 12, 31, 23, 59, 59),
@@ -110,7 +110,7 @@ class TestHowPrior:
     def test_structural_domains_give_rtc_its_range(self):
         stamp = Int("Stamp")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(R.month, stamp)
         domains = _structural_domains(logic)
         assert domains["rtc.month"] == tuple(range(1, 13))
@@ -119,7 +119,7 @@ class TestHowPrior:
     def test_copy_of_scan_counter_has_no_finite_domain(self):
         stamp = Int("Stamp")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(S.scan_counter, stamp)
         domains = _structural_domains(logic)
         assert "sys.scan_counter" not in domains
@@ -128,7 +128,7 @@ class TestHowPrior:
     def test_always_on_is_true(self):
         held = Bool("Held")
         with Program(strict=False) as logic:
-            with Rung(S.always_on):
+            with rung(S.always_on):
                 out(held)
         assert _structural_domains(logic)["sys.always_on"] == (True,)
 
@@ -137,9 +137,9 @@ class TestHowPrior:
         quotient = Int("Quotient")
         alarm = Bool("Alarm")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(100 / divisor, quotient)
-            with Rung(F.division_error):
+            with rung(F.division_error):
                 latch(alarm)
         ctx = _build_prior_facts(logic)
         assert "fault.division_error" not in ctx.stateful_dims
@@ -169,7 +169,7 @@ class TestNotAConstant:
         plain = Int("Plain", default=5)
         done = Bool("Done")
         with Program(strict=False) as logic:
-            with Rung(R.second >= 30, S.scan_counter > 5, fed > plain):
+            with rung(R.second >= 30, S.scan_counter > 5, fed > plain):
                 out(done)
         return build_program_graph(logic)
 
@@ -193,12 +193,12 @@ class TestNotAConstant:
         ref = Int("Ref", default=3)
         lamp, clock_lamp = Bool("Lamp"), Bool("ClockLamp")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(ref, state)
                 copy(R.hour, state)
-            with Rung(state == ref):
+            with rung(state == ref):
                 out(lamp)
-            with Rung(state == R.hour):
+            with rung(state == R.hour):
                 out(clock_lamp)
         graph = build_program_graph(logic)
         assert compute_reference_constants(graph, logic, graph.tags) == {"Ref"}

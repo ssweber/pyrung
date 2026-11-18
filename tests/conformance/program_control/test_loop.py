@@ -68,7 +68,6 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
-    Rung,
     break_loop,
     continue_loop,
     copy,
@@ -80,19 +79,20 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
 )
 from tests.conformance.memory import ClickCounter, ClickTimer, c
 from tests.conformance.scans import count_scans, done, scans_for
 
 
 def _fire(slot) -> None:
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Fired, oneshot=True)
 
 
 def prove_loop_runs_n_times(slot):
     # F1
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
             math(slot.Result1 + 1, slot.Result1)
     _fire(slot)
@@ -100,22 +100,22 @@ def prove_loop_runs_n_times(slot):
 
 def prove_false_for_rung_skips_body(slot):
     # F2: the loop's rung is false (Scratch = 0); C1701 is latched just above.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[1701])
-    with Rung(slot.Cmd != 0, slot.Scratch != 0):
+    with rung(slot.Cmd != 0, slot.Scratch != 0):
         with forloop(2):
             out(c[1701])
             math(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[1701]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[1701]):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[1701]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, ~c[1701]):
         copy(2, slot.Result1)
     _fire(slot)
 
 
 def prove_zero_count(slot):
     # F3: a count register of 0 (Scratch).
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Scratch):
             math(slot.Result1 + 1, slot.Result1)
             copy(1, slot.Result2)
@@ -124,9 +124,9 @@ def prove_zero_count(slot):
 
 def prove_negative_count_reads_unsigned(slot):
     # F3: a count register of -1 (Result3).
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(-1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Result3):
             math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
@@ -134,9 +134,9 @@ def prove_negative_count_reads_unsigned(slot):
 
 def prove_count_read_once(slot):
     # F4: the body lowers the count register from 5 to 2.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(5, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(slot.Result3):
             math(slot.Result1 + 1, slot.Result1)
             copy(2, slot.Result3)
@@ -145,29 +145,29 @@ def prove_count_read_once(slot):
 
 def prove_body_rung_contact_per_iteration(slot):
     # F5: the body rung's contact is true on iteration 2 of 3 only.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(3):
             math(slot.Scratch + 1, slot.Scratch)
-            with Rung(slot.Scratch == 2):
+            with rung(slot.Scratch == 2):
                 out(c[1711])
-            with Rung(slot.Scratch >= 2):
+            with rung(slot.Scratch >= 2):
                 math(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[1711]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[1711]):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[1711]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, ~c[1711]):
         copy(2, slot.Result1)
     _fire(slot)
 
 
 def prove_edge_contact_inside_loop(slot):
     # F6: C1721 latches on iteration 1 of 3 and stays on.
-    with Rung():
+    with rung():
         with forloop(3):
-            with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with rung(slot.Cmd != 0, slot.Fired == 0):
                 math(slot.Scratch + 1, slot.Scratch)
-            with Rung(slot.Scratch == 1):
+            with rung(slot.Scratch == 1):
                 latch(c[1721])
-            with Rung(rise(c[1721])):
+            with rung(rise(c[1721])):
                 math(slot.Result1 + 1, slot.Result1)
     _fire(slot)
 
@@ -176,45 +176,45 @@ def prove_timer_inside_loop(slot):
     # F7: a TON inside For 10 against the same TON outside; once the outside
     # one passes 100 ms, Result1 = 1 if the loop's is ahead by more than 5x.
     loop_timer, plain_timer = ClickTimer(201), ClickTimer(202)
-    with Rung():
+    with rung():
         with forloop(10):
-            with Rung(slot.Cmd != 0):
+            with rung(slot.Cmd != 0):
                 on_delay(loop_timer, 30000)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(plain_timer, 30000)
-    with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0):
+    with rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0):
         math(loop_timer.Acc - plain_timer.Acc * 5, slot.Result3)
-    with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0, slot.Result3 > 0):
+    with rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0, slot.Result3 > 0):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0, slot.Result3 <= 0):
+    with rung(slot.Cmd != 0, plain_timer.Acc >= 100, slot.Fired == 0, slot.Result3 <= 0):
         copy(2, slot.Result1)
-    with Rung(slot.Cmd != 0, plain_timer.Acc >= 100):
+    with rung(slot.Cmd != 0, plain_timer.Acc >= 100):
         copy(1, slot.Fired, oneshot=True)
 
 
 def prove_counter_inside_loop(slot):
     # F8: the count input is on in iterations 1, 2 and 4 of 4.
     counter = ClickCounter(201)
-    with Rung():
+    with rung():
         with forloop(4):
-            with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with rung(slot.Cmd != 0, slot.Fired == 0):
                 math(slot.Scratch + 1, slot.Scratch)
-            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
+            with rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 count_up(counter, 100).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(counter.Acc, slot.Result1)
     _fire(slot)
 
 
 def prove_break_leaves_innermost_loop(slot):
     # F9: the inner loop breaks on its second iteration, three times.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(3):
             copy(0, slot.Scratch)
             with forloop(4):
                 math(slot.Scratch + 1, slot.Scratch)
                 math(slot.Result1 + 1, slot.Result1)
-                with Rung(slot.Scratch == 2):
+                with rung(slot.Scratch == 2):
                     break_loop()
             math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
@@ -222,11 +222,11 @@ def prove_break_leaves_innermost_loop(slot):
 
 def prove_break_runs_earlier_body_rungs(slot):
     # F10
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
             math(slot.Scratch + 1, slot.Scratch)
             math(slot.Result1 + 1, slot.Result1)
-            with Rung(slot.Scratch == 3):
+            with rung(slot.Scratch == 3):
                 break_loop()
             math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
@@ -234,11 +234,11 @@ def prove_break_runs_earlier_body_rungs(slot):
 
 def prove_continue_skips_rest_of_iteration(slot):
     # F11
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
             math(slot.Scratch + 1, slot.Scratch)
             math(slot.Result1 + 1, slot.Result1)
-            with Rung(slot.Scratch == 2):
+            with rung(slot.Scratch == 2):
                 continue_loop()
             math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
@@ -246,11 +246,11 @@ def prove_continue_skips_rest_of_iteration(slot):
 
 def prove_continue_on_last_iteration(slot):
     # F12
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
             math(slot.Scratch + 1, slot.Scratch)
             math(slot.Result1 + 1, slot.Result1)
-            with Rung(slot.Scratch == 5):
+            with rung(slot.Scratch == 5):
                 continue_loop()
             math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
@@ -258,26 +258,26 @@ def prove_continue_on_last_iteration(slot):
 
 def prove_break_on_same_iteration_write(slot):
     # F13: a body rung turns C1731 on in iteration 3; the next body rung breaks on it.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(5):
             math(slot.Scratch + 1, slot.Scratch)
-            with Rung(slot.Scratch == 3):
+            with rung(slot.Scratch == 3):
                 out(c[1731])
-            with Rung(c[1731]):
+            with rung(c[1731]):
                 break_loop()
             math(slot.Result1 + 1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(slot.Scratch, slot.Result2)
     _fire(slot)
 
 
 def prove_oneshot_inside_loop(slot):
     # F14: the one-shot's rung is true in iterations 1, 2 and 4 of 4.
-    with Rung():
+    with rung():
         with forloop(4):
-            with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with rung(slot.Cmd != 0, slot.Fired == 0):
                 math(slot.Scratch + 1, slot.Scratch)
-            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
+            with rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 math(slot.Result1 + 1, slot.Result1, oneshot=True)
                 math(slot.Result2 + 1, slot.Result2)
     _fire(slot)
@@ -287,9 +287,9 @@ def prove_body_oneshot_holds_while_for_false(slot):
     # F17: the For rung is false on scan 2 of 4; the one-shot's own rung is
     # true on scans 1 to 3 and false on scan 4, which re-arms it.
     count_scans(slot, window=4)
-    with Rung(slot.Cmd != 0, slot.Scratch != 2, slot.Scratch <= 4):
+    with rung(slot.Cmd != 0, slot.Scratch != 2, slot.Scratch <= 4):
         with forloop(1):
-            with Rung(slot.Scratch != 4):
+            with rung(slot.Scratch != 4):
                 math(slot.Result1 + 1, slot.Result1, oneshot=True)
             math(slot.Result2 + 1, slot.Result2)
     done(slot, window=4)
@@ -301,19 +301,19 @@ def prove_edge_memory_across_iterations(slot):
     # ends scan 2 off, so the reset needs no init.
     bit = c[1741]
     count_scans(slot, window=2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         latch(bit)
-    with Rung():
+    with rung():
         with forloop(4):
-            with Rung(slot.Cmd != 0, slot.Scratch == 2):
+            with rung(slot.Cmd != 0, slot.Scratch == 2):
                 math(slot.Result3 + 1, slot.Result3)
-            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 1):
+            with rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 1):
                 reset(bit)
-            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 2):
+            with rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 2):
                 latch(bit)
-            with Rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 4):
+            with rung(slot.Cmd != 0, slot.Scratch == 2, slot.Result3 == 4):
                 reset(bit)
-            with Rung(rise(bit), slot.Cmd != 0, slot.Scratch == 2):
+            with rung(rise(bit), slot.Cmd != 0, slot.Scratch == 2):
                 math(slot.Result1 * 10 + slot.Result3, slot.Result1)
                 math(slot.Result2 + 1, slot.Result2)
     done(slot, window=2)
@@ -324,25 +324,25 @@ def prove_skipped_body_holds_timer_and_counter(slot):
     # case's reset is scanned); the counter's reset input is on from scan 4.
     timer, counter = ClickTimer(211), ClickCounter(211)
     count_scans(slot, window=7)
-    with Rung(Or(slot.Cmd == 0, slot.Scratch <= 3, slot.Scratch >= 7)):
+    with rung(Or(slot.Cmd == 0, slot.Scratch <= 3, slot.Scratch >= 7)):
         with forloop(1):
-            with Rung(slot.Cmd != 0, slot.Scratch <= 3):
+            with rung(slot.Cmd != 0, slot.Scratch <= 3):
                 on_delay(timer, 30000)
-            with Rung(slot.Cmd != 0, slot.Scratch == 3):
+            with rung(slot.Cmd != 0, slot.Scratch == 3):
                 copy(timer.Acc, slot.Result3)
-            with Rung(slot.Cmd != 0, slot.Scratch == 1):
+            with rung(slot.Cmd != 0, slot.Scratch == 1):
                 count_up(counter, 100).reset(Or(slot.Cmd == 0, slot.Scratch >= 4))
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == slot.Result3, timer.Acc > 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == slot.Result3, timer.Acc > 0):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, timer.Acc == 0):
         copy(2, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result1 == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result1 == 0):
         copy(3, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 1):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, counter.Acc == 0):
         copy(2, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result2 == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, slot.Result2 == 0):
         copy(3, slot.Result2)
     done(slot, window=7)
 

@@ -25,7 +25,6 @@ from pyrung import (
     Int,
     Program,
     Real,
-    Rung,
     copy,
     latch,
     math,
@@ -33,6 +32,7 @@ from pyrung import (
     out,
     rise,
     run_function,
+    rung,
 )
 from pyrung.core import SystemState, Timer, coast_run, compiled_run, read_trace, scan_trace
 from pyrung.core.harness import Harness
@@ -45,7 +45,7 @@ from tests.fold_check import FoldMismatch
 def _plc() -> PLC:
     n = Int("N")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(n + 1, n)
     return PLC(prog)
 
@@ -138,7 +138,7 @@ def _timing_plc(name: str) -> tuple[PLC, str]:
     run = Bool("Run")
     timer = Timer.clone(name)
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             on_delay(timer, 30, "s")
     plc = PLC(prog, dt=0.01)
     plc.patch({run: True})
@@ -189,7 +189,7 @@ def test_an_opaque_avoid_lets_no_other_member_off(
     timer = Timer.clone("BesideT")
     run = Bool("Run")
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             on_delay(timer, 30, "s")
     plc = PLC(prog, dt=0.01)
     plc.patch({run: True})
@@ -768,11 +768,11 @@ Tm = Timer.clone("Tm")
 def _timed() -> PLC:
     """Build a PLC with a timer, so that the guarded loop runs long stretches of it."""
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             on_delay(Tm, 5000)
-        with Rung(Tm.Done):
+        with rung(Tm.Done):
             latch(Y)
-        with Rung(Y):
+        with rung(Y):
             math(Cnt + 1, Cnt)
     plc = PLC(program, dt=0.01)
     plc.patch({"Go": True})
@@ -945,11 +945,11 @@ def _raising(function: Any = _raises_at_1500) -> PLC:
     *function* raises.
     """
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             on_delay(Tm, 2000)
-        with Rung():
+        with rung():
             math(Cnt + 1, Cnt)
-        with Rung():
+        with rung():
             run_function(function, ins={"v": Cnt}, outs={"out": Hr})
     plc = PLC(program, dt=0.01)
     plc.patch({"Go": True})
@@ -1318,7 +1318,7 @@ def test_own_twin_sees_two_bases_set_apart_before_the_block() -> None:
 
 def _applies_the_time() -> PLC:
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             copy(10, system.rtc.new_second)
             copy(5, system.rtc.new_minute)
             copy(1, system.rtc.new_hour)
@@ -1328,7 +1328,7 @@ def _applies_the_time() -> PLC:
 
 def _applies_the_date() -> PLC:
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             copy(2031, system.rtc.new_year4)
             copy(4, system.rtc.new_month)
             copy(2, system.rtc.new_day)
@@ -1338,12 +1338,12 @@ def _applies_the_date() -> PLC:
 
 def _applies_both() -> PLC:
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             copy(2031, system.rtc.new_year4)
             copy(4, system.rtc.new_month)
             copy(2, system.rtc.new_day)
             out(system.rtc.apply_date)
-        with Rung(Go):
+        with rung(Go):
             copy(10, system.rtc.new_second)
             copy(5, system.rtc.new_minute)
             copy(1, system.rtc.new_hour)
@@ -1704,7 +1704,7 @@ def test_deliberate_is_content_with_one_mismatch_and_a_raise() -> None:
 def _counting() -> PLC:
     n = Int("N")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(n + 1, n)
     return PLC(prog, checkpoint_interval=10)
 
@@ -2014,9 +2014,9 @@ def test_a_fork_is_compared_under_a_plant(installed) -> None:
         "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Go"
     )
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(temp, Real("Shown"))
-        with Rung(Go):
+        with rung(Go):
             on_delay(Tm, 5000)
     plc = PLC(program, dt=0.01)
     Harness(plc).install()
@@ -2069,14 +2069,14 @@ def test_a_run_moving_a_parked_playhead_is_caught(installed, monkeypatch) -> Non
 
 def _rtc_apply_early() -> PLC:
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             on_delay(Tm, 100)
-        with Rung(rise(Tm.Done)):
+        with rung(rise(Tm.Done)):
             copy(10, system.rtc.new_second)
             copy(5, system.rtc.new_minute)
             copy(1, system.rtc.new_hour)
             out(system.rtc.apply_time)
-        with Rung():
+        with rung():
             copy(system.rtc.hour, Hr)
     plc = PLC(program, dt=0.01)
     # Set an hour other than the one the rung applies. A set_rtc() call would appear in the log

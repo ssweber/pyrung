@@ -296,15 +296,15 @@ class TestExpressionInRung:
     """Test expressions used as Rung conditions."""
 
     def test_rung_with_expression_condition(self):
-        """with Rung((DS[1] + DS[2]) > 100): out(Alarm)."""
-        from pyrung.core import Rung, SystemState, out, program
+        """with rung((DS[1] + DS[2]) > 100): out(Alarm)."""
+        from pyrung.core import SystemState, out, program, rung
 
         DS = Block("DS", TagType.INT, 1, 9)
         Alarm = Bool("Alarm")
 
         @program
         def logic():
-            with Rung((DS[1] + DS[2]) > 100):
+            with rung((DS[1] + DS[2]) > 100):
                 out(Alarm)
 
         # Test when condition is true
@@ -322,15 +322,15 @@ class TestExpressionInRung:
         assert result2.tags.get("Alarm", False) is False
 
     def test_fahrenheit_conversion(self):
-        """with Rung((Temperature * 1.8 + 32) > 212): - Fahrenheit boiling point."""
-        from pyrung.core import Rung, out, program
+        """with rung((Temperature * 1.8 + 32) > 212): - Fahrenheit boiling point."""
+        from pyrung.core import out, program, rung
 
         Temperature = Int("Temperature")  # Celsius
         Boiling = Bool("Boiling")
 
         @program
         def logic():
-            with Rung((Temperature * 1.8 + 32) > 212):
+            with rung((Temperature * 1.8 + 32) > 212):
                 out(Boiling)
 
         # 100C = 212F (boiling point)
@@ -358,7 +358,7 @@ class TestExpressionInCopy:
 
     def test_copy_expression_to_tag(self):
         """copy(DS[1] * 2 + Offset, Result)."""
-        from pyrung.core import Rung, copy, program
+        from pyrung.core import copy, program, rung
 
         DS = Block("DS", TagType.INT, 1, 9)
         Offset = Int("Offset")
@@ -367,7 +367,7 @@ class TestExpressionInCopy:
 
         @program
         def logic():
-            with Rung(Enable):
+            with rung(Enable):
                 copy(DS[1] * 2 + Offset, Result)
 
         state = SystemState().with_tags(
@@ -384,7 +384,7 @@ class TestExpressionInCopy:
 
     def test_copy_math_function_result(self):
         """copy(sqrt(DS[1]), Result)."""
-        from pyrung.core import Rung, copy, program
+        from pyrung.core import copy, program, rung
         from pyrung.core.expression import sqrt
 
         DS = Block("DS", TagType.INT, 1, 9)
@@ -393,7 +393,7 @@ class TestExpressionInCopy:
 
         @program
         def logic():
-            with Rung(Enable):
+            with rung(Enable):
                 copy(sqrt(DS[1]), Result)
 
         state = SystemState().with_tags(

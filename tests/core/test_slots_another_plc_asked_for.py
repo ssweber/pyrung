@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Char, Int, Program, Rung, TagType, copy, out
+from pyrung.core import PLC, Block, Bool, Char, Int, Program, TagType, copy, out, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _build_prior_facts
 from pyrung.core.harness import Coupling, link_problem
@@ -28,7 +28,7 @@ def _pointer_program() -> tuple[Program, Block, Bool]:
     pointer = Int("IqPtr", min=1, max=8, default=1)
     lamp = Bool("IqLamp")
     with Program(strict=False) as program:
-        with Rung(slots[pointer] == True):  # noqa: E712
+        with rung(slots[pointer] == True):  # noqa: E712
             out(lamp)
     return program, slots, lamp
 
@@ -140,7 +140,7 @@ def _counting_factory_program() -> tuple[Program, Int]:
     pointer = Int("FqPtr", default=4)
     seen = Int("FqSeen")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[pointer], seen)
     return program, seen
 
@@ -168,7 +168,7 @@ def _factory_with_slot_2_overridden() -> tuple[Program, Block]:
     pointer = Int("FzPtr", default=2)
     seen = Int("FzSeen")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[pointer], seen)
     return program, slots
 
@@ -201,9 +201,9 @@ def _text_compare_program() -> tuple[Program, Block]:
     got = Char("TxGot")
     lamp = Bool("TxLamp")
     with Program(strict=False) as program:
-        with Rung(text[1] == "A"):
+        with rung(text[1] == "A"):
             out(lamp)
-        with Rung():
+        with rung():
             copy(text[pointer], got)
     return program, text
 
@@ -233,7 +233,7 @@ def test_a_slot_of_a_big_block_is_in_it_before_anything_asks_for_it() -> None:
     # and cause() looks for the slot's writer by the slot's name.
     big = Block("Bq", TagType.INT, 1, 1500)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, big[Int("BqPtr", external=True)])
     graph = build_program_graph(program)
     assert graph.pointer_writers_of("Bq900")

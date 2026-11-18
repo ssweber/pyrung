@@ -22,7 +22,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     Tag,
     TagType,
     Word,
@@ -35,6 +34,7 @@ from pyrung.core import (
     pack_words,
     run_enabled_function,
     run_function,
+    rung,
     search,
     unpack_to_bits,
     unpack_to_words,
@@ -110,7 +110,7 @@ def _copy_real_into_dint(wrap: Callable[[Any], Any] = immediate):
     dest = Dint("Dest")
     clamped = Dint("Clamped")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(wrap(src), dest)
             copy(wrap(big), clamped)
     return hw, prog, (), (dest, clamped, system.fault.out_of_range)
@@ -121,7 +121,7 @@ def _copy_int_into_int(wrap: Callable[[Any], Any] = immediate):
     src = Int("Src", default=-12)
     dest = Int("Dest")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(wrap(src), dest)
     return hw, prog, (), (dest,)
 
@@ -130,7 +130,7 @@ def _copy_input_into_bool(wrap: Callable[[Any], Any] = immediate):
     hw, x, _y = _hardware()
     dest = Bool("Dest")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(wrap(x[1]), dest)
     return hw, prog, (x[1],), (dest,)
 
@@ -138,7 +138,7 @@ def _copy_input_into_bool(wrap: Callable[[Any], Any] = immediate):
 def _copy_into_output(wrap: Callable[[Any], Any] = immediate):
     hw, x, y = _hardware()
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(x[1], wrap(y[1]))
     return hw, prog, (x[1],), (y[1],)
 
@@ -148,7 +148,7 @@ def _copy_to_text(wrap: Callable[[Any], Any] = immediate):
     src = Int("Src", default=42)
     txt = Block("Txt", TagType.CHAR, 1, 4)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(wrap(src), wrap(txt[1]), convert=to_text())
             copy(txt[2], txt[4])
     return hw, prog, (), (txt[1], txt[4])
@@ -160,7 +160,7 @@ def _copy_text_to_value(wrap: Callable[[Any], Any] = immediate):
     digit = Int("Digit")
     letter = Int("Letter", default=4)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("7", txt[1])
             copy("x", txt[2])
             copy(wrap(txt[1]), digit, convert=to_value)
@@ -172,7 +172,7 @@ def _blockcopy_inputs(wrap: Callable[[Any], Any] = immediate):
     hw, x, _y = _hardware()
     bits = Block("Bits", TagType.BOOL, 1, 4)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             blockcopy(wrap(x.select(1, 3)), wrap(bits.select(1, 3)))
     return hw, prog, (x[1], x[2]), tuple(bits[i] for i in range(1, 4))
 
@@ -181,7 +181,7 @@ def _blockcopy_registers(wrap: Callable[[Any], Any] = immediate):
     hw, _x, _y = _hardware()
     ds = Block("DS", TagType.INT, 1, 8)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(7, ds[1])
             copy(-3, ds[2])
             blockcopy(wrap(ds.select(1, 2)), wrap(ds.select(5, 6)))
@@ -193,7 +193,7 @@ def _blockcopy_text_to_numbers(wrap: Callable[[Any], Any] = immediate):
     txt = Block("Txt", TagType.CHAR, 1, 3)
     ds = Block("DS", TagType.INT, 1, 6)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("4", txt[1])
             copy("A", txt[2])
             copy("9", txt[3])
@@ -212,7 +212,7 @@ def _fill_registers(wrap: Callable[[Any], Any] = immediate):
     src = Real("Src", default=2.5)
     ds = Block("DS", TagType.INT, 1, 4)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill(wrap(src), wrap(ds.select(1, 3)))
     return hw, prog, (), tuple(ds[i] for i in range(1, 4))
 
@@ -220,7 +220,7 @@ def _fill_registers(wrap: Callable[[Any], Any] = immediate):
 def _fill_outputs(wrap: Callable[[Any], Any] = immediate):
     hw, x, y = _hardware()
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill(wrap(x[1]), wrap(y.select(1, 3)))
     return hw, prog, (x[1],), tuple(y[i] for i in range(1, 4))
 
@@ -230,7 +230,7 @@ def _fill_text(wrap: Callable[[Any], Any] = immediate):
     letter = Block("Letter", TagType.CHAR, 1, 1)
     txt = Block("Txt", TagType.CHAR, 1, 3)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("Q", letter[1])
             fill(wrap(letter[1]), wrap(txt.select(1, 3)))
     return hw, prog, (), tuple(txt[i] for i in range(1, 4))
@@ -240,7 +240,7 @@ def _pack_bits_inputs(wrap: Callable[[Any], Any] = immediate):
     hw, x, _y = _hardware()
     word = Word("Packed")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             pack_bits(wrap(x.select(1, 8)), wrap(word))
     return hw, prog, (x[1], x[2]), (word,)
 
@@ -249,7 +249,7 @@ def _unpack_to_outputs(wrap: Callable[[Any], Any] = immediate):
     hw, _x, y = _hardware()
     word = Word("Source", default=0b101)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             unpack_to_bits(wrap(word), wrap(y.select(1, 4)))
     return hw, prog, (), tuple(y[i] for i in range(1, 5))
 
@@ -260,7 +260,7 @@ def _pack_and_unpack_words(wrap: Callable[[Any], Any] = immediate):
     packed = Dint("Packed")
     source = Dint("Source", default=0x00030004)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1, words[1])
             copy(2, words[2])
             pack_words(wrap(words.select(1, 2)), wrap(packed))
@@ -273,7 +273,7 @@ def _pack_text_digits(wrap: Callable[[Any], Any] = immediate):
     txt = Block("Txt", TagType.CHAR, 1, 3)
     dest = Int("Dest")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("1", txt[1])
             copy("2", txt[2])
             copy("3", txt[3])
@@ -286,7 +286,7 @@ def _calc_of_an_immediate(wrap: Callable[[Any], Any] = immediate):
     src = Int("Src", default=9)
     dest = Dint("Dest")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(wrap(src), dest)
     return hw, prog, (), (dest,)
 
@@ -298,7 +298,7 @@ def _search_for_an_immediate(wrap: Callable[[Any], Any] = immediate):
     result = Dint("Result")
     found = Bool("Found")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(5, ds[3])
             search(ds.select(1, 4) == wrap(wanted), result=result, found=found)
     return hw, prog, (), (result, found)
@@ -311,7 +311,7 @@ def _search_text_for_an_immediate(wrap: Callable[[Any], Any] = immediate):
     result = Dint("Result")
     found = Bool("Found")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("K", wanted[1])
             copy("K", txt[3])
             search(txt.select(1, 4) == wrap(wanted[1]), result=result, found=found)
@@ -325,7 +325,7 @@ def _search_at_least_an_immediate(wrap: Callable[[Any], Any] = immediate):
     result = Dint("Result")
     found = Bool("Found")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(3, ds[1])
             copy(8, ds[2])
             search(ds.select(1, 4) >= wrap(floor), result=result, found=found)
@@ -341,7 +341,7 @@ def _run_function_operands(wrap: Callable[[Any], Any] = immediate):
     src = Int("Src", default=21)
     dest = Int("Dest")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             run_function(_double, ins={"a": wrap(src)}, outs={"o": wrap(dest)})
     return hw, prog, (), (dest,)
 
@@ -355,7 +355,7 @@ def _run_enabled_function_operands(wrap: Callable[[Any], Any] = immediate):
     src = Int("Src", default=20)
     dest = Int("Dest")
     with Program(strict=False) as prog:
-        with Rung(x[1]):
+        with rung(x[1]):
             run_enabled_function(
                 _plus_one_when_enabled, ins={"a": wrap(src)}, outs={"o": wrap(dest)}
             )
@@ -424,7 +424,7 @@ def _function_out_from_an_input(wrap: Callable[[Any], Any]):
     sel = Int("Sel", external=True, min=0, max=9)
     dest = Int("Dest", min=0, max=20)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             run_function(_plus_one, ins={"a": sel}, outs={"o": wrap(dest)})
     return prog, dest
 

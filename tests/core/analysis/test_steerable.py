@@ -7,7 +7,7 @@ without reading pilot.
 
 from __future__ import annotations
 
-from pyrung.core import PLC, Bool, Int, Program, Real, Rung, copy, fill, latch, out, reset
+from pyrung.core import PLC, Bool, Int, Program, Real, copy, fill, latch, out, reset, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
@@ -29,7 +29,7 @@ class TestSteerable:
         Motor = Bool("Motor")
         prog = Program(strict=False)
         with prog:
-            with Rung(FB):
+            with rung(FB):
                 out(Motor)
 
         assert "FB" in _steerable(prog)
@@ -40,7 +40,7 @@ class TestSteerable:
         Motor = Bool("Motor")
         prog = Program(strict=False)
         with prog:
-            with Rung(FB):
+            with rung(FB):
                 out(Motor)
 
         assert "Motor" not in _steerable(prog)
@@ -52,7 +52,7 @@ class TestSteerable:
         Unused = Bool("Unused")  # declared, never referenced in any rung
         prog = Program(strict=False)
         with prog:
-            with Rung(FB):
+            with rung(FB):
                 out(Motor)
 
         assert "Unused" not in _steerable(prog)
@@ -64,9 +64,9 @@ class TestSteerable:
         Done = Bool("Done")
         prog = Program(strict=False)
         with prog:
-            with Rung(C_Ack):
+            with rung(C_Ack):
                 latch(Done)
-            with Rung(C_Ack):
+            with rung(C_Ack):
                 reset(C_Ack)  # ack: cleared, never asserted
 
         steer = _steerable(prog)
@@ -79,9 +79,9 @@ class TestSteerable:
         Flag = Bool("Flag")
         prog = Program(strict=False)
         with prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(Flag)  # asserts the active value
-            with Rung(~Trigger):
+            with rung(~Trigger):
                 reset(Flag)
 
         assert "Flag" not in _clear_only(prog)
@@ -95,9 +95,9 @@ class TestSteerable:
         Trigger = Bool("Trigger")
         prog = Program(strict=False)
         with prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 fill(0, ds.select(201, 210))
-            with Rung(ds[201] != 0):
+            with rung(ds[201] != 0):
                 out(Bool("Alarm"))
 
         assert "ds201" not in _clear_only(prog)
@@ -109,9 +109,9 @@ class TestSteerable:
         Hot = Bool("Hot")
         prog = Program(strict=False)
         with prog:
-            with Rung(Reset):
+            with rung(Reset):
                 copy(0.0, Setpoint)  # a nudge, not authorship
-            with Rung(Setpoint > 100.0):
+            with rung(Setpoint > 100.0):
                 out(Hot)
 
         assert "Setpoint" in _steerable(prog)
@@ -124,7 +124,7 @@ class TestSteerable:
         Alarm = Bool("Alarm")
         prog = Program(strict=False)
         with prog:
-            with Rung(Contact, Count > 5, Temp > 1.5):
+            with rung(Contact, Count > 5, Temp > 1.5):
                 out(Alarm)
 
         steer = _steerable(prog)
@@ -142,7 +142,7 @@ class TestSteerable:
         Err = Bool("Err")
         prog = Program(strict=False)
         with prog:
-            with Rung(Acc > 10, EnableLimit == 1):
+            with rung(Acc > 10, EnableLimit == 1):
                 out(Err)
 
         assert "EnableLimit" in _steerable(prog)

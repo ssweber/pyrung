@@ -11,7 +11,7 @@ import time
 import pytest
 
 from pyrung.circuitpy import P1AM, RunStopConfig, generate_circuitpy
-from pyrung.core import Block, Bool, Dint, Int, Program, Real, Rung, TagType, copy, math, out
+from pyrung.core import Block, Bool, Dint, Int, Program, Real, TagType, copy, math, out, rung
 from pyrung.core.expression import sqrt
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
@@ -89,13 +89,13 @@ def test_fault_flag_set_by_instruction_and_cleared_at_next_scan_start(monkeypatc
     # reads on before any instruction ran.  The third rung counts the scans on which it
     # reads on after the faulting rung.
     with Program(strict=False) as prog:
-        with Rung(flag):
+        with rung(flag):
             math(SeenAtTop + 1, SeenAtTop)
-        with Rung(~Armed):
+        with rung(~Armed):
             fault()
-        with Rung(flag):
+        with rung(flag):
             math(SeenAfter + 1, SeenAfter)
-        with Rung():
+        with rung():
             out(Armed)
 
     _code, read = _run(prog, monkeypatch, scans=3)
@@ -116,11 +116,11 @@ def test_calc_into_int_keeps_its_constants_whole(monkeypatch):
     # Core and a CLICK do the same: a 65536 in an Int's Math divides as written, the same
     # as a 65536 read from a Dint.
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Num / 65536, ByConstant)
-        with Rung(system.fault.division_error):
+        with rung(system.fault.division_error):
             out(DivFlagAfterConstant)
-        with Rung():
+        with rung():
             math(Num / Den, ByTag)
 
     _code, read = _run(prog, monkeypatch, scans=1)
@@ -140,15 +140,15 @@ def test_scan_counter_steps_and_scan_clock_follows_its_parity(monkeypatch):
     counter = system.sys.scan_counter
     clock = system.sys.scan_clock_toggle
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(counter, ScanCount)
-        with Rung(clock):
+        with rung(clock):
             math(EvenScans + 1, EvenScans)
-        with Rung(clock, counter % 2 == 1):
+        with rung(clock, counter % 2 == 1):
             math(ClockMismatch + 1, ClockMismatch)
-        with Rung(~clock, counter % 2 == 0):
+        with rung(~clock, counter % 2 == 0):
             math(ClockMismatch + 1, ClockMismatch)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             math(FirstScans + 1, FirstScans)
 
     _code, read = _run(prog, monkeypatch, scans=5)
@@ -167,9 +167,9 @@ def test_scan_counter_wraps_like_core(monkeypatch):
     # Core: SD9 = scan_id % 32768.
     counter = system.sys.scan_counter
     with Program(strict=False) as prog:
-        with Rung(counter == 32767):
+        with rung(counter == 32767):
             copy(1, SawMax)
-        with Rung():
+        with rung():
             copy(counter, ScanCount)
 
     hw = _hw()
@@ -210,7 +210,7 @@ def test_clock_bits_follow_wall_clock_with_named_full_period(
     monkeypatch.setattr(time, "monotonic_ns", lambda: board["ns"])
     monkeypatch.setattr(time, "sleep", fake_sleep)
     with Program(strict=False) as prog:
-        with Rung(clock):
+        with rung(clock):
             math(OnScans + 1, OnScans)
 
     _code, read = _run(prog, monkeypatch, scans=scans)
@@ -226,7 +226,7 @@ def test_clock_bits_off_on_first_scan(monkeypatch):
     # Core's clocks read the time of the scans before this one: 0 on the first.
     clocks = (system.sys.clock_10ms, system.sys.clock_100ms, system.sys.clock_1s)
     with Program(strict=False) as prog:
-        with Rung(system.sys.first_scan, *(~clock for clock in clocks)):
+        with rung(system.sys.first_scan, *(~clock for clock in clocks)):
             copy(1, FirstScanClockOff)
 
     _code, read = _run(prog, monkeypatch, scans=1)
@@ -246,9 +246,9 @@ ModeOn = Int("ModeOn", retentive=False)
 def test_mode_bits_on_in_run(monkeypatch, runstop):
     # The test board's switch reads low: RUN for run_when_high=False.
     with Program(strict=False) as prog:
-        with Rung(system.sys.mode_switch_run):
+        with rung(system.sys.mode_switch_run):
             copy(1, SwitchOn)
-        with Rung(system.sys.mode_run):
+        with rung(system.sys.mode_run):
             copy(1, ModeOn)
 
     _code, read = _run(prog, monkeypatch, scans=2, runstop=runstop)
@@ -260,7 +260,7 @@ def test_mode_bits_on_in_run(monkeypatch, runstop):
 def test_mode_switch_bit_reads_the_switch_in_stop(monkeypatch):
     # run_when_high=True with the switch low: STOP, and SC10 reads off.
     with Program(strict=False) as prog:
-        with Rung(system.sys.mode_switch_run):
+        with rung(system.sys.mode_switch_run):
             copy(1, SwitchOn)
 
     _code, read = _run(
@@ -288,7 +288,7 @@ def test_rtc_points_read_localtime(monkeypatch):
     monkeypatch.setattr(time, "localtime", lambda *args: now)
     dests = {name: Int(f"Rtc_{name}", retentive=False) for name in RTC_FIELDS}
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for name, dest in dests.items():
                 copy(getattr(system.rtc, name), dest)
 
@@ -299,7 +299,7 @@ def test_rtc_points_read_localtime(monkeypatch):
 
 def test_unreferenced_system_points_emit_nothing(monkeypatch):
     with Program(strict=False) as prog:
-        with Rung(Armed):
+        with rung(Armed):
             copy(1, Sink)
 
     code, _read = _run(prog, monkeypatch, scans=1)
@@ -320,17 +320,17 @@ RunScans = Int("RunScans", retentive=True)
 
 def _math_error_program() -> Program:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(RunScans + 1, RunScans)
-        with Rung(Faulted == 0):
+        with rung(Faulted == 0):
             copy(1, Faulted)
             copy(-4.0, Operand)
             copy(99.0, Root)
             math(sqrt(Operand), Root)
-        with Rung(system.fault.math_operation_error):
+        with rung(system.fault.math_operation_error):
             math(SawMathError + 1, SawMathError)
         # Reference SC50 and SC11, so the generated code carries them.
-        with Rung(system.sys.cmd_mode_stop, system.sys.mode_run):
+        with rung(system.sys.cmd_mode_stop, system.sys.mode_run):
             copy(0, Sink)
     return prog
 
@@ -363,7 +363,7 @@ def test_math_error_does_not_stop_the_code(monkeypatch, runstop):
 )
 def test_a_math_function_emits_no_stop_hold(monkeypatch, runstop):
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(sqrt(Operand), Root)
 
     hw = _hw()

@@ -17,11 +17,11 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     Timer,
     debounce,
     flasher,
     immediate,
+    rung,
     timed,
     toggle,
 )
@@ -44,7 +44,7 @@ class TestToggle:
     def test_flips_on_each_rising_edge_and_holds_while_false(self, runner_factory):
         Light = Bool("Light")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 toggle(Light)
 
         runner = runner_factory(logic, dt=0.010)
@@ -65,7 +65,7 @@ class TestToggle:
         """O1, pyrung's answer: the previous state of the rung starts false."""
         Light = Bool("Light")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 toggle(Light)
 
         runner = runner_factory(logic, dt=0.010)
@@ -74,7 +74,7 @@ class TestToggle:
     def test_immediate_target(self, runner_factory):
         Light = Bool("Light")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 toggle(immediate(Light))
 
         runner = runner_factory(logic, dt=0.010)
@@ -83,7 +83,7 @@ class TestToggle:
     def test_rejects_non_bool_and_ranges(self):
         Count = Int("Count")
         with Program():
-            with Rung(In):
+            with rung(In):
                 with pytest.raises(TypeError, match="one Bool tag"):
                     toggle(Count)
 
@@ -100,7 +100,7 @@ class TestToggle:
 def test_only_toggle_takes_an_immediate_target(build):
     lamp = Bool("Lamp")
     with Program():
-        with Rung(In):
+        with rung(In):
             with pytest.raises(TypeError, match="takes no immediate"):
                 build(lamp)
 
@@ -109,7 +109,7 @@ class TestDebounce:
     def test_each_side_times_from_0_and_keeps_its_td(self, runner_factory):
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 30), off=(T[2], 20))
 
         runner = runner_factory(logic, dt=0.010)
@@ -141,7 +141,7 @@ class TestDebounce:
         """
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 0), off=(T[2], 500))
 
         runner = runner_factory(logic, dt=0.010)
@@ -155,7 +155,7 @@ class TestDebounce:
         """``deb_zero/off_side_lag``: the off side turns the coil off a scan after the fall."""
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 0), off=(T[2], 0))
 
         runner = runner_factory(logic, dt=0.010)
@@ -169,7 +169,7 @@ class TestDebounce:
         """
         Valve = Bool("Valve", default=True)
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 50), off=(T[2], 20))
 
         runner = runner_factory(logic, dt=0.010)
@@ -180,7 +180,7 @@ class TestDebounce:
         """``deb_off/off_td_with_coil_off``: a CLICK kept the 50 that the ladder wrote."""
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 300), off=(T[2], 1000))
 
         runner = runner_factory(logic, dt=0.010)
@@ -191,7 +191,7 @@ class TestDebounce:
         """The rise clears the off TD.  The fall does not start it, since the coil never came on."""
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 30), off=(T[2], 20))
 
         runner = runner_factory(logic, dt=0.010)
@@ -208,7 +208,7 @@ class TestDebounce:
     def test_off_td_counts_once_the_coil_is_on_and_the_rung_falls(self, runner_factory):
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 0), off=(T[2], 20))
 
         runner = runner_factory(logic, dt=0.010)
@@ -227,7 +227,7 @@ class TestDebounce:
         """O3, pyrung's answer: a bounce restarts the side that was timing."""
         Valve = Bool("Valve")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 debounce(Valve, on=(T[1], 30), off=(T[2], 30))
 
         runner = runner_factory(logic, dt=0.010)
@@ -252,21 +252,21 @@ class TestDebounce:
         """CLICK's Debounce dialog requires an on and an off side."""
         Valve = Bool("Valve")
         with Program():
-            with Rung(In):
+            with rung(In):
                 with pytest.raises(TypeError, match="off"):
                     debounce(Valve, on=(T[1], 10))  # ty: ignore[missing-argument]
 
     def test_half_written_phase_fails_at_call_time(self):
         Valve = Bool("Valve")
         with Program():
-            with Rung(In):
+            with rung(In):
                 with pytest.raises(TypeError, match=r"on= takes \(timer, preset\)"):
                     debounce(Valve, on=T[1], off=(T[2], 10))  # type: ignore[arg-type]
 
     def test_sides_need_two_timers(self):
         Valve = Bool("Valve")
         with Program():
-            with Rung(In):
+            with rung(In):
                 with pytest.raises(ValueError, match="two different timers"):
                     debounce(Valve, on=(T[1], 10), off=(T[1], 10))
 
@@ -275,7 +275,7 @@ class TestFlasher:
     def test_alternates_starting_on_and_freezes_when_the_rung_drops(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 30), off=(T[4], 20))
 
         runner = runner_factory(logic, dt=0.010)
@@ -314,7 +314,7 @@ class TestFlasher:
         """``td_write``: the running phase ends on its next tick. The other TD holds."""
         Beacon = Bool("Beacon")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 50), off=(T[4], 50))
 
         runner = runner_factory(logic, dt=0.010)
@@ -342,7 +342,7 @@ class TestFlasher:
         """
         Beacon = Bool("Beacon")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 100), off=(T[4], 100))
 
         runner = runner_factory(logic, dt=dt)
@@ -352,7 +352,7 @@ class TestFlasher:
         """The scan time of the soft PLC (``SimServer``) varies from scan to scan."""
         Beacon = Bool("Beacon")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 100), off=(T[4], 100))
 
         plc = PLC(logic, dt=0.010)
@@ -375,7 +375,7 @@ class TestFlasher:
         Beacon = Bool("Beacon")
         OffTime = Int("OffTime", default=off_preset)
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 30), off=(T[4], OffTime))
 
         runner = runner_factory(logic, dt=0.010)
@@ -389,14 +389,14 @@ class TestFlasher:
     def test_needs_both_phases(self):
         Beacon = Bool("Beacon")
         with Program():
-            with Rung(In):
+            with rung(In):
                 with pytest.raises(TypeError):
                     flasher(Beacon, on=(T[3], 30))  # ty: ignore[missing-argument]
 
     def test_seconds_unit_keeps_its_remainder(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 1), off=(T[4], 1), unit="sec")
 
         runner = runner_factory(logic, dt=0.250)
@@ -416,7 +416,7 @@ class TestShortPhases:
     def test_flasher_shows_an_on_time_under_a_scan_for_one_scan(self, runner_factory):
         Beacon = Bool("Beacon")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], 5), off=(T[4], 30))
 
         runner = runner_factory(logic, dt=0.010)
@@ -428,9 +428,9 @@ class TestShortPhases:
         Beacon = Bool("Beacon")
         OnTime = Int("OnTime", default=on_preset)
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 flasher(Beacon, on=(T[3], OnTime), off=(T[4], 20))
-            with Rung(In):
+            with rung(In):
                 flasher(Bool("Both"), on=(T[5], 0), off=(T[6], 0))
 
         runner = runner_factory(logic, dt=0.010)
@@ -441,7 +441,7 @@ class TestShortPhases:
     def test_timed_pulse_under_a_scan_does_not_show(self, runner_factory, maintained):
         Horn = Bool("Horn")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 timed(Horn, T[5], 10, maintained=maintained)
 
         runner = runner_factory(logic, dt=0.010)
@@ -460,7 +460,7 @@ class TestShortPhases:
         Horn = Bool("Horn")
         OnTime = Int("OnTime", default=preset)
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 timed(Horn, T[5], OnTime)
 
         runner = runner_factory(logic, dt=0.010)
@@ -471,7 +471,7 @@ class TestTimed:
     def test_pulse_ignores_the_rung_once_started(self, runner_factory):
         Horn = Bool("Horn")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 timed(Horn, T[5], 40)
 
         runner = runner_factory(logic, dt=0.010)
@@ -489,7 +489,7 @@ class TestTimed:
     def test_not_maintained_needs_a_fresh_edge(self, runner_factory):
         Horn = Bool("Horn")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 timed(Horn, T[5], 20)
 
         runner = runner_factory(logic, dt=0.010)
@@ -508,7 +508,7 @@ class TestTimed:
     def test_maintained_follows_the_rung_after_the_on_time(self, runner_factory):
         Lamp = Bool("Lamp")
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 timed(Lamp, T[6], 30, maintained=True)
 
         runner = runner_factory(logic, dt=0.010)
@@ -529,7 +529,7 @@ class TestTimed:
         Horn = Bool("Horn")
         OnTime = Int("OnTime", default=20)
         with Program() as logic:
-            with Rung(In):
+            with rung(In):
                 timed(Horn, T[5], OnTime)
 
         runner = runner_factory(logic, dt=0.010)
@@ -539,7 +539,7 @@ class TestTimed:
 def test_all_variants_in_one_rung_agree_across_backends(runner_factory):
     Light, Valve, Beacon, Horn = Bool("Light"), Bool("Valve"), Bool("Beacon"), Bool("Horn")
     with Program() as logic:
-        with Rung(In):
+        with rung(In):
             toggle(Light)
             debounce(Valve, on=(T[1], 25), off=(T[2], 15), unit="ms")
             flasher(Beacon, on=(T[3], 30), off=(T[4], 20))

@@ -13,7 +13,7 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, TimeMode, copy, out
+from pyrung.core import PLC, Bool, Int, Program, TimeMode, copy, out, rung
 from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.state import SystemState
 
@@ -76,7 +76,7 @@ def test_previous_transition_queries_value_and_scan_boundary() -> None:
     Light = Bool("HistoryTransitionLight")
 
     with Program() as program:
-        with Rung(Enable):
+        with rung(Enable):
             out(Light)
 
     runner = PLC(program)
@@ -113,13 +113,13 @@ def test_previous_transition_validates_compressed_candidate_against_committed_bo
     Observed = Bool("HistoryBoundaryObserved")
 
     with Program() as program:
-        with Rung(Seed):
+        with rung(Seed):
             copy(99, ProcessStep)
-        with Rung(MainWrite):
+        with rung(MainWrite):
             copy(10, ProcessStep)
-        with Rung(ErrorWrite):
+        with rung(ErrorWrite):
             copy(98, ProcessStep)
-        with Rung(ProcessStep == 98):
+        with rung(ProcessStep == 98):
             out(Observed)
 
     runner = PLC(program)
@@ -429,14 +429,14 @@ def test_fork_reuses_parent_tag_index_without_program_rewalk(
     and isolated probes, so a re-walk per fork turns drive wall-clock from
     seconds into hours.
     """
-    from pyrung import Bool, Program, Rung, out
+    from pyrung import Bool, Program, out, rung
     from pyrung.core import runner as runner_mod
 
     A = Bool("A", external=True)
     B = Bool("B")
 
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(B)
 
     runner = PLC(prog)
@@ -711,7 +711,7 @@ def test_fork_inf_budget_never_evicts() -> None:
     A = Bool("A")
     B = Bool("B")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(B)
 
     plc = PLC(prog, dt=0.01)

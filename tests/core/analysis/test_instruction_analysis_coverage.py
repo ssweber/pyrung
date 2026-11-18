@@ -17,7 +17,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -45,6 +44,7 @@ from pyrung.core import (
     return_early,
     run_enabled_function,
     run_function,
+    rung,
     search,
     shift,
     subroutine,
@@ -112,7 +112,7 @@ def _enabled_callback(enabled: bool, **kwargs: Any) -> dict[str, Any]:
 
 def _program_with_one_rung(fn: Callable[[], None], *conditions: Any) -> Program:
     with Program(strict=False) as logic:
-        with Rung(*conditions):
+        with rung(*conditions):
             fn()
     return logic
 
@@ -474,9 +474,9 @@ def _call_case() -> Program:
     gate = Bool("CallEnable")
     with Program(strict=False) as logic:
         with subroutine("worker"):
-            with Rung():
+            with rung():
                 out(Bool("CallSubOutput"))
-        with Rung(gate):
+        with rung(gate):
             call("worker")
     return logic
 
@@ -485,11 +485,11 @@ def _return_early_case() -> Program:
     abort = Bool("ReturnAbort")
     with Program(strict=False) as logic:
         with subroutine("guarded"):
-            with Rung(abort):
+            with rung(abort):
                 return_early()
-            with Rung():
+            with rung():
                 copy(1, Int("ReturnTail"))
-        with Rung():
+        with rung():
             call("guarded")
     return logic
 
@@ -499,7 +499,7 @@ def _forloop_case() -> Program:
     src = Int("LoopSource")
     dest = Int("LoopDest")
     with Program(strict=False) as logic:
-        with Rung(Bool("LoopEnable")):
+        with rung(Bool("LoopEnable")):
             with forloop(count):
                 copy(src, dest)
     return logic
@@ -508,9 +508,9 @@ def _forloop_case() -> Program:
 def _loop_exit_case(verb: Callable[[], None], prefix: str) -> Callable[[], Program]:
     def build() -> Program:
         with Program(strict=False) as logic:
-            with Rung(Bool(f"{prefix}Enable")):
+            with rung(Bool(f"{prefix}Enable")):
                 with forloop(3):
-                    with Rung(Bool(f"{prefix}Exit")):
+                    with rung(Bool(f"{prefix}Exit")):
                         verb()
                     copy(Int(f"{prefix}Source"), Int(f"{prefix}Dest"))
         return logic
@@ -1089,7 +1089,7 @@ def test_reverse_edges_cover_supported_and_conservative_copy_family_shapes() -> 
     converted_block = Block("RevConvertedBlock", TagType.INT, 1, 2)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(a, b)
             math(a + 5, c)
             fill(fill_src, block_a.select(1, 2))
@@ -1118,7 +1118,7 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
     block = Block("SpBlock", TagType.INT, 1, 2)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             latch(flag)
             reset(other_flag)
             copy(source, dest)
@@ -1127,18 +1127,18 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
 
     from pyrung.core.crossing import Affine, Literal, StoreTransform
 
-    rung = logic.rungs[0]
-    assert _written_value_for_tag(rung, "SpFlag") == Literal(True)
-    assert _written_value_for_tag(rung, "SpOtherFlag") == Literal(False)
+    rung0 = logic.rungs[0]
+    assert _written_value_for_tag(rung0, "SpFlag") == Literal(True)
+    assert _written_value_for_tag(rung0, "SpOtherFlag") == Literal(False)
     # copy-from-named-tag classifies as an affine pass-through (scale 1, offset 0)
     # so cause(to=)/effect(from_=) can trace the value through the copy.
-    assert _written_value_for_tag(rung, "SpDest") == Affine(
+    assert _written_value_for_tag(rung0, "SpDest") == Affine(
         source="SpSource",
         scale=1,
         offset=0,
         storage=StoreTransform("clamp", -32768, 32767),
     )
-    assert _written_value_for_tag(rung, "SpBlock1") == Literal(7)
+    assert _written_value_for_tag(rung0, "SpBlock1") == Literal(7)
 
 
 @pytest.mark.parametrize(
@@ -1258,7 +1258,7 @@ def test_causal_why_labels_child_writer_inside_forloop() -> None:
     dest = Int("WhyLoopDest")
 
     with Program(strict=False) as logic:
-        with Rung(Bool("WhyLoopEnable")):
+        with rung(Bool("WhyLoopEnable")):
             with forloop(2):
                 copy(source, dest)
 
@@ -1283,15 +1283,15 @@ def test_fact_domains_cover_callbacks_receive_and_search() -> None:
     counter = Counter.clone("DomainCounter")
 
     with Program(strict=False) as logic:
-        with Rung(callback_enable):
+        with rung(callback_enable):
             run_enabled_function(
                 _enabled_callback,
                 ins={"value": callback_source},
                 outs={"result": callback_dest},
             )
-        with Rung(callback_dest == 2):
+        with rung(callback_dest == 2):
             out(Bool("DomainCallbackHit"))
-        with Rung(Bool("DomainReceiveEnable", external=True)):
+        with rung(Bool("DomainReceiveEnable", external=True)):
             receive(
                 target="peer",
                 remote_start="DS1",
@@ -1301,19 +1301,19 @@ def test_fact_domains_cover_callbacks_receive_and_search() -> None:
                 error=error,
                 exception_response=ex,
             )
-        with Rung():
+        with rung():
             search(
                 data.select(1, 2) == Int("DomainNeedle", external=True, min=0, max=2),
                 result=search_result,
                 found=search_found,
             )
-        with Rung(search_found):
+        with rung(search_found):
             out(Bool("DomainSearchHit"))
-        with Rung(search_result >= 1):
+        with rung(search_result >= 1):
             out(Bool("DomainSearchAddressed"))
-        with Rung(Bool("DomainTimerEnable", external=True)):
+        with rung(Bool("DomainTimerEnable", external=True)):
             on_delay(timer, preset=10).reset(Bool("DomainTimerReset", external=True))
-        with Rung(Bool("DomainCounterEnable", external=True)):
+        with rung(Bool("DomainCounterEnable", external=True)):
             count_up(counter, preset=2).reset(Bool("DomainCounterReset", external=True))
 
     result = _classify_dimensions(logic)
@@ -1347,9 +1347,9 @@ def _division_fault_reader_case() -> Program:
     quotient = Int("FaultQuotient")
     hit = Bool("FaultHit")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             math(100 / divisor, quotient)
-        with Rung(system.fault.division_error):
+        with rung(system.fault.division_error):
             out(hit)
     return logic
 

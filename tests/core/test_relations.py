@@ -19,13 +19,13 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     Timer,
     count_down,
     count_up,
     off_delay,
     on_delay,
     rise,
+    rung,
 )
 from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.counters import CountUpInstruction
@@ -53,23 +53,23 @@ Preset = Int("Preset")
 def _shapes() -> dict[str, Any]:
     """One instruction of each shape the timer and counter emitters write."""
     with Program(strict=False) as program:
-        with Rung(En):
+        with rung(En):
             on_delay(Timer.clone("TonBare"), 100)
-        with Rung(En):
+        with rung(En):
             on_delay(Timer.clone("TonReset"), Preset, "s").reset(Rst)
-        with Rung(En):
+        with rung(En):
             on_delay(Timer.clone("TonEdgeReset"), -5).reset(rise(Rst))
-        with Rung():
+        with rung():
             on_delay(Timer.clone("TonAlways"), 100)
-        with Rung(En):
+        with rung(En):
             off_delay(Timer.clone("Tof"), 100)
-        with Rung(En):
+        with rung(En):
             off_delay(Timer.clone("TofTag"), Preset, "s")
-        with Rung(En):
+        with rung(En):
             count_up(Counter.clone("CtuReset"), Preset).reset(Rst)
-        with Rung(En):
+        with rung(En):
             count_up(Counter.clone("CtuUpDown"), 5).down(Dn).reset(Rst)
-        with Rung(En):
+        with rung(En):
             count_down(Counter.clone("Ctd"), -5).reset(Rst)
     names = [
         "TonBare",
@@ -234,11 +234,11 @@ def test_off_delay_motion_waits_on_its_armed_memory() -> None:
 
 def test_relations_are_shared_by_shape() -> None:
     with Program(strict=False) as program:
-        with Rung(Dn):
+        with rung(Dn):
             on_delay(Timer.clone("Other"), 100)
-        with Rung(Dn):
+        with rung(Dn):
             on_delay(Timer.clone("OtherPreset"), 200)
-        with Rung(Dn):
+        with rung(Dn):
             on_delay(Timer.clone("TagPreset"), Preset)
     same, other_preset, tag_preset = walk_instructions(program)
     assert relations_for(same) is relations_for(SHAPES["TonBare"])
@@ -419,7 +419,7 @@ def test_every_timer_and_counter_in_the_render_corpus_gets_relations(
 
 def test_a_counter_on_a_rung_with_no_condition_counts_on_a_rise() -> None:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             count_up(Counter.clone("Always"), 5).reset(Rst)
     [instruction] = walk_instructions(program)
     relations = relations_for(instruction)
@@ -540,7 +540,7 @@ def test_instructions_that_do_not_record_have_no_relations() -> None:
     from pyrung.core import copy
 
     with Program(strict=False) as program:
-        with Rung(En):
+        with rung(En):
             copy(Preset, Int("Out"))
     [instruction] = walk_instructions(program)
     assert relations_for(instruction) is None

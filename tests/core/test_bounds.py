@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Real, Rung, copy, math
+from pyrung.core import PLC, Bool, Int, Program, Real, copy, math, rung
 
 
 class TestRangeViolation:
@@ -14,7 +14,7 @@ class TestRangeViolation:
         Q = Real("Q")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(Q, P)
 
         plc = PLC(logic, dt=0.01)
@@ -29,7 +29,7 @@ class TestRangeViolation:
         P = Real("P", min=0, max=100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(P + 150, P)
 
         plc = PLC(logic, dt=0.01)
@@ -45,7 +45,7 @@ class TestRangeViolation:
         P = Real("P", min=0, max=100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(P - 10, P)
 
         plc = PLC(logic, dt=0.01)
@@ -61,7 +61,7 @@ class TestRangeViolation:
         P = Real("P", min=0, max=100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(P + 10, P)
 
         plc = PLC(logic, dt=0.01)
@@ -76,7 +76,7 @@ class TestRangeViolation:
         Temp = Real("Temp", min=-40)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(Temp - 100, Temp)
 
         plc = PLC(logic, dt=0.01)
@@ -90,7 +90,7 @@ class TestRangeViolation:
         Speed = Int("Speed", max=1000)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(Speed + 500, Speed)
 
         plc = PLC(logic, dt=0.01)
@@ -108,7 +108,7 @@ class TestChoicesViolation:
         Src = Int("Src")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Mode)
 
         plc = PLC(logic, dt=0.01)
@@ -125,7 +125,7 @@ class TestChoicesViolation:
         Src = Int("Src")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Mode)
 
         plc = PLC(logic, dt=0.01)
@@ -141,7 +141,7 @@ class TestTypeClampsBeforeBoundsCheck:
         Lvl = Int("Lvl", min=0, max=500)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(40000, Lvl)
 
         plc = PLC(logic, dt=0.01)
@@ -159,7 +159,7 @@ class TestNoConstraints:
         X = Int("X")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(32000, X)
 
         plc = PLC(logic, dt=0.01)
@@ -176,7 +176,7 @@ class TestMultipleViolations:
         B = Real("B", min=0, max=10)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(99, A)
                 copy(99, B)
 
@@ -194,7 +194,7 @@ class TestViolationsClearedNextScan:
         P = Real("P", min=0, max=100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(200, P)
 
         plc = PLC(logic, dt=0.01)
@@ -213,7 +213,7 @@ class TestWarningEmitted:
         P = Real("P", min=0, max=100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(200, P)
 
         plc = PLC(logic, dt=0.01)

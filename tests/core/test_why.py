@@ -15,7 +15,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     copy,
@@ -24,6 +23,7 @@ from pyrung.core import (
     on_delay,
     out,
     reset,
+    rung,
     search,
 )
 from pyrung.core.state import SystemState
@@ -49,13 +49,13 @@ def _build_worked_example():
     Cmd_Run = Bool("Cmd_Run")
 
     with Program() as logic:
-        with Rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
+        with rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
             latch(Sts_FaultTripped)
 
-        with Rung(And(Sts_FaultTripped, Cmd_Reset)):
+        with rung(And(Sts_FaultTripped, Cmd_Reset)):
             reset(Sts_FaultTripped)
 
-        with Rung(Sts_FaultTripped):
+        with rung(Sts_FaultTripped):
             out(Alarm_Horn)
             reset(Cmd_Run)
 
@@ -72,7 +72,7 @@ def _build_or_example():
     Alarm = Bool("Alarm")
 
     with Program() as logic:
-        with Rung(Or(SensorA, SensorB)):
+        with rung(Or(SensorA, SensorB)):
             out(Alarm)
 
     return logic
@@ -91,11 +91,11 @@ def _build_chain():
     Output = Bool("Output")
 
     with Program() as logic:
-        with Rung(A):
+        with rung(A):
             out(B)
-        with Rung(B):
+        with rung(B):
             out(C)
-        with Rung(C):
+        with rung(C):
             out(Output)
 
     return logic
@@ -340,13 +340,13 @@ class TestFillStation:
         LevelSensor = Bool("LevelSensor", external=True)
 
         with Program() as logic:
-            with Rung(StartBtn, ~LevelSensor, ~FlowAlarm):
+            with rung(StartBtn, ~LevelSensor, ~FlowAlarm):
                 latch(FillEnable)
-            with Rung(LevelSensor):
+            with rung(LevelSensor):
                 reset(FillEnable)
-            with Rung(FlowAlarm):
+            with rung(FlowAlarm):
                 reset(FillEnable)
-            with Rung(FillEnable):
+            with rung(FillEnable):
                 out(FillValve)
 
         return logic
@@ -409,9 +409,9 @@ class TestWriteBeforeRead:
         Output = Bool("Output")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(Sensor, Intermediate)
-            with Rung(Intermediate):
+            with rung(Intermediate):
                 out(Output)
 
         return logic
@@ -452,11 +452,11 @@ class TestWriteBeforeRead:
         )
         for owner, tag, threshold in held_by_hold:
             with Program() as logic:
-                with Rung():
+                with rung():
                     owner()
-                with Rung(hold):
+                with rung(hold):
                     copy(0, tag)
-                with Rung(tag >= threshold):
+                with rung(tag >= threshold):
                     out(output)
             plc = PLC(logic=logic, dt=0.010)
             for _ in range(5):
@@ -495,10 +495,10 @@ class TestInitConstant:
         Output = Bool("Output")
 
         with Program() as logic:
-            with Rung(~InitDone):
+            with rung(~InitDone):
                 copy(42, Setpoint)
                 latch(InitDone)
-            with Rung(And(Enable, Sensor)):
+            with rung(And(Enable, Sensor)):
                 out(Output)
 
         return logic
@@ -537,9 +537,9 @@ class TestBackPropagation:
         Output = Bool("Output")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 math(Raw + 10, Scaled)
-            with Rung(Enable):
+            with rung(Enable):
                 out(Output)
 
         return logic
@@ -569,7 +569,7 @@ class TestBackPropagation:
         B = Int("B")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(A, B)
 
         edge_map = build_reverse_edge_map(logic)
@@ -620,7 +620,7 @@ class TestInstructionLabels:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(A, B)
 
         state = SystemState().with_tags({"A": 5, "B": 5, "Enable": True})
@@ -695,13 +695,13 @@ class TestKind:
         LevelSensor = Bool("LevelSensor", external=True)
 
         with Program() as logic:
-            with Rung(StartBtn, ~LevelSensor, ~FlowAlarm):
+            with rung(StartBtn, ~LevelSensor, ~FlowAlarm):
                 latch(FillEnable)
-            with Rung(LevelSensor):
+            with rung(LevelSensor):
                 reset(FillEnable)
-            with Rung(FlowAlarm):
+            with rung(FlowAlarm):
                 reset(FillEnable)
-            with Rung(FillEnable):
+            with rung(FillEnable):
                 out(FillValve)
 
         state = SystemState().with_tags(
@@ -737,15 +737,15 @@ class TestForced:
         clear = Bool("Clear", external=True)
         sealed = Bool("Sealed")
         with Program(strict=False) as logic:
-            with Rung(go):
+            with rung(go):
                 out(lamp)
-            with Rung(go):
+            with rung(go):
                 out(relay)
-            with Rung(relay):
+            with rung(relay):
                 out(motor)
-            with Rung(go):
+            with rung(go):
                 latch(sealed)
-            with Rung(clear):
+            with rung(clear):
                 reset(sealed)
         return PLC(logic, dt=0.01)
 
@@ -850,7 +850,7 @@ class TestForced:
         copied = Int("Copied")
         go = Bool("Go", external=True)
         with Program(strict=False) as logic:
-            with Rung(go):
+            with rung(go):
                 copy(source, copied)
         plc = PLC(logic, dt=0.01)
         plc.force("Copied", 42)

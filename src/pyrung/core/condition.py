@@ -477,7 +477,7 @@ class AllCondition(Condition):
     """AND condition - true when all sub-conditions are true.
 
     Example:
-        with Rung(And(Ready, AutoMode)):
+        with rung(And(Ready, AutoMode)):
             out(StartPermissive)
     """
 
@@ -502,7 +502,7 @@ class AnyCondition(Condition):
     """OR condition - true when any sub-condition is true.
 
     Example:
-        with Rung(Step == 1, Or(Start, oCmdStart)):
+        with rung(Step == 1, Or(Start, oCmdStart)):
             out(Light)
     """
 

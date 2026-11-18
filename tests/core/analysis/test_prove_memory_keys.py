@@ -12,11 +12,11 @@ from pyrung.core import (
     PLC,
     Bool,
     Program,
-    Rung,
     call,
     latch,
     out,
     reset,
+    rung,
     subroutine,
 )
 
@@ -37,18 +37,18 @@ def _oneshot_in_late_subroutine() -> tuple[Program, Bool]:
     W = Bool("W")
     Bad = Bool("Bad")
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("sub")
-        with Rung(~G, T):
+        with rung(~G, T):
             latch(W)
-        with Rung(~T):
+        with rung(~T):
             reset(W)
-        with Rung(P):
+        with rung(P):
             reset(W)
-        with Rung(G, T, ~P, W):
+        with rung(G, T, ~P, W):
             latch(Bad)
         with subroutine("sub"):
-            with Rung(T):
+            with rung(T):
                 out(P, oneshot=True)
     return logic, Bad
 

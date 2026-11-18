@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-from pyrung import PLC, Bool, Program, Rung, out
+from pyrung import PLC, Bool, Program, out, rung
 from pyrung.core.read_trace import _READ_ALL, _traced_call
 from pyrung.core.state import snapshot_dict
 
@@ -13,7 +13,7 @@ def _plc() -> PLC:
     a = Bool("A")
     b = Bool("B")
     with Program() as prog:
-        with Rung(a):
+        with rung(a):
             out(b)
     return PLC(prog)
 

@@ -9,7 +9,6 @@ from pyrung import (
     Int,
     Or,
     Real,
-    Rung,
     Word,
     branch,
     call,
@@ -17,6 +16,7 @@ from pyrung import (
     math,
     out,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core import Block, Program, TagType
@@ -40,9 +40,9 @@ def test_comparison_constant_over_declared_bounds() -> None:
     speed = Int("Speed", min=0, max=10, external=True)
     result = Bool("Result")
     with Program() as program:
-        with Rung(speed > 10):
+        with rung(speed > 10):
             out(result)
-        with Rung(speed >= 0):
+        with rung(speed >= 0):
             out(Bool("Other"))
 
     assert _codes(program, CMP_ALWAYS_FALSE, CMP_ALWAYS_TRUE) == [
@@ -63,7 +63,7 @@ def _messages(program: Program, *codes: str) -> list[str]:
 def test_comparison_constant_names_declared_bounds() -> None:
     laser = Int("DelayedLaser", min=0, max=90, external=True)
     with Program() as program:
-        with Rung(laser >= 95):
+        with rung(laser >= 95):
             out(Bool("Result"))
 
     (message,) = _messages(program, CMP_ALWAYS_FALSE)
@@ -75,7 +75,7 @@ def test_comparison_constant_names_declared_bounds() -> None:
 def test_comparison_constant_names_choices() -> None:
     mode = Int("Mode", choices={0: "Idle", 1: "Run"}, external=True)
     with Program() as program:
-        with Rung(mode == 7):
+        with rung(mode == 7):
             out(Bool("Result"))
 
     (message,) = _messages(program, CMP_ALWAYS_FALSE)
@@ -86,11 +86,11 @@ def test_comparison_constant_names_choices() -> None:
 def test_comparison_constant_names_producer_rungs() -> None:
     count = Int("Count")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(3, count)
-        with Rung(Bool("Bump")):
+        with rung(Bool("Bump")):
             copy(5, count)
-        with Rung(count > 10):
+        with rung(count > 10):
             out(Bool("Result"))
 
     (message,) = _messages(program, CMP_ALWAYS_FALSE)
@@ -101,7 +101,7 @@ def test_comparison_constant_names_producer_rungs() -> None:
 def test_comparison_constant_true_preserves_boundary_guard() -> None:
     speed = Int("Speed", min=0, max=10, external=True)
     with Program() as program:
-        with Rung(speed >= 0):
+        with rung(speed >= 0):
             out(Bool("Result"))
 
     assert not _messages(program, CMP_ALWAYS_TRUE)
@@ -110,7 +110,7 @@ def test_comparison_constant_true_preserves_boundary_guard() -> None:
 def test_declared_bounds_do_not_make_a_defensive_range_redundant():
     state = Int("State", min=0, max=99, external=True)
     with Program() as program:
-        with Rung(state > 1, state < 100):
+        with rung(state > 1, state < 100):
             out(Bool("Result"))
     assert not _codes(program, CMP_ALWAYS_TRUE, RUNG_REDUNDANT_TERM)
 
@@ -118,7 +118,7 @@ def test_declared_bounds_do_not_make_a_defensive_range_redundant():
 def test_missing_writer_is_reported_once_for_a_range_guard():
     state = Int("State")
     with Program() as program:
-        with Rung(state > 1, state < 100):
+        with rung(state > 1, state < 100):
             out(Bool("Result"))
     assert _codes(program, "CMP_OPERAND_NO_WRITER") == ["CMP_OPERAND_NO_WRITER"]
 
@@ -126,7 +126,7 @@ def test_missing_writer_is_reported_once_for_a_range_guard():
 def test_comparison_punts_on_open_external_domain() -> None:
     speed = Int("Speed", external=True)
     with Program() as program:
-        with Rung(speed > 10):
+        with rung(speed > 10):
             out(Bool("Result"))
 
     assert not _codes(program, CMP_ALWAYS_FALSE, CMP_ALWAYS_TRUE)
@@ -135,9 +135,9 @@ def test_comparison_punts_on_open_external_domain() -> None:
 def test_self_comparison_preserves_operand_correlation() -> None:
     value = Int("Value", min=0, max=1, external=True)
     with Program() as program:
-        with Rung(value == value):
+        with rung(value == value):
             out(Bool("Same"))
-        with Rung(value < value):
+        with rung(value < value):
             out(Bool("Less"))
 
     assert _codes(program, CMP_ALWAYS_FALSE, CMP_ALWAYS_TRUE) == [
@@ -149,7 +149,7 @@ def test_self_comparison_preserves_operand_correlation() -> None:
 def test_self_comparison_punts_on_open_domain() -> None:
     value = Int("Value", external=True)
     with Program() as program:
-        with Rung(value == value):
+        with rung(value == value):
             out(Bool("Same"))
 
     assert not _codes(program, CMP_ALWAYS_FALSE, CMP_ALWAYS_TRUE)
@@ -160,7 +160,7 @@ def test_closed_nan_self_comparison_preserves_ieee_behavior() -> None:
     # NaN is out of range for a REAL default, but raw bits (pack_bits) can make one.
     value = Real("Value", choices={nan: "not-a-number"}, external=True)
     with Program() as program:
-        with Rung(value == value):
+        with rung(value == value):
             out(Bool("Same"))
 
     assert _codes(program, CMP_ALWAYS_FALSE, CMP_ALWAYS_TRUE) == [CMP_ALWAYS_FALSE]
@@ -171,13 +171,13 @@ def test_comparison_uses_only_complete_producer_domains() -> None:
     closed = Int("Closed")
     open_value = Int("OpenValue")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(1, closed)
-        with Rung(closed > 1):
+        with rung(closed > 1):
             out(Bool("ClosedResult"))
-        with Rung():
+        with rung():
             copy(source, open_value)
-        with Rung(open_value > 10):
+        with rung(open_value > 10):
             out(Bool("OpenResult"))
 
     assert _codes(program, CMP_ALWAYS_FALSE) == [CMP_ALWAYS_FALSE]
@@ -191,7 +191,7 @@ def test_pointer_closed_domain_can_escape_block() -> None:
         choices={0: "low", 1: "first", 11: "high", 12: "higher", 13: "highest"},
     )
     with Program() as program:
-        with Rung():
+        with rung():
             copy(data[pointer], Int("Value"))
 
     report = program.check(select={PTR_MAY_ESCAPE_BLOCK})
@@ -206,7 +206,7 @@ def test_pointer_open_domain_punts() -> None:
     data = Block("Data", TagType.INT, 1, 10)
     pointer = Int("Pointer", default=1, external=True)
     with Program() as program:
-        with Rung():
+        with rung():
             copy(data[pointer], Int("Value"))
 
     assert not _codes(program, PTR_MAY_ESCAPE_BLOCK)
@@ -216,7 +216,7 @@ def test_pointer_guard_excludes_out_of_block_domain_value() -> None:
     data = Block("Data", TagType.INT, 1, 10)
     pointer = Int("Pointer", default=1, choices={0: "bad", 1: "good"}, external=True)
     with Program() as program:
-        with Rung(pointer == 1):
+        with rung(pointer == 1):
             copy(data[pointer], Int("Value"))
 
     assert not _codes(program, PTR_MAY_ESCAPE_BLOCK)
@@ -224,16 +224,16 @@ def test_pointer_guard_excludes_out_of_block_domain_value() -> None:
 
 def test_uncalled_subroutine_and_indirect_recursion() -> None:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("first")
         with subroutine("first"):
-            with Rung():
+            with rung():
                 call("second")
         with subroutine("second"):
-            with Rung():
+            with rung():
                 call("first")
         with subroutine("unused"):
-            with Rung():
+            with rung():
                 out(Bool("UnusedOutput"))
 
     report = program.check(select={CALL_NEVER_CALLED, CALL_RECURSION})
@@ -245,10 +245,10 @@ def test_uncalled_subroutine_and_indirect_recursion() -> None:
 
 def test_direct_recursion_is_reported() -> None:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("again")
         with subroutine("again"):
-            with Rung():
+            with rung():
                 call("again")
 
     assert _codes(program, CALL_RECURSION) == [CALL_RECURSION]
@@ -259,7 +259,7 @@ def test_divisor_proved_zero_under_rung_guard() -> None:
     numerator = Int("Numerator", external=True)
     result = Int("Result")
     with Program() as program:
-        with Rung(divisor == 0):
+        with rung(divisor == 0):
             math(numerator / divisor, result)
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
@@ -268,7 +268,7 @@ def test_divisor_proved_zero_under_rung_guard() -> None:
 def test_a_decimal_math_divides_by_65536_as_written() -> None:
     wide = Dint("Wide", external=True)
     with Program() as program:
-        with Rung():
+        with rung():
             math(wide / 65536, Int("Out16"))
 
     assert not _codes(program, MATH_DIV_ZERO)
@@ -277,7 +277,7 @@ def test_a_decimal_math_divides_by_65536_as_written() -> None:
 def test_divisor_a_hex_math_cuts_to_zero_shows_the_constant_as_written() -> None:
     wide = Word("Wide", external=True)
     with Program() as program:
-        with Rung():
+        with rung():
             math(wide / 65536, Word("Out16"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
@@ -291,7 +291,7 @@ def test_divisor_merely_may_be_zero_punts() -> None:
     divisor = Int("Divisor", choices={0: "zero", 1: "one"}, external=True)
     numerator = Int("Numerator", external=True)
     with Program() as program:
-        with Rung():
+        with rung():
             math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
@@ -301,10 +301,10 @@ def test_caller_guards_participate_in_zero_proof() -> None:
     divisor = Int("Divisor", choices={0: "zero", 1: "one"}, external=True)
     numerator = Int("Numerator", external=True)
     with Program(strict=False) as program:
-        with Rung(divisor == 0):
+        with rung(divisor == 0):
             call("divide")
         with subroutine("divide"):
-            with Rung():
+            with rung():
                 math(numerator / divisor, Int("Result"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
@@ -314,12 +314,12 @@ def test_intrascan_divisor_write_invalidates_caller_guard_proof() -> None:
     divisor = Int("Divisor", choices={0: "zero", 1: "one"})
     numerator = Int("Numerator", external=True)
     with Program(strict=False) as program:
-        with Rung(divisor == 0):
+        with rung(divisor == 0):
             call("divide")
         with subroutine("divide"):
-            with Rung():
+            with rung():
                 copy(1, divisor)
-            with Rung():
+            with rung():
                 math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
@@ -328,7 +328,7 @@ def test_intrascan_divisor_write_invalidates_caller_guard_proof() -> None:
 def test_literal_zero_divisor_is_reported() -> None:
     numerator = Int("Numerator", external=True)
     with Program() as program:
-        with Rung():
+        with rung():
             math(numerator / 0, Int("Result"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
@@ -338,12 +338,12 @@ def test_prior_early_return_prevents_false_div_zero_finding() -> None:
     divisor = Int("Divisor", choices={0: "zero"}, external=True)
     numerator = Int("Numerator", external=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("divide")
         with subroutine("divide"):
-            with Rung(divisor == 0):
+            with rung(divisor == 0):
                 return_early()
-            with Rung():
+            with rung():
                 math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
@@ -352,12 +352,12 @@ def test_prior_early_return_prevents_false_div_zero_finding() -> None:
 def test_later_early_return_does_not_hide_div_zero_finding() -> None:
     numerator = Int("Numerator", external=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("divide")
         with subroutine("divide"):
-            with Rung():
+            with rung():
                 math(numerator / 0, Int("Result"))
-            with Rung():
+            with rung():
                 return_early()
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
@@ -367,10 +367,10 @@ def test_same_rung_branch_return_conservatively_hides_div_zero_finding() -> None
     stop = Bool("Stop", external=True)
     numerator = Int("Numerator", external=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("divide")
         with subroutine("divide"):
-            with Rung():
+            with rung():
                 with branch(stop):
                     return_early()
                 math(numerator / 0, Int("Result"))
@@ -383,10 +383,10 @@ def test_conditional_branch_return_does_not_hide_reachable_pointer_escape() -> N
     pointer = Int("ReturnPointer", default=1, choices={1: "safe", 11: "outside"})
     stop = Bool("PointerStop", external=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("read")
         with subroutine("read"):
-            with Rung():
+            with rung():
                 with branch(stop):
                     return_early()
                 copy(data[pointer], Int("ReadValue"))
@@ -399,17 +399,17 @@ def test_return_sensitive_nonzero_call_path_blocks_guard_only_div_zero_proof() -
     numerator = Int("PathNumerator", external=True)
     stop = Bool("PathStop", external=True)
     with Program(strict=False) as program:
-        with Rung(divisor == 0):
+        with rung(divisor == 0):
             call("divide")
-        with Rung(divisor == 1):
+        with rung(divisor == 1):
             call("outer")
         with subroutine("outer"):
-            with Rung(stop):
+            with rung(stop):
                 return_early()
-            with Rung():
+            with rung():
                 call("divide")
         with subroutine("divide"):
-            with Rung():
+            with rung():
                 math(numerator / divisor, Int("PathResult"))
 
     assert not _codes(program, MATH_DIV_ZERO)
@@ -419,13 +419,13 @@ def test_duplicate_and_subsumed_terms_are_redundant() -> None:
     enabled = Bool("Enabled", external=True)
     speed = Int("Speed", external=True)
     with Program() as program:
-        with Rung(enabled, enabled):
+        with rung(enabled, enabled):
             out(Bool("Duplicate"))
-        with Rung(speed > 10, speed > 5):
+        with rung(speed > 10, speed > 5):
             out(Bool("AndResult"))
-        with Rung(Or(speed > 5, speed > 10)):
+        with rung(Or(speed > 5, speed > 10)):
             out(Bool("OrResult"))
-        with Rung(And(speed < 20, speed < 30)):
+        with rung(And(speed < 20, speed < 30)):
             out(Bool("Nested"))
 
     findings = program.check(select={RUNG_REDUNDANT_TERM}).findings
@@ -438,7 +438,7 @@ def test_duplicate_and_subsumed_terms_are_redundant() -> None:
 def test_contradiction_owns_diagnostic_over_redundancy() -> None:
     value = Int("Value", external=True)
     with Program() as program:
-        with Rung(value > 10, value < 5, value > 0):
+        with rung(value > 10, value < 5, value > 0):
             out(Bool("Result"))
 
     assert not _codes(program, RUNG_REDUNDANT_TERM)
@@ -447,9 +447,9 @@ def test_contradiction_owns_diagnostic_over_redundancy() -> None:
 def test_simple_write_overwritten_before_read_is_dead() -> None:
     value = Int("Value")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(1, value)
-        with Rung():
+        with rung():
             copy(2, value)
 
     assert _codes(program, TAG_DEAD_WRITE) == [TAG_DEAD_WRITE]
@@ -459,11 +459,11 @@ def test_intervening_read_keeps_write_live() -> None:
     value = Int("Value")
     observed = Bool("Observed")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(1, value)
-        with Rung(value == 1):
+        with rung(value == 1):
             out(observed)
-        with Rung():
+        with rung():
             copy(2, value)
 
     assert not _codes(program, TAG_DEAD_WRITE)
@@ -473,9 +473,9 @@ def test_conditional_later_copy_is_not_a_guaranteed_overwrite() -> None:
     value = Int("Value")
     enabled = Bool("Enabled", external=True)
     with Program() as program:
-        with Rung():
+        with rung():
             copy(1, value)
-        with Rung(enabled):
+        with rung(enabled):
             copy(2, value)
 
     assert not _codes(program, TAG_DEAD_WRITE)
@@ -486,9 +486,9 @@ def test_later_copy_from_indirect_source_is_not_a_guaranteed_overwrite() -> None
     pointer = Int("Pointer", default=1, external=True)
     value = Int("Value")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(1, value)
-        with Rung():
+        with rung():
             copy(data[pointer], value)
 
     assert not _codes(program, TAG_DEAD_WRITE)

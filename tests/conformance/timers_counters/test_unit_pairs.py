@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, on_delay
+from pyrung.core import copy, on_delay, rung
 from tests.conformance.memory import ClickTimer
 
 #: A timer pair's timers: a number each, a preset and a unit each.
@@ -35,14 +35,14 @@ Timed = tuple[int, int, str]
 def pair_on_one_rung(slot: Any, one: Timed, other: Timed) -> None:
     """Set Result1 if the timers ever differ, and set Result2 and ``Fired`` once both are Done."""
     first, second = ClickTimer(one[0]), ClickTimer(other[0])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(first, preset=one[1], unit=one[2])
         on_delay(second, preset=other[1], unit=other[2])
-    with Rung(slot.Cmd != 0, first.Done, ~second.Done):
+    with rung(slot.Cmd != 0, first.Done, ~second.Done):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, ~first.Done, second.Done):
+    with rung(slot.Cmd != 0, ~first.Done, second.Done):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, first.Done, second.Done):
+    with rung(slot.Cmd != 0, first.Done, second.Done):
         copy(1, slot.Result2)
         copy(1, slot.Fired)
 

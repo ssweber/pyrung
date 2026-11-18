@@ -173,13 +173,13 @@ def test_a_nan_check_goes_beside_an_ordered_compare_on_the_same_tag():
 
 
 def test_a_real_holding_nan_fails_both_rules_and_the_tag_follows_the_other():
-    from pyrung import PLC, Program, Rung, copy
+    from pyrung import PLC, Program, copy, rung
     from pyrung.core.analysis.pilot.overlay import _set_synth_holds
     from pyrung.core.synthesis import guarded_copy_rung
 
     D = Bool("D")
     with Program(strict=False) as prog:
-        with Rung(B, D, R > 100):
+        with rung(B, D, R > 100):
             copy(1, Int("Seen"))
     plc = PLC(prog, dt=0.01)
     plc.patch({"R": math.nan, "B": True})

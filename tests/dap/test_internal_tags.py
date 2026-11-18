@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, copy
+from pyrung.core import PLC, Bool, Int, Program, copy, rung
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 from pyrung.dap.internal_tags import is_internal_tag_name, visible_tag_names, visible_tags
@@ -85,7 +85,7 @@ def test_matches_what_a_harness_coupling_adds(physical: Physical):
     fb = Bool("Fb", physical=physical, link="Enable")
     stage = Int("Stage")
     with Program() as prog:
-        with Rung(enable, fb):
+        with rung(enable, fb):
             copy(1, stage)
     plc = PLC(prog, dt=0.1)
     Harness(plc).install()

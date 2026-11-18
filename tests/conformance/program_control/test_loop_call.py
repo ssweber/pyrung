@@ -26,44 +26,44 @@ subroutines toward the nesting limit of 3.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, call, copy, forloop, math, subroutine
+from pyrung.core import call, copy, forloop, math, rung, subroutine
 
 
 def _fire(slot) -> None:
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Fired, oneshot=True)
 
 
 def prove_call_inside_loop(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(3):
             call("Conf_LoopCall_Inc")
     _fire(slot)
     with subroutine("Conf_LoopCall_Inc"):
-        with Rung():
+        with rung():
             math(slot.Result1 + 1, slot.Result1)
 
 
 def prove_body_contact_after_call(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(3):
-            with Rung(slot.Scratch == 0):
+            with rung(slot.Scratch == 0):
                 call("Conf_LoopCall_Gate")
     _fire(slot)
     with subroutine("Conf_LoopCall_Gate"):
-        with Rung():
+        with rung():
             math(slot.Result1 + 1, slot.Result1)
             copy(1, slot.Scratch)
 
 
 def prove_loop_in_called_subroutine(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(2):
             with forloop(2):
                 call("Conf_LoopCall_Deep")
     _fire(slot)
     with subroutine("Conf_LoopCall_Deep"):
-        with Rung():
+        with rung():
             with forloop(2):
                 math(slot.Result1 + 1, slot.Result1)
 

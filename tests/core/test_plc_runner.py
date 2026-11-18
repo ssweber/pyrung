@@ -171,12 +171,12 @@ class TestPLCEdgeHistory:
 
     def test_edge_site_memory_captures_the_bit(self, runner_factory):
         """An edge contact stores the bit it saw when its row was scanned."""
-        from pyrung.core import Bool, Rung, out, rise
+        from pyrung.core import Bool, out, rise, rung
 
         Trigger = Bool("Trigger")
         Out = Bool("Out")
         with Program(strict=False) as logic:
-            with Rung(rise(Trigger)):
+            with rung(rise(Trigger)):
                 out(Out)
 
         runner = runner_factory(logic)
@@ -189,12 +189,12 @@ class TestPLCEdgeHistory:
 
     def test_edge_memory_starts_off_and_resets_at_run(self, runner_factory):
         """Edge memory is off at RUN and again after STOP -> RUN."""
-        from pyrung.core import Bool, Rung, out, rise
+        from pyrung.core import Bool, out, rise, rung
 
         Trigger = Bool("Trigger")
         Out = Bool("Out")
         with Program(strict=False) as logic:
-            with Rung(rise(Trigger)):
+            with rung(rise(Trigger)):
                 out(Out)
 
         runner = runner_factory(logic)
@@ -208,12 +208,12 @@ class TestPLCEdgeHistory:
 
     def test_stop_to_run_clears_edge_memory(self, runner_factory):
         """A retentive bit held on through STOP -> RUN rises again on the first scan."""
-        from pyrung.core import Bool, Rung, out, rise
+        from pyrung.core import Bool, out, rise, rung
 
         Trigger = Bool("Trigger", retentive=True)
         Out = Bool("Out")
         with Program(strict=False) as logic:
-            with Rung(rise(Trigger)):
+            with rung(rise(Trigger)):
                 out(Out)
 
         runner = runner_factory(logic)
@@ -244,12 +244,12 @@ class TestPlcTags:
     """plc.tags read-only mapping."""
 
     def test_returns_known_tags(self):
-        from pyrung.core import PLC, Bool, Program, Rung, out
+        from pyrung.core import PLC, Bool, Program, out, rung
 
         Light = Bool("Light")
         Button = Bool("Button")
         with Program(strict=False) as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
         plc = PLC(logic, dt=0.010)
 
@@ -259,11 +259,11 @@ class TestPlcTags:
         assert tags["Light"] is Light
 
     def test_is_read_only(self):
-        from pyrung.core import PLC, Bool, Program, Rung, out
+        from pyrung.core import PLC, Bool, Program, out, rung
 
         Light = Bool("Light")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 out(Light)
         plc = PLC(logic, dt=0.010)
 

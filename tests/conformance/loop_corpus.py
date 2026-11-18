@@ -29,7 +29,7 @@ from pyrung.conformance._case import Case, Group, expectation_met, judge
 from pyrung.conformance._ladder import case_label, emit_case, footprint
 from pyrung.conformance._runner import DT, read_slot
 from pyrung.conformance._slot import SLOT_FIELDS, make_slot
-from pyrung.core import PLC, Program, Rung, call, compiled_run, fall, rise, scan_trace, subroutine
+from pyrung.core import PLC, Program, call, compiled_run, fall, rise, rung, scan_trace, subroutine
 from pyrung.core.expression import randint_sites
 from pyrung.core.scan_trace import DECLINING_SYSTEM_TAGS
 from pyrung.core.tag import TagType
@@ -91,7 +91,7 @@ def subject_of(chosen: Sequence[tuple[Group, Sequence[Case]]], label: str) -> Su
         for group, _ in chosen:
             if not group.in_main:
                 for _ in range(group.calls):
-                    with Rung():
+                    with rung():
                         call(group.subroutine)
         for group, cases in chosen:
             if not group.in_main:

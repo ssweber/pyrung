@@ -64,7 +64,7 @@ The cases own DD4..DD25, DF151..DF169 and DH5..DH33, and C503..C510 for the guar
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, reset, system
+from pyrung.core import copy, fill, math, reset, rung, system
 from pyrung.core.expression import atan, cos, log, lro, lsh, rro, rsh, sin, tan
 from tests.conformance.memory import c, dd, df, dh
 from tests.conformance.probe_kit import GuardedProbes, class_of, finish, flag_bit, once
@@ -76,7 +76,7 @@ SC46 = system.fault.math_operation_error
 
 
 def prove_int_div_mid_formula(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(7, slot.Scratch)
         copy(7, dd[4])
         math(slot.Scratch / 2 * 2, slot.Result1)
@@ -94,12 +94,12 @@ def init_int_div_mid_formula(slot):
 
 
 def prove_wide_constant_into_dint(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(131072, dd[5])
         copy(2, dd[6])
         math(dd[5] / 65536, dd[8])
     flag_bit(slot, SC40, slot.ErrorCode, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(dd[6] * 40000, dd[9])
         math(dd[6] * 40000, df[152])
     class_of(slot, dd[8], [2, 0], slot.Result1)
@@ -114,19 +114,19 @@ def init_wide_constant_into_dint(slot):
 
 
 def prove_real_past_int(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(40000.0, df[153])
         copy(1.0e10, df[154])
         copy(-1.0e10, df[155])
         math(df[153], slot.Result1)
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(df[154], slot.Result2)
     flag_bit(slot, SC43, slot.Result4, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(df[155], slot.Result3)
     flag_bit(slot, SC43, slot.Result4, 4)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(df[154], dd[11])
     class_of(slot, dd[11], [1410065408, 2147483647, 0], slot.ErrorCode)
     finish(slot)
@@ -138,7 +138,7 @@ def init_real_past_int(slot):
 
 
 def prove_abs_and_precision(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(2147483647, dd[12])
         copy(-32768, dd[13])
         copy(-2147483648, dd[14])
@@ -147,7 +147,7 @@ def prove_abs_and_precision(slot):
         copy(-32768, slot.Scratch)
         math(abs(slot.Scratch), slot.Result3)
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(abs(dd[14]), dd[15])
     class_of(slot, dd[15], [-2147483648, 2147483647], slot.ErrorCode)
     finish(slot)
@@ -158,7 +158,7 @@ def init_abs_and_precision(slot):
 
 
 def prove_mod_signs(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-7, dd[16])
         copy(7, dd[17])
         copy(-2, dd[18])
@@ -177,7 +177,7 @@ def init_mod_signs(slot):
 
 
 def prove_power_edges(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0, dd[19])
         copy(-2, dd[20])
         copy(2, dd[21])
@@ -202,7 +202,7 @@ def init_power_edges(slot):
 def prove_math_errors(slot):
     probe = GuardedProbes((c[n] for n in range(503, 511)), stage_scan=1, window=8)
     count_scans(slot)
-    with Rung(slot.Scratch == 1):
+    with rung(slot.Scratch == 1):
         copy(0.0, df[159])
         copy(-1.0, df[160])
         copy(-8.0, df[161])
@@ -232,7 +232,7 @@ def prove_math_errors(slot):
     probe(slot, root_of_minus, SC46, slot.ErrorCode, 2)
     probe(slot, mod_zero, SC40, slot.ErrorCode, 4)
     probe(slot, real_mod_zero, SC40, slot.ErrorCode, 8)
-    with Rung(slot.Scratch == 8):
+    with rung(slot.Scratch == 8):
         math(df[165], slot.Result1)
         math(df[166], slot.Result2)
         math(df[167], slot.Result4)
@@ -247,7 +247,7 @@ def init_math_errors(slot):
 
 
 def prove_functions(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1.0, df[168])
         copy(10.0, df[169])
         math(sin(df[168]) * 1000, slot.Result1)
@@ -263,7 +263,7 @@ def init_functions(slot):
 
 
 def prove_shifts(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0x8001, dh[5])
         copy(0xFFFF, dh[6])
         copy(0x8000, dh[7])
@@ -271,26 +271,26 @@ def prove_shifts(slot):
         copy(2, dh[9])
         math(lsh(dh[5], 1), dh[10])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(lsh(dh[5], 16), dh[11])
         math(lsh(dh[5], 17), dh[12])
         math(rsh(dh[6], 1), dh[13])
         math(rsh(dh[7], 16), dh[14])
     class_of(slot, dh[10], [0x0002, 0x0003], slot.Result1)
-    with Rung(*once(slot), dh[11] != 0):
+    with rung(*once(slot), dh[11] != 0):
         math(slot.Result2 + 20, slot.Result2)
-    with Rung(*once(slot), dh[11] == 0):
+    with rung(*once(slot), dh[11] == 0):
         math(slot.Result2 + 10, slot.Result2)
-    with Rung(*once(slot), dh[12] != 0):
+    with rung(*once(slot), dh[12] != 0):
         math(slot.Result2 + 2, slot.Result2)
-    with Rung(*once(slot), dh[12] == 0):
+    with rung(*once(slot), dh[12] == 0):
         math(slot.Result2 + 1, slot.Result2)
     class_of(slot, dh[13], [0x7FFF, 0xFFFF], slot.Result3)
     class_of(slot, dh[14], [0, 0x8000], slot.Result4)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(dh[6] + dh[8], dh[15])
     flag_bit(slot, SC43, slot.ErrorCode, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(dh[8] - dh[9], dh[16])
     flag_bit(slot, SC43, slot.ErrorCode, 4)
     finish(slot)
@@ -301,7 +301,7 @@ def init_shifts(slot):
 
 
 def prove_rotates_and_bits(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0x8001, dh[20])
         copy(0xFFFF, dh[21])
         copy(0x0100, dh[22])
@@ -316,15 +316,15 @@ def prove_rotates_and_bits(slot):
         math(dh[23] & dh[24] ^ dh[25], dh[31])
         copy(0x1234, dh[32])
         math(dh[21] / dh[33], dh[32])
-    with Rung(*once(slot), SC40, dh[32] == 0):
+    with rung(*once(slot), SC40, dh[32] == 0):
         math(slot.ErrorCode + 100, slot.ErrorCode)
     class_of(slot, dh[26], [0x0003], slot.Result1)
     class_of(slot, dh[27], [0x8001, 0], slot.Result2)
     class_of(slot, dh[28], [0x0003], slot.Result3)
     class_of(slot, dh[29], [0x6000], slot.Result4)
-    with Rung(*once(slot), dh[30] == 0x00FF):
+    with rung(*once(slot), dh[30] == 0x00FF):
         math(slot.ErrorCode + 1, slot.ErrorCode)
-    with Rung(*once(slot), dh[31] == 0xFF00):
+    with rung(*once(slot), dh[31] == 0xFF00):
         math(slot.ErrorCode + 10, slot.ErrorCode)
     finish(slot)
 

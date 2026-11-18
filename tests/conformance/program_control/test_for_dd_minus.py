@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, forloop, math
+from pyrung.core import copy, fill, forloop, math, rung
 from tests.conformance.memory import dd
 from tests.conformance.probe_kit import class_of, finish, once
 
@@ -26,14 +26,14 @@ COUNT, RUNS = dd[81], dd[82]
 
 
 def prove_minus_one_count(slot: Any) -> None:
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-1, COUNT)
         copy(1, slot.Result1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         with forloop(COUNT):
             math(RUNS + 1, RUNS)
     class_of(slot, RUNS, [0, 65535, 1], slot.Result2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(RUNS / 1000, slot.Result3)
     finish(slot)
 

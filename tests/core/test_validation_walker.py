@@ -11,7 +11,6 @@ from pyrung.core import (
     Int,
     OutputBlock,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -21,6 +20,7 @@ from pyrung.core import (
     out,
     run_enabled_function,
     run_function,
+    rung,
     subroutine,
 )
 from pyrung.core.condition import Condition
@@ -66,7 +66,7 @@ class TestExpressionSource:
 
     def test_expression_source(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DS[1] * 2, Result)
 
         facts = walk_program(prog)
@@ -76,7 +76,7 @@ class TestExpressionSource:
 
     def test_expression_metadata_has_expr_type(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DS[1] * 2, Result)
 
         facts = walk_program(prog)
@@ -97,7 +97,7 @@ class TestIndirectRef:
         Dst = Dint("Dst")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DD[Index], DD[Dst])
 
         facts = walk_program(prog)
@@ -122,7 +122,7 @@ class TestIndirectRef:
         pointer = DS[5]
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DD[pointer], Result)
 
         facts = walk_program(prog)
@@ -143,7 +143,7 @@ class TestIndirectExprRef:
         idx = Dint("idx")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DD[idx + 1], Result)
 
         facts = walk_program(prog)
@@ -159,11 +159,11 @@ class TestIndirectExprRef:
 
 
 class TestExpressionCondition:
-    """with Rung((A + B) > 100) captures expression facts under condition."""
+    """with rung((A + B) > 100) captures expression facts under condition."""
 
     def test_expr_condition_children(self):
         with Program() as prog:
-            with Rung((A + B) > 100):
+            with rung((A + B) > 100):
                 out(Bool("Light"))
 
         facts = walk_program(prog)
@@ -185,11 +185,11 @@ class TestExpressionCondition:
 
 
 class TestIntTruthyCondition:
-    """with Rung(IntTag) captures IntTruthyCondition and child tag metadata."""
+    """with rung(IntTag) captures IntTruthyCondition and child tag metadata."""
 
     def test_int_truthy_condition_fact(self):
         with Program() as prog:
-            with Rung(A):
+            with rung(A):
                 out(Bool("Light"))
 
         facts = walk_program(prog)
@@ -199,7 +199,7 @@ class TestIntTruthyCondition:
 
     def test_int_truthy_condition_child_tag(self):
         with Program() as prog:
-            with Rung(A):
+            with rung(A):
                 out(Bool("Light"))
 
         facts = walk_program(prog)
@@ -220,7 +220,7 @@ class TestBranchPath:
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Light)
 
         facts = walk_program(prog)
@@ -233,7 +233,7 @@ class TestBranchPath:
         Motor = Bool("Motor")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 with branch():
                     out(Motor)
@@ -272,7 +272,7 @@ class TestSubroutineFacts:
 
         with Program() as prog:
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(Light)
 
         facts = walk_program(prog)
@@ -284,7 +284,7 @@ class TestSubroutineFacts:
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Light)
 
         facts = walk_program(prog)
@@ -306,7 +306,7 @@ class TestDeterministicOrdering:
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 copy(DS[1] * 2, Result)
 
@@ -332,7 +332,7 @@ class TestUnknownResilience:
                 pass
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 pass
         # Manually add the custom instruction to the rung
         prog.rungs[0].add_instruction(CustomInstruction())
@@ -352,7 +352,7 @@ class TestUnknownResilience:
                 return True
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Bool("Light"))
         # Manually add the custom condition to the rung
         prog.rungs[0]._conditions.append(CustomCondition())
@@ -382,7 +382,7 @@ class TestExprDslMetadata:
         idx = Dint("idx")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DD[idx + 1], Result)
 
         facts = walk_program(prog)
@@ -393,7 +393,7 @@ class TestExprDslMetadata:
 
     def test_expression_has_expr_dsl(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(DS[1] * 2, Result)
 
         facts = walk_program(prog)
@@ -414,7 +414,7 @@ class TestMissingFieldsCaptured:
         Dest = Int("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 math(A * 2, Dest)
 
         facts = walk_program(prog)
@@ -427,7 +427,7 @@ class TestMissingFieldsCaptured:
         from pyrung.core.program import on_delay
 
         with Program() as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 on_delay(Timer[1], preset=100, unit="Ts")
 
         facts = walk_program(prog)
@@ -440,7 +440,7 @@ class TestMissingFieldsCaptured:
         from pyrung.core.program import off_delay
 
         with Program() as prog:
-            with Rung(Bool("Enable2")):
+            with rung(Bool("Enable2")):
                 off_delay(Timer2, preset=100, unit="Tm")
 
         facts = walk_program(prog)
@@ -456,7 +456,7 @@ class TestMissingFieldsCaptured:
         result = Int("Result2")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 search(DS.select(1, 10) == 42, result=result, found=found, continuous=True)
 
         facts = walk_program(prog)
@@ -478,7 +478,7 @@ class TestOneshotCaptured:
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Light, oneshot=True)
 
         facts = walk_program(prog)
@@ -491,7 +491,7 @@ class TestOneshotCaptured:
         Light = Bool("Light2")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Light)
 
         facts = walk_program(prog)
@@ -515,7 +515,7 @@ class TestFunctionCallFieldsCaptured:
             return {"result": value}
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 run_function(
                     fn,
                     ins={"value": Source, "offset": 3},
@@ -545,7 +545,7 @@ class TestFunctionCallFieldsCaptured:
             return {"result": value}
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 run_enabled_function(
                     fn,
                     ins={"value": Source},
@@ -568,7 +568,7 @@ class TestCopyConverterAndPackTextFacts:
         Dest = Int("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(CH[1], Dest, convert=to_value)
 
         facts = walk_program(prog)
@@ -587,7 +587,7 @@ class TestCopyConverterAndPackTextFacts:
         Dest = Int("DestTextPack")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 pack_text(CH.select(1, 3), Dest, allow_whitespace=True)
 
         facts = walk_program(prog)
@@ -607,7 +607,7 @@ class TestImmediateWrapperFacts:
         Y = Bool("Y")
 
         with Program() as prog:
-            with Rung(X[1].immediate):
+            with rung(X[1].immediate):
                 out(Y)
 
         facts = walk_program(prog)
@@ -624,7 +624,7 @@ class TestImmediateWrapperFacts:
         Y = OutputBlock("Y", TagType.BOOL, 1, 8)
 
         with Program() as prog:
-            with Rung(X[1]):
+            with rung(X[1]):
                 out(immediate(Y.select(1, 2)))
 
         facts = walk_program(prog)

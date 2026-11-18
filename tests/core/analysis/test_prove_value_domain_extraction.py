@@ -7,11 +7,11 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     copy,
     math,
     out,
     run_function,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -28,7 +28,7 @@ class TestValueDomainExtraction:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(flag):
+            with rung(flag):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -43,9 +43,9 @@ class TestValueDomainExtraction:
         """
         step = Int("Step")
         with Program(strict=False) as logic:
-            with Rung(step == 3):
+            with rung(step == 3):
                 out(Bool("AtThree"))
-            with Rung():
+            with rung():
                 math((step + 1) % 6, step)
 
         result = _classify_dimensions(logic)
@@ -59,9 +59,9 @@ class TestValueDomainExtraction:
         out_b = Bool("OutB")
 
         with Program(strict=False) as logic:
-            with Rung(state == 1):
+            with rung(state == 1):
                 out(out_a)
-            with Rung(state == 2):
+            with rung(state == 2):
                 out(out_b)
 
         result = _classify_dimensions(logic)
@@ -78,7 +78,7 @@ class TestValueDomainExtraction:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(mode == 1):
+            with rung(mode == 1):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -93,9 +93,9 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(mode == 1):
+            with rung(mode == 1):
                 out(light)
-            with Rung(mode != 2):
+            with rung(mode != 2):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -113,9 +113,9 @@ class TestValueDomainExtraction:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(mode == 0):
+            with rung(mode == 0):
                 out(light)
-            with Rung(mode != 1):
+            with rung(mode != 1):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -130,9 +130,9 @@ class TestValueDomainExtraction:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(step % 2, odd)
-            with Rung(step == 5):
+            with rung(step == 5):
                 out(flag)
 
         result = _classify_dimensions(logic)
@@ -149,9 +149,9 @@ class TestValueDomainExtraction:
             return {"result": 42}
 
         with Program(strict=False) as logic:
-            with Rung(trigger):
+            with rung(trigger):
                 run_function(compute, outs={"result": result_tag})
-            with Rung(result_tag == 1):
+            with rung(result_tag == 1):
                 out(Bool("Output"))
 
         result = _classify_dimensions(logic)
@@ -168,11 +168,11 @@ class TestValueDomainExtraction:
             return {"result": 3}
 
         with Program(strict=False) as logic:
-            with Rung(trigger):
+            with rung(trigger):
                 run_function(compute, outs={"result": result_tag})
-            with Rung():
+            with rung():
                 copy(result_tag, Int("Stored"))
-            with Rung(result_tag > 3):
+            with rung(result_tag > 3):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -189,7 +189,7 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(level > 5):
+            with rung(level > 5):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -208,7 +208,7 @@ class TestValueDomainExtraction:
         target = Bool("Target")
 
         with Program(strict=False) as logic:
-            with Rung(level):
+            with rung(level):
                 out(target)
 
         result = _classify_dimensions(logic)
@@ -220,7 +220,7 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(level > 25):
+            with rung(level > 25):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -236,7 +236,7 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(level > 0):
+            with rung(level > 0):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -252,9 +252,9 @@ class TestValueDomainExtraction:
         high = Bool("High")
 
         with Program(strict=False) as logic:
-            with Rung(level > 5):
+            with rung(level > 5):
                 out(low)
-            with Rung(level > 20):
+            with rung(level > 20):
                 out(high)
 
         result = _classify_dimensions(logic)
@@ -275,7 +275,7 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(temp > 5):
+            with rung(temp > 5):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -293,7 +293,7 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(temp > 50.0):
+            with rung(temp > 50.0):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -324,7 +324,7 @@ class TestValueDomainExtraction:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(pressure > 3000.0):
+            with rung(pressure > 3000.0):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -343,9 +343,9 @@ class TestValueDomainExtraction:
         GreenTimer = Timer.clone("GreenTimer")
 
         with Program(strict=False) as logic:
-            with Rung(State == "g"):
+            with rung(State == "g"):
                 on_delay(GreenTimer, 3000)
-            with Rung(GreenTimer.Done):
+            with rung(GreenTimer.Done):
                 copy("y", State)
 
         result = _classify_dimensions(logic)
@@ -366,9 +366,9 @@ class TestValueDomainExtraction:
         red_out = Bool("RedOut")
 
         with Program(strict=False) as logic:
-            with Rung(State == "g"):
+            with rung(State == "g"):
                 out(green_out)
-            with Rung(State == "r"):
+            with rung(State == "r"):
                 out(red_out)
 
         result = _classify_dimensions(logic)
@@ -390,17 +390,17 @@ class TestValueDomainExtraction:
         T3 = Timer.clone("T3")
 
         with Program(strict=False) as logic:
-            with Rung(State == "g"):
+            with rung(State == "g"):
                 on_delay(T1, 3000)
-            with Rung(T1.Done):
+            with rung(T1.Done):
                 copy("y", State)
-            with Rung(State == "y"):
+            with rung(State == "y"):
                 on_delay(T2, 1000)
-            with Rung(T2.Done):
+            with rung(T2.Done):
                 copy("r", State)
-            with Rung(State == "r"):
+            with rung(State == "r"):
                 on_delay(T3, 3000)
-            with Rung(T3.Done):
+            with rung(T3.Done):
                 copy("g", State)
 
         result = _classify_dimensions(logic)
@@ -449,11 +449,11 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
     ds = Block("DS", TagType.INT, 1, 4500)
 
     with Program(strict=False) as logic:
-        with Rung(go):
+        with rung(go):
             copy(1, ds[7])
-        with Rung():
+        with rung():
             math(sel + 6, wptr)
-        with Rung(put):
+        with rung(put):
             copy(val, ds[wptr])
 
     graph = build_program_graph(logic)

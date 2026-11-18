@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, forloop, math, on_delay, out, rise
+from pyrung import Bool, Int, Program, Timer, copy, forloop, math, on_delay, out, rise, rung
 from pyrung.core.analysis.pilot import static_proofs
 from tests.facts import check
 from tests.facts.check import Facts, Report, check_program
@@ -29,13 +29,13 @@ def stepper() -> Any:
     step = Int("Step")
     shown = Int("StepShown")
     with Program() as prog:
-        with Rung(go, step == 1):
+        with rung(go, step == 1):
             copy(2, step)
-        with Rung(go, step == 0):
+        with rung(go, step == 0):
             copy(1, step)
-        with Rung(~go):
+        with rung(~go):
             copy(0, step)
-        with Rung():
+        with rung():
             math(step + 10, shown)
     return prog
 
@@ -46,7 +46,7 @@ def delayed() -> Any:
     running = Bool("Running")
     timer = Timer.clone("Delay")
     with Program() as prog:
-        with Rung(go):
+        with rung(go):
             out(running)
             on_delay(timer, 50)
     return prog
@@ -56,7 +56,7 @@ def gauge() -> Any:
     """Return a program with a level input from 0 to 100 and an alarm above 50."""
     level = Int("Level", external=True, min=0, max=100)
     with Program() as prog:
-        with Rung(level > 50):
+        with rung(level > 50):
             out(Bool("LevelHigh"))
     return prog
 
@@ -70,13 +70,13 @@ def kept_count() -> Any:
     count = Int("Count")
     kept = Int("Kept")
     with Program() as prog:
-        with Rung(rise(go), count < 5):
+        with rung(rise(go), count < 5):
             math(count + 1, count)
-        with Rung(count >= 5):
+        with rung(count >= 5):
             copy(0, count)
-        with Rung(Bool("Store", external=True)):
+        with rung(Bool("Store", external=True)):
             copy(count, kept)
-        with Rung(kept == 3):
+        with rung(kept == 3):
             out(Bool("KeptThree"))
     return prog
 
@@ -85,7 +85,7 @@ def never_counts() -> Any:
     """Return a program whose count rung reads a bit that nothing writes, so it never counts."""
     count = Int("NeverCount")
     with Program() as prog:
-        with Rung(Bool("NeverOn")):
+        with rung(Bool("NeverOn")):
             math(count + 1, count)
     return prog
 
@@ -278,10 +278,10 @@ def counted_loop() -> Any:
     """Return a program with a forloop that adds 1 to a total three times on each scan Go is on."""
     total = Int("LoopTotal")
     with Program() as prog:
-        with Rung(Bool("Go", external=True)):
+        with rung(Bool("Go", external=True)):
             with forloop(3):
                 math(total + 1, total)
-        with Rung(total > 5):
+        with rung(total > 5):
             copy(0, total)
     return prog
 

@@ -16,7 +16,6 @@ from pyrung.core import (
     Physical,
     Program,
     Real,
-    Rung,
     TagType,
     auto,
     branch,
@@ -29,6 +28,7 @@ from pyrung.core import (
     named_array,
     out,
     return_early,
+    rung,
     subroutine,
     system,
     toggle,
@@ -163,9 +163,9 @@ class TestPhysicalityFilters:
         relay = Bool("Relay")
 
         with Program() as prog:
-            with Rung(x[1]):
+            with rung(x[1]):
                 latch(relay)
-            with Rung(relay):
+            with rung(relay):
                 out(y[1])
 
         dv = DataView.from_graph(build_program_graph(prog))
@@ -228,9 +228,9 @@ class TestContains:
         relay = Bool("Relay")
 
         with Program() as prog:
-            with Rung(x[1]):
+            with rung(x[1]):
                 latch(relay)
-            with Rung(relay):
+            with rung(relay):
                 out(y[1])
 
         dv = DataView.from_graph(build_program_graph(prog))
@@ -265,13 +265,13 @@ class TestSlicing:
 
         @subroutine("Init")
         def init():
-            with Rung():
+            with rung():
                 copy(1, state)
 
         with Program() as prog:
-            with Rung(cmd):
+            with rung(cmd):
                 call(init)
-            with Rung(state == 1):
+            with rung(state == 1):
                 out(output)
 
         graph = build_program_graph(prog)
@@ -304,13 +304,13 @@ class TestUpstreamStopsAtCallSites:
 
         @subroutine("Drive")
         def drive():
-            with Rung(start):
+            with rung(start):
                 out(motor)
 
         with Program() as prog:
-            with Rung(permit):
+            with rung(permit):
                 out(enable)
-            with Rung(enable):
+            with rung(enable):
                 call(drive)
 
         graph = build_program_graph(prog)
@@ -327,17 +327,17 @@ class TestUpstreamStopsAtCallSites:
 
         @subroutine("Drive")
         def drive():
-            with Rung():
+            with rung():
                 out(motor)
 
         with Program() as prog:
-            with Rung(source_a):
+            with rung(source_a):
                 out(gate_a)
-            with Rung(source_b):
+            with rung(source_b):
                 out(gate_b)
-            with Rung(gate_a):
+            with rung(gate_a):
                 call(drive)
-            with Rung(gate_b):
+            with rung(gate_b):
                 call(drive)
 
         assert set(prog.dataview().upstream("Motor")) == {"GateA", "GateB"}
@@ -352,20 +352,20 @@ class TestUpstreamStopsAtCallSites:
 
         @subroutine("Inner")
         def inner():
-            with Rung(start):
+            with rung(start):
                 out(motor)
 
         @subroutine("Outer")
         def outer():
-            with Rung(inner_source):
+            with rung(inner_source):
                 out(inner_gate)
-            with Rung(inner_gate):
+            with rung(inner_gate):
                 call(inner)
 
         with Program() as prog:
-            with Rung(outer_source):
+            with rung(outer_source):
                 out(outer_gate)
-            with Rung(outer_gate):
+            with rung(outer_gate):
                 call(outer)
 
         assert set(prog.dataview().upstream("Motor")) == {"Start", "InnerGate", "OuterGate"}
@@ -378,13 +378,13 @@ class TestUpstreamStopsAtCallSites:
 
         @subroutine("Drive")
         def drive():
-            with Rung(enable, start):
+            with rung(enable, start):
                 out(motor)
 
         with Program() as prog:
-            with Rung(permit):
+            with rung(permit):
                 out(enable)
-            with Rung(enable):
+            with rung(enable):
                 call(drive)
 
         assert set(prog.dataview().upstream("Motor")) == {"Start", "Enable", "Permit"}
@@ -422,53 +422,53 @@ class TestDownstreamReversesUpstream:
 
         @subroutine("Inner")
         def inner():
-            with Rung(stop):
+            with rung(stop):
                 return_early()
-            with Rung(start):
+            with rung(start):
                 out(motor)
-            with Rung(motor):
+            with rung(motor):
                 copy(1, count)
-            with Rung():
+            with rung():
                 copy(n1, n2)
 
         @subroutine("Pump")
         def pump():
-            with Rung():
+            with rung():
                 out(pump_run)
 
         @subroutine("Outer")
         def outer():
-            with Rung(inner_source):
+            with rung(inner_source):
                 out(inner_gate)
-            with Rung(inner_gate):
+            with rung(inner_gate):
                 call(inner)
-            with Rung(gate_a):
+            with rung(gate_a):
                 out(horn)
-            with Rung():
+            with rung():
                 math(num / den, quot)
 
         with Program() as prog:
-            with Rung(permit):
+            with rung(permit):
                 out(gate_a)
                 out(outer_gate)
-            with Rung(gate_a):
+            with rung(gate_a):
                 call(inner)
-            with Rung(gate_b):
+            with rung(gate_b):
                 call(inner)
-            with Rung(outer_gate):
+            with rung(outer_gate):
                 call(outer)
-            with Rung(motor):
+            with rung(motor):
                 out(lamp)
-            with Rung(system.fault.division_error):
+            with rung(system.fault.division_error):
                 out(alarm)
             # The toggle reads Beacon as an exclusive read, so Beacon feeds Siren.
-            with Rung(lamp):
+            with rung(lamp):
                 toggle(beacon)
                 out(siren)
-            with Rung(pump_enable):
+            with rung(pump_enable):
                 with branch(pump_gate):
                     call(pump)
-            with Rung(loop_enable):
+            with rung(loop_enable):
                 with forloop(2):
                     call(pump)
         return prog
@@ -689,12 +689,12 @@ class TestProgramDataview:
         c = Bool("C")
 
         with Program(strict=False) as prog:
-            with Rung(a):
+            with rung(a):
                 out(b)
 
             before = prog.dataview()
 
-            with Rung(b):
+            with rung(b):
                 out(c)
 
             after = prog.dataview()
@@ -756,7 +756,7 @@ class TestDetails:
         enable = Bool("Enable")
 
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 out(sensor)
 
         dv = DataView.from_graph(build_program_graph(prog))
@@ -792,7 +792,7 @@ class TestDetailsStructures:
         enable = Bool("Enable")
 
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 out(Motor.Running)
                 out(Motor.Speed)
 
@@ -812,7 +812,7 @@ class TestDetailsStructures:
         trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(trigger):
+            with rung(trigger):
                 out(Zones[1].enabled)
 
         dv = DataView.from_graph(build_program_graph(prog))
@@ -845,7 +845,7 @@ class TestStructures:
         enable = Bool("Enable")
 
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 out(Pump.Running)
                 out(Pump.Speed)
 
@@ -875,7 +875,7 @@ class TestStructures:
         trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(trigger):
+            with rung(trigger):
                 out(Slots[1].active)
                 out(Slots[2].active)
 
@@ -900,7 +900,7 @@ class TestStructures:
         trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(trigger):
+            with rung(trigger):
                 out(Aaa.x)
                 out(Bbb[1].x)
 

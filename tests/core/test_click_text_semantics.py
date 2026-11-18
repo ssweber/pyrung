@@ -11,12 +11,12 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     math,
     out,
     pack_text,
+    rung,
     search,
     system,
 )
@@ -30,7 +30,7 @@ def _pack(runner_factory, dest_type, text):
     CH = Block("CH", TagType.CHAR, 1, 20)
     dest_block = Block("D", dest_type, 1, 2)
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             pack_text(CH.select(1, len(text)), dest_block[1])
     runner = runner_factory(logic)
     patch = {"Enable": True, "D1": 99}
@@ -99,7 +99,7 @@ def test_pack_text_refuses_a_character_above_ffh_that_strip_removes(runner_facto
     CH = Block("CH", TagType.CHAR, 1, 2)
     dest = Int("Dest")
     with Program() as logic:
-        with Rung():
+        with rung():
             pack_text(CH.select(1, 2), dest, allow_whitespace=True)
     runner = runner_factory(logic)
     runner.patch({"CH1": "　", "CH2": "7", "Dest": 99})
@@ -117,13 +117,13 @@ def test_a_blank_pack_text_flag_lasts_until_a_good_pack_text(runner_factory):
     AtStart, AfterGood = Bool("AtStart"), Bool("AfterGood")
     dest = Block("D", TagType.REAL, 1, 2)
     with Program() as logic:
-        with Rung(system.fault.out_of_range):
+        with rung(system.fault.out_of_range):
             out(AtStart)
-        with Rung(Blank):
+        with rung(Blank):
             pack_text(CH.select(1, 3), dest[1])
-        with Rung(Parse):
+        with rung(Parse):
             pack_text(Good.select(1, 3), dest[2])
-        with Rung(system.fault.out_of_range):
+        with rung(system.fault.out_of_range):
             out(AfterGood)
     runner = runner_factory(logic)
     runner.patch({"Blank": True, "G1": "1", "G2": ".", "G3": "5"})
@@ -145,7 +145,7 @@ def test_to_value_of_nul_writes_zero(runner_factory):
     Out = Int("Out")
     Enable = Bool("Enable")
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(CH[1], Out, convert=to_value)
     runner = runner_factory(logic)
     runner.patch({"Enable": True, "CH1": "\x00", "Out": 7})
@@ -160,7 +160,7 @@ def test_txt_is_a_whole_byte(runner_factory, code):
     Out, Back = Int("Out"), Int("Back")
     Enable = Bool("Enable")
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(CH[1], Out, convert=to_ascii)
             copy(Back, CH[2], convert=to_binary)
     runner = runner_factory(logic)
@@ -175,7 +175,7 @@ def _search_from(runner_factory, start):
     DS = Block("DS", TagType.INT, 1, 10)
     Result, Found = Int("Result"), Bool("Found")
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             search(DS.select(3, 7) == 5, result=Result, found=Found, continuous=True)
     runner = runner_factory(logic)
     runner.patch(
@@ -209,7 +209,7 @@ def test_integer_mdn_truncates_toward_zero(runner_factory, values, expected):
     DS = Block("DS", TagType.INT, 1, 6)
     Out = Int("Out")
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(DS.select(1, len(values)).median(), Out)
     runner = runner_factory(logic)
     runner.patch({"Enable": True, **{f"DS{i}": v for i, v in enumerate(values, start=1)}})

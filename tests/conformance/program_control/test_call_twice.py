@@ -24,7 +24,7 @@ digit each.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, fall, out, rise
+from pyrung.core import fall, out, rise, rung
 from tests.conformance.memory import c
 from tests.conformance.scans import count_scans, done, firings, scans_for
 
@@ -37,7 +37,7 @@ def prove_rise_once_per_scan(slot):
     count_scans(slot, CALLS)
     firings(rise(bit), slot, slot.Result1, window=CALLS)
     firings(fall(bit), slot, slot.Result3, window=CALLS)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 5, slot.Scratch <= 6):
+    with rung(slot.Cmd != 0, slot.Scratch >= 5, slot.Scratch <= 6):
         out(bit)
     firings(rise(bit), slot, slot.Result2, window=CALLS)
     firings(fall(bit), slot, slot.Result4, window=CALLS)

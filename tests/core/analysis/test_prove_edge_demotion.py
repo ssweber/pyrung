@@ -12,10 +12,10 @@ from __future__ import annotations
 from pyrung.core import (
     Bool,
     Program,
-    Rung,
     fall,
     latch,
     out,
+    rung,
 )
 
 # ===================================================================
@@ -34,9 +34,9 @@ class TestDemotedEdgeReplay:
         sensor = Bool("Sensor")
         target = Bool("Target")
         with Program(strict=False) as logic:
-            with Rung(button):
+            with rung(button):
                 out(sensor)
-            with Rung(fall(sensor)):
+            with rung(fall(sensor)):
                 latch(target)
 
         plc = PLC(logic, dt=0.010)

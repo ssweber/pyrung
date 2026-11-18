@@ -2391,7 +2391,7 @@ def test_same_rung_consumer_sees_a_write_only_in_contacts_read_after_it() -> Non
     """A branch before the producer reads its contacts before the write.
 
     A branch after the producer reads the write.  Stepping agrees."""
-    from pyrung.core import Rung, branch
+    from pyrung.core import branch, rung
     from pyrung.core.analysis.pilot.effects import (
         _contacts_read_after_write,
         expectation_from_selected_path,
@@ -2399,7 +2399,7 @@ def test_same_rung_consumer_sees_a_write_only_in_contacts_read_after_it() -> Non
 
     A, B, Q, T, U = (Bool(name) for name in ("A", "B", "Q", "T", "U"))
     with Program(strict=False) as prog:
-        with Rung(A):
+        with rung(A):
             with branch(Q):
                 out(T)
             with branch(B):

@@ -40,7 +40,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, to_ascii
+from pyrung.core import copy, fill, math, rung, to_ascii
 from tests.conformance.memory import OWNED, OWNED_APART, ranges, txt
 from tests.conformance.probe_kit import finish, once
 
@@ -49,7 +49,7 @@ BLANK = "\x00"
 
 def _digit(slot: Any, into: Any, weight: int, compare: Any) -> None:
     """Add *weight* to ``into`` where *compare* passes power."""
-    with Rung(*once(slot), compare):
+    with rung(*once(slot), compare):
         math(into + weight, into)
 
 
@@ -68,7 +68,7 @@ def _four(slot: Any, into: Any, holds_t: Any, holds_u: Any, right: Any) -> None:
 
 
 def prove_txt_against_literal_and_txt(slot: Any) -> None:
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("T", txt[801])
         copy("U", txt[802])
         copy("T", txt[803])
@@ -83,13 +83,13 @@ def init_txt_against_literal_and_txt(slot: Any) -> None:
 
 def prove_never_written(slot: Any) -> None:
     never, other, holds_t = txt[811], txt[812], txt[813]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("T", holds_t)
     _both(slot, slot.Result1, never, "T")
     _both(slot, slot.Result2, never, holds_t)
     _both(slot, slot.Result3, holds_t, never)
     _both(slot, slot.Result4, never, other)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(never, slot.ErrorCode, convert=to_ascii)
     finish(slot)
 
@@ -100,7 +100,7 @@ def init_never_written(slot: Any) -> None:
 
 def prove_cleared(slot: Any) -> None:
     cleared, other, holds_t, never = txt[821], txt[822], txt[823], txt[824]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("Q", cleared)
         copy("Q", other)
         copy(BLANK, cleared)
@@ -110,7 +110,7 @@ def prove_cleared(slot: Any) -> None:
     _both(slot, slot.Result2, cleared, holds_t)
     _both(slot, slot.Result3, cleared, other)
     _both(slot, slot.Result4, cleared, never)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(cleared, slot.ErrorCode, convert=to_ascii)
     finish(slot)
 
@@ -121,7 +121,7 @@ def init_cleared(slot: Any) -> None:
 
 def prove_blank_and_space(slot: Any) -> None:
     never, cleared, space = txt[831], txt[832], txt[833]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("Q", cleared)
         copy(BLANK, cleared)
         copy(" ", space)
@@ -139,7 +139,7 @@ def init_blank_and_space(slot: Any) -> None:
 
 def prove_blank_literal(slot: Any) -> None:
     never, cleared, holds_t = txt[841], txt[842], txt[843]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("Q", cleared)
         copy(BLANK, cleared)
         copy("T", holds_t)

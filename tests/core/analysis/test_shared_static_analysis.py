@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Rung, call, copy, math, return_early, subroutine
+from pyrung import Bool, Int, call, copy, math, return_early, rung, subroutine
 from pyrung.core import Program
 from pyrung.core.analysis import (
     CallSite,
@@ -19,7 +19,7 @@ def test_affine_api_covers_expression_and_write_instruction() -> None:
     source = Int("AffineSource")
     target = Int("AffineTarget")
     with Program() as program:
-        with Rung():
+        with rung():
             math(10 - source, target)
 
     instruction = program.rungs[0]._instructions[0]
@@ -32,9 +32,9 @@ def test_closed_domains_combine_declarations_and_complete_producers() -> None:
     declared = Int("Declared", min=1, max=3, external=True)
     produced = Int("Produced")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(2, produced)
-        with Rung(declared == 1):
+        with rung(declared == 1):
             copy(4, produced)
 
     domains = closed_value_domains(program, build_program_graph(program))
@@ -47,15 +47,15 @@ def test_pdg_call_sites_drive_return_aware_reach_chains() -> None:
     enter = Bool("Enter", external=True)
     stop = Bool("Stop", external=True)
     with Program(strict=False) as program:
-        with Rung(enter):
+        with rung(enter):
             call("outer")
         with subroutine("outer"):
-            with Rung(stop):
+            with rung(stop):
                 return_early()
-            with Rung():
+            with rung():
                 call("inner")
         with subroutine("inner"):
-            with Rung():
+            with rung():
                 copy(1, Int("Result"))
 
     graph = build_program_graph(program)

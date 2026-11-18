@@ -73,7 +73,7 @@ Typical usage::
     Light  = Bool("Light")
 
     with Program() as logic:
-        with Rung(Button):
+        with rung(Button):
             out(Light)
 
     mapping = TagMap({Button: x[1], Light: y[1]})

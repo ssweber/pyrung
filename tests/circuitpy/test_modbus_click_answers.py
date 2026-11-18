@@ -24,12 +24,12 @@ from pyrung import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     copy,
     fill,
     math,
     out,
+    rung,
     unpack_to_words,
 )
 from pyrung.circuitpy import P1AM, generate_circuitpy
@@ -115,7 +115,7 @@ def test_fc16_past_the_ds_bank_stores_nothing(monkeypatch):
 def test_fc16_over_a_cell_no_register_can_hold_stores_nothing(monkeypatch):
     ptr = Int("Ptr", default=1)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(5, dd[ptr])
     ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
     # A Dint past 32 bits in DD2, an array cell.
@@ -261,7 +261,7 @@ def test_a_nan_that_a_math_computes_reads_all_ones(monkeypatch):
     inf = Real("Inf")
     level = Real("Level")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(big * 10, inf)
             math(inf - inf, level)
             copy(inf - inf, df[2])
@@ -275,7 +275,7 @@ def test_an_unpack_copy_of_a_nan_that_a_client_wrote_gives_all_ones(monkeypatch)
     # P1AM's floats can't hold a NaN's bits, so it gives 0xFFFF:0xFFFF.
     level = Real("Level")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             unpack_to_words(level, Block("W", TagType.WORD, 1, 2).select(1, 2))
             copy(level, df[2])
     result = _ctx_and_source(prog, TagMap({level: df[1]}))
@@ -310,7 +310,7 @@ def test_a_read_past_a_bank_end_answers_02(monkeypatch):
 def test_a_cell_a_rung_reaches_by_pointer_is_served(monkeypatch):
     ptr = Int("Ptr", default=7)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(99, ds[ptr])
             copy(70000, dd[ptr])
     ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
@@ -325,7 +325,7 @@ def test_a_cell_a_rung_reaches_by_pointer_is_served(monkeypatch):
 def test_a_float_and_a_text_cell_reached_by_pointer_are_served(monkeypatch):
     ptr = Int("Ptr", default=3)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1.5, df[ptr])
             copy("A", txt[ptr])
     ns, send = _server(monkeypatch, TagMap({ptr: ds[1]}), prog)
@@ -340,7 +340,7 @@ def test_a_float_and_a_text_cell_reached_by_pointer_are_served(monkeypatch):
 
 def test_a_cell_a_block_instruction_reaches_is_served(monkeypatch):
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill(True, c.select(1, 3))
     ns, send = _server(monkeypatch, TagMap(), prog)
     assert _read_bits(send, 2, _addr("C", 1), 4) == [1, 1, 1, 0]
@@ -396,7 +396,7 @@ def test_an_x_write_is_stored_with_or_without_a_tag(monkeypatch):
 def test_a_rung_reads_a_t_or_ct_bit_that_a_client_wrote(monkeypatch, bank):
     hardware = {"T": t, "CT": ct}[bank]
     with Program(strict=False) as prog:
-        with Rung(hardware[1]):
+        with rung(hardware[1]):
             out(c[1])
     result = _ctx_and_source(prog, TagMap())
     request = _mbap(1, struct.pack(">BHH", 5, _addr(bank, 1), 0xFF00))

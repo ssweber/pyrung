@@ -28,7 +28,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     copy,
     latch,
@@ -38,6 +37,7 @@ from pyrung.core import (
     out,
     rro,
     rsh,
+    rung,
     system,
 )
 from pyrung.core.expression import sqrt
@@ -168,12 +168,12 @@ def _program(name: str) -> tuple[Program, dict[str, Any]]:
     dest = dest_type("Dest")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for tag, value in STAGED.items():
                 copy(value, tag)
             math(build(), dest)
         for code, flag in FLAGS.items():
-            with Rung(flag):
+            with rung(flag):
                 out(seen[code])
     tags: dict[str, Any] = {"Dest": dest}
     tags.update({tag.name: tag for tag in seen.values()})
@@ -241,15 +241,15 @@ def test_a_pointer_with_no_integer_address_is_an_address_error(
     dest, address = Int("Dest"), Bool("SawAddress")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for tag, value in ((ONE, 1), (FAR, 2000), (SEVEN, 7), (ZERO, 0), (dest, 99)):
                 copy(value, tag)
             copy(5, TABLE[3])
             math(build(), dest)
-        with Rung(system.fault.address_error):
+        with rung(system.fault.address_error):
             out(address)
         for code, flag in FLAGS.items():
-            with Rung(flag):
+            with rung(flag):
                 out(seen[code])
     tags: dict[str, Any] = {"Dest": dest, "SawAddress": address}
     tags.update({tag.name: tag for tag in seen.values()})
@@ -266,13 +266,13 @@ def test_a_raw_mod_by_zero_in_a_pointer_is_its_term_with_sc40(engine: str, monke
     dest = Int("Dest")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(7, SEVEN)
             copy(0, ZERO)
             copy(5, TABLE[3])
             math(TABLE[SEVEN % ZERO + 3], dest)
         for code, flag in FLAGS.items():
-            with Rung(flag):
+            with rung(flag):
                 out(seen[code])
     tags: dict[str, Any] = {"Dest": dest}
     tags.update({tag.name: tag for tag in seen.values()})
@@ -286,9 +286,9 @@ def _threshold_program(threshold: int) -> tuple[Program, Bool]:
     divisor = Int("PZ", external=True, min=0, max=1, default=0)
     dest, bad = Int("PD"), Bool("PBad")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             math(numerator / divisor + 5, dest)
-        with Rung(dest < threshold):
+        with rung(dest < threshold):
             latch(bad)
     return logic, bad
 

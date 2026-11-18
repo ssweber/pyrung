@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import Bool, Int, Or, Program, Rung, out, rise
+from pyrung import Bool, Int, Or, Program, out, rise, rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
@@ -32,11 +32,11 @@ def _shared_gate_program() -> tuple[Program, Bool]:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(EnableA, Common):
+        with rung(EnableA, Common):
             out(StageA)
-        with Rung(Or(rise(EnableB), StageB), Common):
+        with rung(Or(rise(EnableB), StageB), Common):
             out(StageB)
-        with Rung(StageA, StageB):
+        with rung(StageA, StageB):
             out(Target)
 
     return prog, Target

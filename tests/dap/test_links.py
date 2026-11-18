@@ -14,7 +14,7 @@ from pyrung.dap.protocol import read_message
 
 _PROGRAM = """\
 from pyrung.click import ClickBlocks, TagMap
-from pyrung.core import Bool, Int, PLC, Program, Rung, out
+from pyrung.core import Bool, Int, PLC, Program, rung, out
 from pyrung.core.physical import Physical
 
 blocks = ClickBlocks()
@@ -32,15 +32,15 @@ busy = Bool("Busy")
 done = Bool("Done")
 
 with Program(strict=False) as prog:
-    with Rung(cmd):
+    with rung(cmd):
         out(motor)
-    with Rung(aux):
+    with rung(aux):
         out(running)
-    with Rung(spare):
+    with rung(spare):
         out(lamp)
-    with Rung(state == 2):
+    with rung(state == 2):
         out(busy)
-    with Rung(sorted_fb):
+    with rung(sorted_fb):
         out(done)
 
 mapping = TagMap(

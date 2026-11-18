@@ -59,7 +59,7 @@ tables); scan-paced cases count their own scans (``scans.py``).
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, latch, reset, search
+from pyrung.core import copy, fill, latch, reset, rung, search
 from tests.conformance.memory import c, dd, df, ds, txt
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -68,13 +68,13 @@ SCANS = scans_for()
 
 def _stage(slot, base, values, *gate):
     """Write *values* to consecutive DS from *base*, while the gate holds."""
-    with Rung(slot.Cmd != 0, *gate):
+    with rung(slot.Cmd != 0, *gate):
         for i, value in enumerate(values):
             copy(value, ds[base + i])
 
 
 def _at(slot, scan, *more):
-    return Rung(slot.Cmd != 0, slot.Scratch == scan, *more)
+    return rung(slot.Cmd != 0, slot.Scratch == scan, *more)
 
 
 def _init(lo, hi, *bits):
@@ -91,47 +91,47 @@ def _init(lo, hi, *bits):
 
 def prove_hit_returns_address(slot):
     _stage(slot, 4203, [5, 20, 7, 20, 9], slot.Fired == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(ds.select(4203, 4207) == 20, result=slot.Result1, found=c[851])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[851]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[851]):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_miss_writes_minus_one(slot):
     _stage(slot, 4223, [1, 2, 3], slot.Fired == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(77, slot.Result1)
         latch(c[852])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(ds.select(4223, 4225) == 99, result=slot.Result1, found=c[852])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[852]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, ~c[852]):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_operators_signed(slot):
     _stage(slot, 4243, [3, -8, 6, 9, -2], slot.Fired == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(ds.select(4243, 4247) > 3, result=slot.Result1, found=c[853])
         search(ds.select(4243, 4247) < 0, result=slot.Result2, found=c[854])
         search(ds.select(4243, 4247) <= 3, result=slot.Result3, found=c[855])
         search(ds.select(4243, 4247) >= 9, result=slot.Result4, found=c[856])
         search(ds.select(4243, 4247) != 3, result=slot.Scratch, found=c[857])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_range_ends_inclusive(slot):
     _stage(slot, 4263, [7, 1, 2, 9], slot.Fired == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(ds.select(4263, 4266) == 7, result=slot.Result1, found=c[858])
         search(ds.select(4263, 4266) == 9, result=slot.Result2, found=c[859])
         search(ds.select(4263, 4265) == 9, result=slot.Result3, found=c[860])
         search(ds.select(4264, 4266) == 7, result=slot.Result4, found=c[861])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
@@ -144,7 +144,7 @@ def prove_false_rung_preserves(slot):
     # and a 50 at 4285, so a search that still ran would answer differently.
     count_scans(slot)
     _stage(slot, 4283, [4, 9, 4], slot.Scratch < 4)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 4):
         copy(0, ds[4284])
         copy(50, ds[4285])
     with _at(slot, 1):
@@ -177,7 +177,7 @@ def prove_continuous_walks(slot):
     # Matches at 4303, 4305, 4306, 4308; the rung is true on scans 1..4.
     count_scans(slot)
     _stage(slot, 4303, [7, 1, 7, 7, 2, 7])
-    with Rung(slot.Cmd != 0, slot.Scratch <= 4):
+    with rung(slot.Cmd != 0, slot.Scratch <= 4):
         search(ds.select(4303, 4308) == 7, result=ds[4311], found=c[864], continuous=True)
     _record(slot, ds[4311])
     done(slot)
@@ -190,7 +190,7 @@ def prove_continuous_exhausted(slot):
     _stage(slot, 4323, [7, 1, 7, 2])
     with _at(slot, 5):
         copy(0, ds[4331])
-    with Rung(slot.Cmd != 0, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch <= 5):
         search(ds.select(4323, 4326) == 7, result=ds[4331], found=c[865], continuous=True)
     with _at(slot, 3):
         copy(ds[4331], slot.Result1)
@@ -210,7 +210,7 @@ def prove_continuous_zero_restarts(slot):
     _stage(slot, 4343, [7, 1, 7, 7, 2, 7])
     with _at(slot, 3):
         copy(0, ds[4351])
-    with Rung(slot.Cmd != 0, slot.Scratch <= 4):
+    with rung(slot.Cmd != 0, slot.Scratch <= 4):
         search(ds.select(4343, 4348) == 7, result=ds[4351], found=c[866], continuous=True)
     _record(slot, ds[4351])
     done(slot)
@@ -222,7 +222,7 @@ def prove_plain_search_ignores_result(slot):
     _stage(slot, 4363, [7, 1, 7, 7, 2])
     with _at(slot, 1):
         copy(4365, ds[4371])
-    with Rung(slot.Cmd != 0, slot.Scratch <= 3):
+    with rung(slot.Cmd != 0, slot.Scratch <= 3):
         search(ds.select(4363, 4367) == 7, result=ds[4371], found=c[867])
     _record(slot, ds[4371], 3)
     with _at(slot, 3, c[867]):
@@ -234,12 +234,12 @@ def prove_continuous_cursor_is_address(slot):
     # Matches at 4383, 4385, 4386, 4388.  The results are preset, then searched
     # once each.
     _stage(slot, 4383, [7, 1, 7, 7, 2, 7], slot.Fired == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(4385, ds[4391])
         copy(4384, ds[4392])
         copy(4388, ds[4393])
         copy(5, ds[4394])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(ds.select(4383, 4388) == 7, result=ds[4391], found=c[868], continuous=True)
         search(ds.select(4383, 4388) == 7, result=ds[4392], found=c[869], continuous=True)
         search(ds.select(4383, 4388) == 7, result=ds[4393], found=c[870], continuous=True)
@@ -256,14 +256,14 @@ def prove_continuous_cursor_is_address(slot):
 
 def prove_continuous_cursor_outside_range(slot):
     # DD411..DD416 = {7, 1, 7, 7, 2, 7}; each result preset, then searched once.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         for i, v in enumerate([7, 1, 7, 7, 2, 7]):
             copy(v, dd[411 + i])
         copy(410, slot.Result1)
         copy(417, slot.Result2)
         copy(-5, slot.Result3)
         copy(411, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(dd.select(411, 416) == 7, result=slot.Result1, found=c[878], continuous=True)
         search(dd.select(411, 416) == 7, result=slot.Result2, found=c[879], continuous=True)
         search(dd.select(411, 416) == 7, result=slot.Result3, found=c[880], continuous=True)
@@ -278,7 +278,7 @@ def init_continuous_cursor_outside_range(slot):
 
 
 def prove_dint_real_tables(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(10, dd[401])
         copy(100000, dd[402])
         copy(5, dd[403])
@@ -286,7 +286,7 @@ def prove_dint_real_tables(slot):
         copy(1.5, df[301])
         copy(2.5, df[302])
         copy(3.5, df[303])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         search(dd.select(401, 404) >= 100000, result=slot.Result1, found=c[872])
         search(df.select(301, 303) > 2.0, result=slot.Result2, found=c[873])
         copy(1, slot.Fired)
@@ -294,9 +294,9 @@ def prove_dint_real_tables(slot):
 
 def prove_text_windows(slot):
     # X A B Y A B Z A at TXT201..TXT208.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy("XABYABZA", txt[201])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(202, slot.Result4)
         search(txt.select(201, 208) == "AB", result=slot.Result1, found=c[874])
         search(txt.select(201, 208) == "ZA", result=slot.Result2, found=c[875])

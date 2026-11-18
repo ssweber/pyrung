@@ -13,7 +13,7 @@ from devtools.profile_pilot_replay import (
     qualified_replay_residual_scans,
 )
 from pyrung import PLC
-from pyrung.core import Bool, Program, Rung, out
+from pyrung.core import Bool, Program, out, rung
 from pyrung.core.analysis.pilot import causal
 
 
@@ -36,7 +36,7 @@ def test_profiler_records_candidate_interval_without_scan_log() -> None:
     enable = Bool("ProfileEnable")
     light = Bool("ProfileLight")
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     plc = PLC(program)

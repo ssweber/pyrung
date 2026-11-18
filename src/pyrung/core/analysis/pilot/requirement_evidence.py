@@ -202,10 +202,10 @@ def _walk_program_guard_to_inputs(
 ) -> Any:
     """Read a harmful writer's program-written guard back to the inputs that set it.
 
-    ``Rung(alarm): reset(run)`` displaced Run, so the bound requirement is ``Alarm != True``.
+    ``rung(alarm): reset(run)`` displaced Run, so the bound requirement is ``Alarm != True``.
     When every atom is program-written there is nothing in it to set: Alarm already holds at
     the source and is the program's to write.  The same-scan source walk follows it to the
-    write that latched Alarm earlier in that scan (``Rung(run, ~door)``).  Walked with
+    write that latched Alarm earlier in that scan (``rung(run, ~door)``).  Walked with
     *preserved_values* protected (Run stays True), that leaves ``Door == True``, an input the
     retry can hold.  Anything else keeps the bound requirement as it is.
     """

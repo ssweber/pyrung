@@ -23,7 +23,6 @@ from pyrung import (
     Physical,
     Program,
     Real,
-    Rung,
     Timer,
     Word,
     blockcopy,
@@ -46,6 +45,7 @@ from pyrung import (
     reset,
     return_early,
     rise,
+    rung,
     search,
     shift,
     subroutine,
@@ -77,7 +77,7 @@ def seal_in_motor() -> Any:
     stop = Bool("Stop", external=True)
     motor = Bool("Motor")
     with Program() as prog:
-        with Rung(Or(start, motor), ~stop):
+        with rung(Or(start, motor), ~stop):
             out(motor)
     return prog
 
@@ -88,9 +88,9 @@ def latch_unlatch_with_priority() -> Any:
     reset_pb = Bool("ResetPB", external=True)
     lamp = Bool("Lamp")
     with Program() as prog:
-        with Rung(set_pb):
+        with rung(set_pb):
             latch(lamp)
-        with Rung(reset_pb):
+        with rung(reset_pb):
             reset(lamp)
     return prog
 
@@ -103,15 +103,15 @@ def alarm_with_acknowledge() -> Any:
     horn = Bool("Horn")
     unacked = Bool("Unacked")
     with Program() as prog:
-        with Rung(level > 80):
+        with rung(level > 80):
             latch(alarm)
-        with Rung(rise(alarm)):
+        with rung(rise(alarm)):
             latch(unacked)
-        with Rung(ack, level <= 70):
+        with rung(ack, level <= 70):
             reset(alarm)
-        with Rung(ack):
+        with rung(ack):
             reset(unacked)
-        with Rung(unacked):
+        with rung(unacked):
             out(horn)
     return prog
 
@@ -123,11 +123,11 @@ def alarm_delayed_by_timer() -> Any:
     high = Timer.clone("HighFor")
     alarm = Bool("PressureAlarm")
     with Program() as prog:
-        with Rung(pressure > 7.5):
+        with rung(pressure > 7.5):
             on_delay(high, 500)
-        with Rung(high.Done):
+        with rung(high.Done):
             latch(alarm)
-        with Rung(reset_pb, ~high.Done):
+        with rung(reset_pb, ~high.Done):
             reset(alarm)
     return prog
 
@@ -144,13 +144,13 @@ def one_shot_chain() -> Any:
     pulse_count = Int("Pulses")
     falling = Bool("Released")
     with Program() as prog:
-        with Rung(rise(button)):
+        with rung(rise(button)):
             out(pulse)
-        with Rung(pulse, pulse_count < 9):
+        with rung(pulse, pulse_count < 9):
             math(pulse_count + 1, pulse_count)
-        with Rung(fall(button)):
+        with rung(fall(button)):
             out(falling)
-        with Rung(pulse_count >= 9, falling):
+        with rung(pulse_count >= 9, falling):
             copy(0, pulse_count)
     return prog
 
@@ -160,7 +160,7 @@ def push_on_push_off() -> Any:
     button = Bool("PushButton", external=True)
     light = Bool("Light")
     with Program() as prog:
-        with Rung(rise(button)):
+        with rung(rise(button)):
             toggle(light)
     return prog
 
@@ -178,13 +178,13 @@ def cascaded_timers() -> Any:
     third = Timer.clone("Stage3")
     lamp = Bool("AllDone")
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             on_delay(first, 200)
-        with Rung(first.Done):
+        with rung(first.Done):
             on_delay(second, 300)
-        with Rung(second.Done):
+        with rung(second.Done):
             on_delay(third, 100)
-        with Rung(third.Done):
+        with rung(third.Done):
             out(lamp)
     return prog
 
@@ -196,9 +196,9 @@ def retentive_timer_with_reset() -> Any:
     hours = Timer.clone("RunTime")
     service = Bool("ServiceDue")
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             on_delay(hours, 2, unit="s").reset(clear)
-        with Rung(hours.Done):
+        with rung(hours.Done):
             out(service)
     return prog
 
@@ -209,9 +209,9 @@ def off_delay_fan() -> Any:
     cool = Timer.clone("CoolDown")
     fan = Bool("Fan")
     with Program() as prog:
-        with Rung(heater):
+        with rung(heater):
             off_delay(cool, 400)
-        with Rung(cool.Done):
+        with rung(cool.Done):
             out(fan)
     return prog
 
@@ -222,11 +222,11 @@ def self_resetting_pulse_timer() -> Any:
     tick = Timer.clone("Tick")
     ticks = Int("TickCount")
     with Program() as prog:
-        with Rung(enable, ~tick.Done):
+        with rung(enable, ~tick.Done):
             on_delay(tick, 100)
-        with Rung(tick.Done):
+        with rung(tick.Done):
             math(ticks + 1, ticks)
-        with Rung(ticks >= 20):
+        with rung(ticks >= 20):
             copy(0, ticks)
     return prog
 
@@ -238,11 +238,11 @@ def timer_acc_compared() -> Any:
     half = Bool("HalfFull")
     full = Bool("Full")
     with Program() as prog:
-        with Rung(fill):
+        with rung(fill):
             on_delay(elapsed, 800)
-        with Rung(elapsed.Acc >= 400):
+        with rung(elapsed.Acc >= 400):
             out(half)
-        with Rung(elapsed.Done):
+        with rung(elapsed.Done):
             out(full)
     return prog
 
@@ -254,9 +254,9 @@ def timer_with_preset_tag() -> Any:
     dwell = Timer.clone("Dwell")
     done = Bool("DwellDone")
     with Program() as prog:
-        with Rung(start):
+        with rung(start):
             on_delay(dwell, preset)
-        with Rung(dwell.Done):
+        with rung(dwell.Done):
             out(done)
     return prog
 
@@ -274,9 +274,9 @@ def gated_counter() -> Any:
     batch = Counter.clone("Batch")
     full = Bool("BatchFull")
     with Program() as prog:
-        with Rung(part, gate):
+        with rung(part, gate):
             count_up(batch, 5).reset(clear)
-        with Rung(batch.Done):
+        with rung(batch.Done):
             out(full)
     return prog
 
@@ -289,9 +289,9 @@ def up_down_counter() -> Any:
     lot = Counter.clone("Lot")
     full = Bool("LotFull")
     with Program() as prog:
-        with Rung(enter):
+        with rung(enter):
             count_up(lot, 4).down(leave).reset(clear)
-        with Rung(lot.Done):
+        with rung(lot.Done):
             out(full)
     return prog
 
@@ -303,9 +303,9 @@ def down_counter() -> Any:
     stock = Counter.clone("Stock")
     empty = Bool("Empty")
     with Program() as prog:
-        with Rung(used):
+        with rung(used):
             count_down(stock, -3).reset(refill)
-        with Rung(stock.Done):
+        with rung(stock.Done):
             out(empty)
     return prog
 
@@ -318,11 +318,11 @@ def counter_acc_bands() -> Any:
     zone_a = Bool("ZoneA")
     zone_b = Bool("ZoneB")
     with Program() as prog:
-        with Rung(pulse):
+        with rung(pulse):
             count_up(pos, 12).reset(home)
-        with Rung(pos.Acc >= 3, pos.Acc < 7):
+        with rung(pos.Acc >= 3, pos.Acc < 7):
             out(zone_a)
-        with Rung(pos.Acc >= 7):
+        with rung(pos.Acc >= 7):
             out(zone_b)
     return prog
 
@@ -337,13 +337,13 @@ def down_counter_staged_by_a_copy() -> Any:
     left = Dint("TrayLeft")
     empty = Bool("TrayEmpty")
     with Program() as prog:
-        with Rung(load):
+        with rung(load):
             copy(5, tray.Acc)
-        with Rung(pick):
+        with rung(pick):
             count_down(tray, 3).reset(clear)
-        with Rung(tray.Done):
+        with rung(tray.Done):
             out(empty)
-        with Rung():
+        with rung():
             copy(tray.Acc, left)
     return prog
 
@@ -358,11 +358,11 @@ def up_down_counter_shown() -> Any:
     shown = Dint("BinsShown")
     full = Bool("BinsFull")
     with Program() as prog:
-        with Rung(enter):
+        with rung(enter):
             count_up(bins, 1).down(leave).reset(clear)
-        with Rung(bins.Done):
+        with rung(bins.Done):
             out(full)
-        with Rung():
+        with rung():
             copy(bins.Acc, shown)
     return prog
 
@@ -376,17 +376,17 @@ def timer_accs_compared_with_each_other() -> Any:
     trail = Timer.clone("Trail")
     shown = Int("LeadShown")
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             on_delay(lead, 300)
-        with Rung(run, ~hold):
+        with rung(run, ~hold):
             on_delay(trail, 300)
-        with Rung(lead.Acc == trail.Acc, trail.Acc != 0):
+        with rung(lead.Acc == trail.Acc, trail.Acc != 0):
             out(Bool("InStep"))
-        with Rung(lead.Acc > trail.Acc):
+        with rung(lead.Acc > trail.Acc):
             out(Bool("TrailBehind"))
-        with Rung(trail.Acc >= 100):
+        with rung(trail.Acc >= 100):
             out(Bool("TrailHalfway"))
-        with Rung():
+        with rung():
             copy(lead.Acc, shown)
     return prog
 
@@ -406,19 +406,19 @@ def integer_stepper() -> Any:
     down = Bool("MoveDown")
     dwell = Timer.clone("TopDwell")
     with Program() as prog:
-        with Rung(step == 0, rise(start)):
+        with rung(step == 0, rise(start)):
             copy(1, step)
-        with Rung(step == 1):
+        with rung(step == 1):
             out(up)
-        with Rung(step == 1, at_top):
+        with rung(step == 1, at_top):
             copy(2, step)
-        with Rung(step == 2):
+        with rung(step == 2):
             on_delay(dwell, 150)
-        with Rung(step == 2, dwell.Done):
+        with rung(step == 2, dwell.Done):
             copy(3, step)
-        with Rung(step == 3):
+        with rung(step == 3):
             out(down)
-        with Rung(step == 3, at_bottom):
+        with rung(step == 3, at_bottom):
             copy(0, step)
     return prog
 
@@ -430,14 +430,14 @@ def stepper_with_math_advance() -> Any:
     state = Int("State")
     lamps = [Bool(f"Lamp{i}") for i in range(4)]
     with Program(strict=False) as prog:
-        with Rung(rise(advance), state < 3):
+        with rung(rise(advance), state < 3):
             math(state + 1, state)
-        with Rung(rise(advance), state >= 3):
+        with rung(rise(advance), state >= 3):
             copy(0, state)
-        with Rung(abort):
+        with rung(abort):
             copy(0, state)
         for i, lamp in enumerate(lamps):
-            with Rung(state == i):
+            with rung(state == i):
                 out(lamp)
     return prog
 
@@ -448,13 +448,13 @@ def char_state_machine() -> Any:
     state = Char("LiftState")
     ride = Timer.clone("Ride")
     with Program() as prog:
-        with Rung(state == "", call_button):
+        with rung(state == "", call_button):
             copy("m", state)
-        with Rung(state == "m"):
+        with rung(state == "m"):
             on_delay(ride, 120)
-        with Rung(ride.Done):
+        with rung(ride.Done):
             copy("a", state)
-        with Rung(state == "a", ~call_button):
+        with rung(state == "a", ~call_button):
             copy("", state)
     return prog
 
@@ -473,7 +473,7 @@ def event_drum_sequence() -> Any:
     done = Bool("DrumDone")
     valves = [Bool("ValveA"), Bool("ValveB")]
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             event_drum(
                 outputs=valves,
                 events=events,
@@ -493,7 +493,7 @@ def time_drum_sequence() -> Any:
     done = Bool("WashDone")
     outputs = [Bool("Fill"), Bool("Agitate"), Bool("Drain")]
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             time_drum(
                 outputs=outputs,
                 presets=[100, 200, 80],
@@ -514,9 +514,9 @@ def shift_register_reject() -> Any:
     track = Block("Track", TagType.BOOL, 1, 4)
     kicker = Bool("Kicker")
     with Program() as prog:
-        with Rung(bad):
+        with rung(bad):
             shift(track.select(1, 4)).clock(clock).reset(clear)
-        with Rung(track[4]):
+        with rung(track[4]):
             out(kicker)
     return prog
 
@@ -528,10 +528,10 @@ def word_history_window() -> Any:
     log = Block("Hist", TagType.INT, 1, 3)
     high = Bool("RecentHigh")
     with Program() as prog:
-        with Rung(rise(sample)):
+        with rung(rise(sample)):
             blockcopy(log.select(1, 2), log.select(2, 3))
             copy(reading, log[1])
-        with Rung(Or(log[1] > 40, log[2] > 40, log[3] > 40)):
+        with rung(Or(log[1] > 40, log[2] > 40, log[3] > 40)):
             out(high)
     return prog
 
@@ -549,13 +549,13 @@ def pointer_recipe_load() -> Any:
     setpoint = Int("Setpoint")
     hot = Bool("Hot")
     with Program() as prog:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(10, recipes[1])
             copy(20, recipes[2])
             copy(30, recipes[3])
-        with Rung(rise(load)):
+        with rung(rise(load)):
             copy(recipes[pick], setpoint)
-        with Rung(setpoint >= 20):
+        with rung(setpoint >= 20):
             out(hot)
     return prog
 
@@ -568,10 +568,10 @@ def pointer_write_cycle() -> Any:
     buf = Block("Buf", TagType.INT, 1, 4)
     wrapped = Bool("Wrapped")
     with Program() as prog:
-        with Rung(rise(store)):
+        with rung(rise(store)):
             copy(value, buf[slot + 1])
             math(slot + 1, slot)
-        with Rung(slot >= 4):
+        with rung(slot >= 4):
             copy(0, slot)
             latch(wrapped)
     return prog
@@ -585,12 +585,12 @@ def search_for_value() -> Any:
     where = Int("FoundAt")
     found = Bool("Found")
     with Program() as prog:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(2, table[1])
             copy(4, table[2])
             copy(1, table[3])
             copy(5, table[4])
-        with Rung(rise(find)):
+        with rung(rise(find)):
             search(table.select(1, 4) == wanted, result=where, found=found)
     return prog
 
@@ -610,20 +610,20 @@ def request_acknowledge_handshake() -> Any:
     timeout = Timer.clone("AckTimeout")
     fault = Bool("HandshakeFault")
     with Program() as prog:
-        with Rung(want, ~waiting, ~fault):
+        with rung(want, ~waiting, ~fault):
             latch(request)
             latch(waiting)
-        with Rung(request, ack):
+        with rung(request, ack):
             reset(request)
-        with Rung(waiting, ~request, ~busy):
+        with rung(waiting, ~request, ~busy):
             reset(waiting)
-        with Rung(request):
+        with rung(request):
             on_delay(timeout, 300)
-        with Rung(timeout.Done):
+        with rung(timeout.Done):
             latch(fault)
             reset(request)
             reset(waiting)
-        with Rung(~want, fault):
+        with rung(~want, fault):
             reset(fault)
     return prog
 
@@ -640,13 +640,13 @@ def first_scan_setup() -> Any:
     count = Int("Count")
     at_limit = Bool("AtLimit")
     with Program() as prog:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(5, limit)
-        with Rung(rise(run), count < limit):
+        with rung(rise(run), count < limit):
             math(count + 1, count)
-        with Rung(count >= limit):
+        with rung(count >= limit):
             out(at_limit)
-        with Rung(~run, at_limit):
+        with rung(~run, at_limit):
             copy(0, count)
     return prog
 
@@ -657,7 +657,7 @@ def reference_constant_compare() -> Any:
     max_speed = Int("MaxSpeed", default=1500)
     over = Bool("OverSpeed")
     with Program() as prog:
-        with Rung(speed > max_speed):
+        with rung(speed > max_speed):
             out(over)
     return prog
 
@@ -674,10 +674,10 @@ def scaled_copy_chain() -> Any:
     shown = Int("Display")
     high = Bool("ScaledHigh")
     with Program() as prog:
-        with Rung():
+        with rung():
             math(raw + 100, eng)
             copy(eng, shown)
-        with Rung(shown > 3000):
+        with rung(shown > 3000):
             out(high)
     return prog
 
@@ -689,11 +689,11 @@ def scratch_register() -> Any:
     tmp = Int("Tmp")
     big = Bool("SumBig")
     with Program() as prog:
-        with Rung():
+        with rung():
             math(a + b, tmp)
-        with Rung(tmp > 30):
+        with rung(tmp > 30):
             out(big)
-        with Rung():
+        with rung():
             copy(0, tmp)
     return prog
 
@@ -705,11 +705,11 @@ def dint_totalizer() -> Any:
     total = Dint("Total")
     alarm = Bool("TotalHigh")
     with Program() as prog:
-        with Rung(rise(flow)):
+        with rung(rise(flow)):
             math(total + 250, total)
-        with Rung(clear):
+        with rung(clear):
             copy(0, total)
-        with Rung(total >= 2000):
+        with rung(total >= 2000):
             out(alarm)
     return prog
 
@@ -719,7 +719,7 @@ def word_status_bits() -> Any:
     status = Word("Status", external=True)
     ready = Bool("DriveReady")
     with Program() as prog:
-        with Rung(status == 0x0037):
+        with rung(status == 0x0037):
             out(ready)
     return prog
 
@@ -731,12 +731,12 @@ def fill_block_on_reset() -> Any:
     bins = Block("Bin", TagType.INT, 1, 3)
     any_full = Bool("AnyFull")
     with Program() as prog:
-        with Rung(clear):
+        with rung(clear):
             fill(0, bins.select(1, 3))
-        with Rung(rise(add)):
+        with rung(rise(add)):
             math(bins[1] + 1, bins[1])
             math(bins[2] + 2, bins[2])
-        with Rung(Or(bins[1] > 4, bins[2] > 6)):
+        with rung(Or(bins[1] > 4, bins[2] > 6)):
             out(any_full)
     return prog
 
@@ -753,14 +753,14 @@ def subroutine_with_return() -> Any:
     count = Int("SubCount")
     pump = Bool("Pump")
     with Program() as prog:
-        with Rung(auto):
+        with rung(auto):
             call("AutoSeq")
         with subroutine("AutoSeq"):
-            with Rung(inhibit):
+            with rung(inhibit):
                 return_early()
-            with Rung(count < 5):
+            with rung(count < 5):
                 math(count + 1, count)
-            with Rung(count >= 5):
+            with rung(count >= 5):
                 out(pump)
                 copy(0, count)
     return prog
@@ -773,7 +773,7 @@ def branch_outputs() -> Any:
     left = Bool("LeftOut")
     right = Bool("RightOut")
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             with branch(sel):
                 out(left)
             with branch(~sel):
@@ -794,12 +794,12 @@ def funcdep_offset_copy() -> Any:
     seen = Bool("Seen")
     bump = Bool("Bump", external=True)
     with Program(strict=False) as prog:
-        with Rung(y > 7):
+        with rung(y > 7):
             out(seen)
-        with Rung():
+        with rung():
             math(x + 5, y)
             copy(0, x)
-        with Rung(rise(bump)):
+        with rung(rise(bump)):
             copy(3, x)
     return prog
 
@@ -812,13 +812,13 @@ def funcdep_mirror() -> Any:
     nxt = Bool("NextMode", external=True)
     lamp = Bool("ModeLamp")
     with Program() as prog:
-        with Rung(rise(nxt)):
+        with rung(rise(nxt)):
             math(step + 1, step)
             copy(step, shown)
-        with Rung(step >= 3):
+        with rung(step >= 3):
             copy(0, step)
             copy(0, shown)
-        with Rung(shown == 2):
+        with rung(shown == 2):
             out(lamp)
     return prog
 
@@ -831,10 +831,10 @@ def init_constant_flag() -> Any:
     go = Bool("GoButton", external=True)
     lamp = Bool("ModeTwo")
     with Program() as prog:
-        with Rung(~initialized):
+        with rung(~initialized):
             copy(2, mode)
             latch(initialized)
-        with Rung(go, mode == 2):
+        with rung(go, mode == 2):
             out(lamp)
     return prog
 
@@ -847,9 +847,9 @@ def tag_compared_inputs() -> Any:
     bigger = Bool("LeftBigger")
     equal = Bool("Equal")
     with Program() as prog:
-        with Rung(a > b):
+        with rung(a > b):
             out(bigger)
-        with Rung(a == b):
+        with rung(a == b):
             out(equal)
     return prog
 
@@ -861,11 +861,11 @@ def edge_on_written_bit() -> Any:
     seen = Bool("SeenPart")
     count = Int("Seen")
     with Program() as prog:
-        with Rung(sensor):
+        with rung(sensor):
             out(seen)
-        with Rung(rise(seen), count < 3):
+        with rung(rise(seen), count < 3):
             math(count + 1, count)
-        with Rung(count >= 3, ~sensor):
+        with rung(count >= 3, ~sensor):
             copy(0, count)
     return prog
 
@@ -878,13 +878,13 @@ def funcdep_follows_its_source() -> Any:
     bump = Bool("Jog", external=True)
     far = Bool("Far")
     with Program() as prog:
-        with Rung(rise(bump)):
+        with rung(rise(bump)):
             math(x + 1, x)
             math(x + 5, y)
-        with Rung(x >= 4):
+        with rung(x >= 4):
             copy(0, x)
             math(x + 5, y)
-        with Rung(y > 7):
+        with rung(y > 7):
             out(far)
     return prog
 
@@ -897,13 +897,13 @@ def funcdep_written_before_its_source_moves() -> Any:
     bump = Bool("Push", external=True)
     far = Bool("LagFar")
     with Program() as prog:
-        with Rung(rise(bump)):
+        with rung(rise(bump)):
             math(x + 5, y)
             math(x + 1, x)
-        with Rung(x >= 4):
+        with rung(x >= 4):
             copy(0, x)
             math(x + 5, y)
-        with Rung(y > 7):
+        with rung(y > 7):
             out(far)
     return prog
 
@@ -920,13 +920,13 @@ def named_states_from_constants() -> Any:
     drain = Bool("DrainDone", external=True)
     valve = Bool("InletValve")
     with Program() as prog:
-        with Rung(state == idle, start):
+        with rung(state == idle, start):
             copy(filling, state)
-        with Rung(state == filling):
+        with rung(state == filling):
             out(valve)
-        with Rung(state == filling, high):
+        with rung(state == filling, high):
             copy(full, state)
-        with Rung(state == full, drain):
+        with rung(state == full, drain):
             copy(idle, state)
     return prog
 
@@ -940,12 +940,12 @@ def busy_bit_cleared_each_scan() -> Any:
     granted_b = Bool("GrantB")
     granted_a = Bool("GrantA")
     with Program() as prog:
-        with Rung(a):
+        with rung(a):
             latch(busy)
             out(granted_a)
-        with Rung(b, ~busy):
+        with rung(b, ~busy):
             out(granted_b)
-        with Rung():
+        with rung():
             reset(busy)
     return prog
 
@@ -956,10 +956,10 @@ def hmi_command_word_cleared_by_ladder() -> Any:
     command = Int("HmiCommand", external=True)
     running = Bool("ConveyorRun")
     with Program() as prog:
-        with Rung(command == 1):
+        with rung(command == 1):
             latch(running)
             copy(0, command)
-        with Rung(command == 2):
+        with rung(command == 2):
             reset(running)
             copy(0, command)
     return prog
@@ -971,11 +971,11 @@ def hmi_setpoint_clamped_by_ladder() -> Any:
     setpoint = Int("SpeedSetpoint", external=True)
     fast = Bool("FastMode")
     with Program() as prog:
-        with Rung(setpoint > 100):
+        with rung(setpoint > 100):
             copy(100, setpoint)
-        with Rung(setpoint < 0):
+        with rung(setpoint < 0):
             copy(0, setpoint)
-        with Rung(setpoint >= 60):
+        with rung(setpoint >= 60):
             out(fast)
     return prog
 
@@ -988,11 +988,11 @@ def hmi_request_taken_when_nonzero() -> Any:
     busy = Bool("JobBusy")
     done = Bool("JobDone", external=True)
     with Program() as prog:
-        with Rung(request != 0, ~busy):
+        with rung(request != 0, ~busy):
             copy(request, job)
             latch(busy)
             copy(0, request)
-        with Rung(busy, done):
+        with rung(busy, done):
             reset(busy)
     return prog
 
@@ -1026,13 +1026,13 @@ def valve_with_limit_switch_watchdog() -> Any:
     fault = Bool("ValveFault")
     clear = Bool("FaultClear", external=True)
     with Program() as prog:
-        with Rung(command):
+        with rung(command):
             out(valve)
-        with Rung(valve, ~opened):
+        with rung(valve, ~opened):
             on_delay(stall, 100)
-        with Rung(stall.Done):
+        with rung(stall.Done):
             latch(fault)
-        with Rung(clear):
+        with rung(clear):
             reset(fault)
     return prog
 
@@ -1050,11 +1050,11 @@ def field_value_copied_and_compared() -> Any:
     level = Int("FieldLevel", link="FillValve")
     held = Int("SampledLevel")
     with Program() as prog:
-        with Rung(Bool("FillCmd", external=True)):
+        with rung(Bool("FillCmd", external=True)):
             out(fill)
-        with Rung(Bool("TakeSample", external=True)):
+        with rung(Bool("TakeSample", external=True)):
             copy(level, held)
-        with Rung(held > 50):
+        with rung(held > 50):
             out(Bool("SampleHigh"))
     return prog
 
@@ -1069,11 +1069,11 @@ def field_value_summed_and_compared() -> Any:
     bias = Int("Bias", external=True, min=0, max=10)
     total = Int("BiasedLevel")
     with Program() as prog:
-        with Rung(Bool("SumFillCmd", external=True)):
+        with rung(Bool("SumFillCmd", external=True)):
             out(Bool("SumFill"))
-        with Rung(Bool("TakeSum", external=True)):
+        with rung(Bool("TakeSum", external=True)):
             math(level + bias, total)
-        with Rung(total > 50):
+        with rung(total > 50):
             out(Bool("BiasedHigh"))
     return prog
 
@@ -1083,11 +1083,11 @@ def field_count_the_ladder_clears() -> Any:
     """The field sets a count on a linked counter, and the ladder clears it on a reset button."""
     count = Int("FieldCount", link="CountEnable")
     with Program() as prog:
-        with Rung(Bool("CountCmd", external=True)):
+        with rung(Bool("CountCmd", external=True)):
             out(Bool("CountEnable"))
-        with Rung(Bool("ClearCount", external=True)):
+        with rung(Bool("ClearCount", external=True)):
             copy(0, count)
-        with Rung(count > 10):
+        with rung(count > 10):
             out(Bool("CountHigh"))
     return prog
 
@@ -1097,10 +1097,10 @@ def loop_adds_three_times() -> Any:
     """A forloop adds 1 to a total three times on each scan Go is on, and a rung clears it."""
     total = Int("LoopTotal")
     with Program() as prog:
-        with Rung(Bool("LoopGo", external=True)):
+        with rung(Bool("LoopGo", external=True)):
             with forloop(3):
                 math(total + 1, total)
-        with Rung(total > 5):
+        with rung(total > 5):
             copy(0, total)
     return prog
 
@@ -1124,11 +1124,11 @@ def received_value_the_ladder_clears() -> Any:
     """A value a peer sends through receive(), which the ladder clears once it reads 1."""
     incoming = Int("Remote")
     with Program() as prog:
-        with Rung(Bool("Poll", external=True)):
+        with rung(Bool("Poll", external=True)):
             _receive_from_peer(incoming)
-        with Rung(incoming == 1):
+        with rung(incoming == 1):
             copy(0, incoming)
-        with Rung(incoming > 5):
+        with rung(incoming > 5):
             out(Bool("RemoteHigh"))
     return prog
 
@@ -1141,11 +1141,11 @@ def received_count_the_ladder_adds_to() -> Any:
     """
     regs = Block("Regs", TagType.INT, 501, 510)
     with Program() as prog:
-        with Rung(Bool("PollRegs", external=True)):
+        with rung(Bool("PollRegs", external=True)):
             _receive_from_peer(regs.select(501, 510))
-        with Rung(Bool("Tick", external=True)):
+        with rung(Bool("Tick", external=True)):
             math(regs[503] + 1, regs[503])
-        with Rung(regs[503] > 100):
+        with rung(regs[503] > 100):
             out(Bool("CountHigh2"))
     return prog
 
@@ -1156,7 +1156,7 @@ def real_input_between_whole_numbers() -> Any:
     pressure = Real("LinePressure", external=True, min=0.0, max=10.0)
     high = Bool("PressureHigh")
     with Program() as prog:
-        with Rung(pressure > 5):
+        with rung(pressure > 5):
             out(high)
     return prog
 
@@ -1169,11 +1169,11 @@ def math_result_wraps() -> Any:
     low = Int("LowWord")
     negative = Bool("LowNegative")
     with Program() as prog:
-        with Rung(go):
+        with rung(go):
             copy(40000, total)
-        with Rung():
+        with rung():
             math(total, low)
-        with Rung(low < 0):
+        with rung(low < 0):
             out(negative)
     return prog
 
@@ -1185,9 +1185,9 @@ def math_literal_wraps() -> Any:
     low = Int("WrappedConst")
     small = Bool("ConstSmall")
     with Program() as prog:
-        with Rung(go):
+        with rung(go):
             math(70000, low)
-        with Rung(low < 5000, low > 0):
+        with rung(low < 5000, low > 0):
             out(small)
     return prog
 
@@ -1198,11 +1198,11 @@ def hmi_value_copied_after_ladder_default() -> Any:
     setpoint = Int("HmiSetpoint", external=True)
     working = Int("WorkingSetpoint")
     with Program() as prog:
-        with Rung(Bool("LoadDefault", external=True)):
+        with rung(Bool("LoadDefault", external=True)):
             copy(5, setpoint)
-        with Rung(Bool("Apply", external=True)):
+        with rung(Bool("Apply", external=True)):
             copy(setpoint, working)
-        with Rung(working > 50):
+        with rung(working > 50):
             out(Bool("HighSetpoint"))
     return prog
 
@@ -1213,11 +1213,11 @@ def compared_input_copied_and_compared() -> Any:
     raw = Int("RawLevel", external=True)
     level = Int("HeldLevel")
     with Program() as prog:
-        with Rung(raw > 10):
+        with rung(raw > 10):
             out(Bool("RawAbove"))
-        with Rung(Bool("Sample", external=True)):
+        with rung(Bool("Sample", external=True)):
             copy(raw, level)
-        with Rung(level > 50):
+        with rung(level > 50):
             out(Bool("LevelHigh"))
     return prog
 
@@ -1234,16 +1234,16 @@ def short_text_keeps_the_characters_after_it() -> Any:
     value = Int("ShortValue", external=True, choices={1: "one", 12345: "five digits"})
     seen = Int("ShortSeen")
     with Program() as prog:
-        with Rung(Bool("ShortMark", external=True)):
+        with rung(Bool("ShortMark", external=True)):
             copy("4", msg[5])
-        with Rung():
+        with rung():
             call("ShortText")
         with subroutine("ShortText"):
-            with Rung():
+            with rung():
                 copy(value, msg[1], convert=to_text())
-            with Rung(msg[5] != "4"):
+            with rung(msg[5] != "4"):
                 copy(7, seen)
-            with Rung():
+            with rung():
                 copy(seen, Int("ShortShown"))
     return prog
 
@@ -1255,16 +1255,16 @@ def pointer_write_keeps_the_other_element() -> Any:
     pointer = Int("PtrAt", external=True, choices={1: "first", 2: "second"})
     seen = Int("PtrSeen")
     with Program() as prog:
-        with Rung(Bool("PtrMark", external=True)):
+        with rung(Bool("PtrMark", external=True)):
             copy(4, regs[1])
-        with Rung():
+        with rung():
             call("PtrWrite")
         with subroutine("PtrWrite"):
-            with Rung():
+            with rung():
                 copy(9, regs[pointer])
-            with Rung(regs[1] != 4):
+            with rung(regs[1] != 4):
                 copy(7, seen)
-            with Rung():
+            with rung():
                 copy(seen, Int("PtrShown"))
     return prog
 
@@ -1276,11 +1276,11 @@ def pointer_copy_of_a_source_is_no_dependency() -> Any:
     pointer = Int("DepAt", external=True, choices={1: "first", 2: "second"})
     source = Int("DepSource")
     with Program() as prog:
-        with Rung(regs[1] == 2):
+        with rung(regs[1] == 2):
             out(Bool("DepSeen"))
-        with Rung(Bool("DepLoad", external=True)):
+        with rung(Bool("DepLoad", external=True)):
             copy(Int("DepInput", external=True, min=0, max=3), source)
-        with Rung():
+        with rung():
             copy(source, regs[pointer])
     return prog
 
@@ -1301,21 +1301,21 @@ def math_overflow_then_difference() -> Any:
     over = Real("OverReal")
     diff = Real("DiffReal")
     with Program() as prog:
-        with Rung(Bool("LoadBig", external=True)):
+        with rung(Bool("LoadBig", external=True)):
             copy(3.0e38, big)
-        with Rung(Bool("ClearBig", external=True)):
+        with rung(Bool("ClearBig", external=True)):
             copy(1.0, big)
-        with Rung(Bool("Scale", external=True)):
+        with rung(Bool("Scale", external=True)):
             math(big * 10, over)
-        with Rung(over > 1.0e38):
+        with rung(over > 1.0e38):
             out(Bool("OverHigh"))
-        with Rung(Bool("Subtract", external=True)):
+        with rung(Bool("Subtract", external=True)):
             math(over - over, diff)
-        with Rung(diff >= 0):
+        with rung(diff >= 0):
             out(Bool("DiffNotBelow"))
-        with Rung(diff < 0):
+        with rung(diff < 0):
             out(Bool("DiffBelow"))
-        with Rung(Bool("ShowDiff", external=True)):
+        with rung(Bool("ShowDiff", external=True)):
             copy(diff, Int("DiffShown"))
     return prog
 
@@ -1331,17 +1331,17 @@ def nan_copied_and_compared_with_itself() -> Any:
     gap = Real("InverseGap")
     kept = Real("KeptGap")
     with Program() as prog:
-        with Rung(Bool("Invert", external=True)):
+        with rung(Bool("Invert", external=True)):
             math(1.0 / divisor, inverse)
-        with Rung(inverse > 1.0):
+        with rung(inverse > 1.0):
             out(Bool("InverseAboveOne"))
-        with Rung(Bool("Cancel", external=True)):
+        with rung(Bool("Cancel", external=True)):
             math(divisor**-1 - divisor**-1, gap)
-        with Rung(Bool("KeepGap", external=True)):
+        with rung(Bool("KeepGap", external=True)):
             copy(gap, kept)
-        with Rung(kept == kept):
+        with rung(kept == kept):
             out(Bool("KeptIsANumber"))
-        with Rung(Bool("ShowInverse", external=True)):
+        with rung(Bool("ShowInverse", external=True)):
             copy(inverse, Int("InverseShown"))
     return prog
 
@@ -1353,15 +1353,15 @@ def words_packed_into_a_real() -> Any:
     high = Int("HighWord", external=True, choices={0: "zero", 0x7F80: "Inf", 0x7FC0: "NaN"})
     packed = Real("PackedReal")
     with Program() as prog:
-        with Rung(Bool("LoadWords", external=True)):
+        with rung(Bool("LoadWords", external=True)):
             copy(high, words[2])
-        with Rung(Bool("PackWords", external=True)):
+        with rung(Bool("PackWords", external=True)):
             pack_words(words.select(1, 2), packed)
-        with Rung(packed >= 0):
+        with rung(packed >= 0):
             out(Bool("PackedNotBelow"))
-        with Rung(packed < 0):
+        with rung(packed < 0):
             out(Bool("PackedBelow"))
-        with Rung(Bool("ShowPacked", external=True)):
+        with rung(Bool("ShowPacked", external=True)):
             copy(packed, Int("PackedShown"))
     return prog
 
@@ -1385,23 +1385,23 @@ def pointer_write_into_a_big_real_block() -> Any:
     over = Real("FarRealOver")
     shown = Int("FarRealShown")
     with Program() as prog:
-        with Rung(at == 5):
+        with rung(at == 5):
             out(Bool("FarRealAtFive"))
-        with Rung(Bool("FarRealLoad", external=True)):
+        with rung(Bool("FarRealLoad", external=True)):
             copy(3.0e38, base)
-        with Rung(Bool("FarRealTen", external=True)):
+        with rung(Bool("FarRealTen", external=True)):
             copy(10.0, base)
-        with Rung(Bool("FarRealScale", external=True)):
+        with rung(Bool("FarRealScale", external=True)):
             math(base * 10, over)
-        with Rung(Bool("FarRealWrite", external=True)):
+        with rung(Bool("FarRealWrite", external=True)):
             copy(over, far[at])
-        with Rung(far[5] - far[5] == 0.0):
+        with rung(far[5] - far[5] == 0.0):
             out(Bool("FarRealIsNumber"))
-        with Rung(Bool("FarRealShow", external=True)):
+        with rung(Bool("FarRealShow", external=True)):
             copy(far[5], shown)
-        with Rung(shown > 50):
+        with rung(shown > 50):
             out(Bool("FarRealAbove"))
-        with Rung(shown < 200):
+        with rung(shown < 200):
             out(Bool("FarRealBelow"))
     return prog
 
@@ -1414,17 +1414,17 @@ def pointer_write_into_a_big_int_block() -> Any:
     source = Int("FarIntSource", external=True, choices={0: "zero", 100: "hundred"})
     shown = Int("FarIntShown")
     with Program() as prog:
-        with Rung(at == 5):
+        with rung(at == 5):
             out(Bool("FarIntAtFive"))
-        with Rung(Bool("FarIntSet", external=True)):
+        with rung(Bool("FarIntSet", external=True)):
             copy(3, far[5])
-        with Rung(Bool("FarIntWrite", external=True)):
+        with rung(Bool("FarIntWrite", external=True)):
             copy(source, far[at])
-        with Rung(far[5] > 50):
+        with rung(far[5] > 50):
             out(Bool("FarIntHigh"))
-        with Rung(Bool("FarIntShow", external=True)):
+        with rung(Bool("FarIntShow", external=True)):
             copy(far[5], shown)
-        with Rung(shown > 50):
+        with rung(shown > 50):
             out(Bool("FarIntShownHigh"))
     return prog
 
@@ -1437,9 +1437,9 @@ def index_sum_write_into_a_big_int_block() -> Any:
     offset = Int("SumIntOffset", external=True, min=0, max=10)
     source = Int("SumIntSource", external=True, choices={0: "zero", 100: "hundred"})
     with Program() as prog:
-        with Rung(Bool("SumIntWrite", external=True)):
+        with rung(Bool("SumIntWrite", external=True)):
             copy(source, far[at + offset])
-        with Rung(far[5] > 50):
+        with rung(far[5] > 50):
             out(Bool("SumIntHigh"))
     return prog
 
@@ -1454,14 +1454,14 @@ def _acknowledge_write(prefix: str, read_at: int) -> Any:
     source = Int(f"{prefix}Source", external=True, choices={0: "zero", 100: "hundred"})
     shown = Int(f"{prefix}Shown")
     with Program() as prog:
-        with Rung(Bool(f"{prefix}Set", external=True)):
+        with rung(Bool(f"{prefix}Set", external=True)):
             copy(3, far[read_at])
-        with Rung(cmd >= 1, cmd <= 100):
+        with rung(cmd >= 1, cmd <= 100):
             math(cmd * 10 + 2999, at)
             copy(source, far[at])
-        with Rung(Bool(f"{prefix}Show", external=True)):
+        with rung(Bool(f"{prefix}Show", external=True)):
             copy(far[read_at], shown)
-        with Rung(shown > 50):
+        with rung(shown > 50):
             out(Bool(f"{prefix}ShownHigh"))
     return prog
 
@@ -1493,7 +1493,7 @@ def drum_preset_written_below_the_drum() -> Any:
     slow = Bool("SlowMix", external=True)
     preset = Int("MixTime")
     with Program() as prog:
-        with Rung(Bool("MixRun", external=True)):
+        with rung(Bool("MixRun", external=True)):
             time_drum(
                 outputs=[Bool("MixA"), Bool("MixB")],
                 presets=[preset, 50],
@@ -1503,9 +1503,9 @@ def drum_preset_written_below_the_drum() -> Any:
                 accumulator=Int("MixAcc"),
                 completion_flag=Bool("MixDone"),
             ).reset(Bool("MixClear", external=True))
-        with Rung(slow):
+        with rung(slow):
             copy(300, preset)
-        with Rung(~slow):
+        with rung(~slow):
             copy(100, preset)
     return prog
 
@@ -1515,14 +1515,14 @@ def drum_preset_set_in_its_subroutine() -> Any:
     """A time drum in a subroutine reads a preset tag that its rungs write only now and then."""
     preset = Int("RinseTime")
     with Program() as prog:
-        with Rung():
+        with rung():
             call("Rinse")
         with subroutine("Rinse"):
-            with Rung(Bool("RinseLong", external=True)):
+            with rung(Bool("RinseLong", external=True)):
                 copy(300, preset)
-            with Rung(Bool("RinseShort", external=True)):
+            with rung(Bool("RinseShort", external=True)):
                 copy(100, preset)
-            with Rung(Bool("RinseRun", external=True)):
+            with rung(Bool("RinseRun", external=True)):
                 time_drum(
                     outputs=[Bool("RinseA"), Bool("RinseB")],
                     presets=[preset, 50],
@@ -1540,7 +1540,7 @@ def drum_event_written_below_the_drum() -> Any:
     """An event drum reads only its current step's event, and a rung below the drum writes it."""
     ready = Bool("FeedReady")
     with Program() as prog:
-        with Rung(Bool("FeedRun", external=True)):
+        with rung(Bool("FeedRun", external=True)):
             event_drum(
                 outputs=[Bool("FeedA"), Bool("FeedB")],
                 events=[Bool("FeedStart", external=True), ready],
@@ -1548,7 +1548,7 @@ def drum_event_written_below_the_drum() -> Any:
                 current_step=Int("FeedStep"),
                 completion_flag=Bool("FeedDone"),
             ).reset(Bool("FeedClear", external=True))
-        with Rung(Bool("FeedSensor", external=True)):
+        with rung(Bool("FeedSensor", external=True)):
             out(ready)
     return prog
 
@@ -1560,13 +1560,13 @@ def off_delay_preset_written_below_the_timer() -> Any:
     preset = Int("PurgeTime")
     purge = Timer.clone("Purge")
     with Program() as prog:
-        with Rung(Bool("Burner", external=True)):
+        with rung(Bool("Burner", external=True)):
             off_delay(purge, preset)
-        with Rung(purge.Done):
+        with rung(purge.Done):
             out(Bool("Blower"))
-        with Rung(long):
+        with rung(long):
             copy(300, preset)
-        with Rung(~long):
+        with rung(~long):
             copy(100, preset)
     return prog
 
@@ -1578,13 +1578,13 @@ def search_stops_before_the_element_written_below() -> Any:
     wanted = Int("BinWant", external=True, min=0, max=3)
     full = Bool("BinFull", external=True)
     with Program() as prog:
-        with Rung(Bool("BinLook", external=True)):
+        with rung(Bool("BinLook", external=True)):
             search(bins.select(1, 2) <= wanted, result=Int("BinAt"), found=Bool("BinHit"))
-        with Rung(Bool("BinStock", external=True)):
+        with rung(Bool("BinStock", external=True)):
             copy(5, bins[1])
-        with Rung(full):
+        with rung(full):
             copy(1, bins[2])
-        with Rung(~full):
+        with rung(~full):
             copy(3, bins[2])
     return prog
 
@@ -1595,15 +1595,15 @@ def continuous_search_resumes_after_its_result() -> Any:
     lanes = Block("Lane", TagType.INT, 1, 3)
     at = Int("LaneAt")
     with Program() as prog:
-        with Rung():
+        with rung():
             search(lanes.select(1, 3) == 5, result=at, found=Bool("LaneHit"), continuous=True)
-        with Rung(at == 2):
+        with rung(at == 2):
             out(Bool("LaneTwo"))
-        with Rung(Bool("LaneStock1", external=True)):
+        with rung(Bool("LaneStock1", external=True)):
             copy(5, lanes[1])
-        with Rung(Bool("LaneStock2", external=True)):
+        with rung(Bool("LaneStock2", external=True)):
             copy(5, lanes[2])
-        with Rung(Bool("LaneRestart", external=True)):
+        with rung(Bool("LaneRestart", external=True)):
             copy(0, at)
     return prog
 
@@ -1619,13 +1619,13 @@ def text_copy_skipped_on_a_bad_digit() -> Any:
     key = Char("KeyChar", external=True, choices={"7": "seven", "x": "bad"})
     level = Int("KeyLevel")
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(key, level, convert=to_value)
-        with Rung(level > 5):
+        with rung(level > 5):
             latch(Bool("KeyHigh"))
-        with Rung(Bool("KeyClear", external=True)):
+        with rung(Bool("KeyClear", external=True)):
             reset(Bool("KeyHigh"))
-        with Rung(Bool("KeyHigh")):
+        with rung(Bool("KeyHigh")):
             out(Bool("KeyLamp"))
     return prog
 
@@ -1640,11 +1640,11 @@ def count_compared_with_an_hmi_target() -> Any:
     """A rung compares a count staged past its preset with an HMI target that has no bounds."""
     picks = Counter.clone("Picks")
     with Program() as prog:
-        with Rung(Bool("LoadPicks", external=True)):
+        with rung(Bool("LoadPicks", external=True)):
             copy(5, picks.Acc)
-        with Rung(Bool("Pick", external=True)):
+        with rung(Bool("Pick", external=True)):
             count_down(picks, 0).reset(Bool("PicksClear", external=True))
-        with Rung(picks.Acc == Dint("PickTarget", external=True)):
+        with rung(picks.Acc == Dint("PickTarget", external=True)):
             out(Bool("AtPickTarget"))
     return prog
 
@@ -1656,13 +1656,13 @@ def soak_time_compared_with_a_recipe_step() -> Any:
     times = Block("SoakTime", TagType.INT, 1, 3)
     soak = Timer.clone("Soak")
     with Program() as prog:
-        with Rung(Bool("SoakRun", external=True)):
+        with rung(Bool("SoakRun", external=True)):
             on_delay(soak, 300)
-        with Rung(Bool("SoakSet", external=True)):
+        with rung(Bool("SoakSet", external=True)):
             copy(Int("HmiSoak", external=True, min=0, max=400), times[step])
-        with Rung(soak.Acc == times[step]):
+        with rung(soak.Acc == times[step]):
             out(Bool("SoakStepDone"))
-        with Rung():
+        with rung():
             copy(soak.Acc, Int("SoakShown"))
     return prog
 
@@ -1672,13 +1672,13 @@ def counts_compared_through_their_difference() -> Any:
     """A rung compares two counts through their difference, both past their presets."""
     inbound, outbound = Counter.clone("Inbound"), Counter.clone("Outbound")
     with Program() as prog:
-        with Rung(Bool("InPulse", external=True)):
+        with rung(Bool("InPulse", external=True)):
             count_up(inbound, 3).reset(Bool("InboundClear", external=True))
-        with Rung(Bool("OutPulse", external=True)):
+        with rung(Bool("OutPulse", external=True)):
             count_up(outbound, 3).reset(Bool("OutboundClear", external=True))
-        with Rung(inbound.Acc - outbound.Acc == 2):
+        with rung(inbound.Acc - outbound.Acc == 2):
             out(Bool("TwoInside"))
-        with Rung():
+        with rung():
             copy(inbound.Acc, Dint("InboundShown"))
     return prog
 
@@ -1688,13 +1688,13 @@ def count_compared_with_another_plus_an_offset() -> Any:
     """A rung compares a count with another count plus a constant."""
     fed, cut = Counter.clone("Fed"), Counter.clone("Cut")
     with Program() as prog:
-        with Rung(Bool("FeedPulse", external=True)):
+        with rung(Bool("FeedPulse", external=True)):
             count_up(fed, 3).reset(Bool("FedClear", external=True))
-        with Rung(Bool("CutPulse", external=True)):
+        with rung(Bool("CutPulse", external=True)):
             count_up(cut, 3).reset(Bool("CutClear", external=True))
-        with Rung(fed.Acc == cut.Acc + 2):
+        with rung(fed.Acc == cut.Acc + 2):
             out(Bool("TwoAhead"))
-        with Rung():
+        with rung():
             copy(fed.Acc, Dint("FedShown"))
     return prog
 
@@ -1705,15 +1705,15 @@ def three_counts_kept_in_order() -> Any:
     first, second, third = (Counter.clone(f"Stage{i}") for i in range(3))
     clear = Bool("StagesClear")
     with Program() as prog:
-        with Rung(Bool("StagePulse0", external=True)):
+        with rung(Bool("StagePulse0", external=True)):
             count_up(first, 2).reset(clear)
-        with Rung(Bool("StagePulse1", external=True)):
+        with rung(Bool("StagePulse1", external=True)):
             count_up(second, 2).reset(clear)
-        with Rung(Bool("StagePulse2", external=True)):
+        with rung(Bool("StagePulse2", external=True)):
             count_up(third, 2).reset(clear)
-        with Rung(first.Acc < second.Acc, second.Acc < third.Acc):
+        with rung(first.Acc < second.Acc, second.Acc < third.Acc):
             out(Bool("StagesInOrder"))
-        with Rung():
+        with rung():
             copy(third.Acc, Dint("Stage2Shown"))
     return prog
 
@@ -1723,13 +1723,13 @@ def count_with_a_preset_tag_compared_with_a_literal() -> Any:
     """An HMI sets a count's preset, and a rung compares the count with 3."""
     batch = Counter.clone("Tray")
     with Program() as prog:
-        with Rung(Bool("TrayPulse", external=True)):
+        with rung(Bool("TrayPulse", external=True)):
             count_up(batch, Dint("TraySize", external=True, min=2, max=5)).reset(
                 Bool("TrayClear", external=True)
             )
-        with Rung(batch.Acc == 3):
+        with rung(batch.Acc == 3):
             out(Bool("TrayAtThree"))
-        with Rung(batch.Done):
+        with rung(batch.Done):
             out(Bool("TrayFull"))
     return prog
 
@@ -1739,9 +1739,9 @@ def level_compared_with_an_hmi_level() -> Any:
     """A rung compares an input with a literal and with an HMI value that has no bounds."""
     level = Int("TankLevel", external=True)
     with Program() as prog:
-        with Rung(level > 10):
+        with rung(level > 10):
             out(Bool("TankAboveTen"))
-        with Rung(level == Int("HmiLevel", external=True)):
+        with rung(level == Int("HmiLevel", external=True)):
             out(Bool("TankAtHmi"))
     return prog
 
@@ -1753,11 +1753,11 @@ def level_compared_with_a_table_entry() -> Any:
     entry = Int("BinEntry", external=True, min=1, max=3)
     table = Block("BinTable", TagType.INT, 1, 3)
     with Program() as prog:
-        with Rung(level > 10):
+        with rung(level > 10):
             out(Bool("BinAboveTen"))
-        with Rung(Bool("BinTableSet", external=True)):
+        with rung(Bool("BinTableSet", external=True)):
             copy(Int("HmiBin", external=True, min=11, max=13), table[entry])
-        with Rung(table[entry] == level):
+        with rung(table[entry] == level):
             out(Bool("BinAtEntry"))
     return prog
 
@@ -1770,13 +1770,13 @@ def held_reading_compared_with_a_table_entry() -> Any:
     table = Block("ScaleTable", TagType.INT, 1, 2)
     held = Int("ScaleHeld")
     with Program() as prog:
-        with Rung(raw > 10):
+        with rung(raw > 10):
             out(Bool("ScaleLoaded"))
-        with Rung(Bool("ScaleGrab", external=True)):
+        with rung(Bool("ScaleGrab", external=True)):
             copy(raw, held)
-        with Rung(Bool("ScaleTableSet", external=True)):
+        with rung(Bool("ScaleTableSet", external=True)):
             copy(Int("HmiScale", external=True, min=0, max=100), table[1])
-        with Rung(held == table[entry]):
+        with rung(held == table[entry]):
             out(Bool("ScaleAtEntry"))
     return prog
 
@@ -1789,13 +1789,13 @@ def recipe_mode_compared_with_a_table_entry() -> Any:
     table = Block("RecipeTable", TagType.INT, 1, 2)
     hmi = Int("HmiRecipe", external=True, min=0, max=100)
     with Program() as prog:
-        with Rung(hmi > 50):
+        with rung(hmi > 50):
             out(Bool("RecipeHigh"))
-        with Rung(Bool("RecipeLoad", external=True)):
+        with rung(Bool("RecipeLoad", external=True)):
             copy(hmi, mode)
-        with Rung(Bool("RecipeTableSet", external=True)):
+        with rung(Bool("RecipeTableSet", external=True)):
             copy(Int("HmiRecipeEntry", external=True, min=0, max=100), table[1])
-        with Rung(mode == table[entry]):
+        with rung(mode == table[entry]):
             out(Bool("RecipeAtEntry"))
     return prog
 
@@ -1806,9 +1806,9 @@ def real_reading_compared_with_a_table_entry() -> Any:
     entry = Int("TempEntry", external=True, min=1, max=2)
     table = Block("TempTable", TagType.REAL, 1, 2)
     with Program() as prog:
-        with Rung(Bool("TempTableSet", external=True)):
+        with rung(Bool("TempTableSet", external=True)):
             copy(Real("HmiTemp", external=True, min=0, max=10), table[1])
-        with Rung(Real("TempIn", external=True, min=0, max=10) == table[entry]):
+        with rung(Real("TempIn", external=True, min=0, max=10) == table[entry]):
             out(Bool("TempAtEntry"))
     return prog
 
@@ -1819,7 +1819,7 @@ def real_readings_kept_in_order() -> Any:
     first = Real("BandA", external=True, min=0, max=1)
     second = Real("BandB", external=True, min=0, max=1)
     with Program() as prog:
-        with Rung(first > 0.5, first < 0.9, second > 0.5, second < 0.9, first < second):
+        with rung(first > 0.5, first < 0.9, second > 0.5, second < 0.9, first < second):
             out(Bool("BandInOrder"))
     return prog
 
@@ -1833,9 +1833,9 @@ def count_compared_with_a_real_reading() -> Any:
     count = Int("BinCount", external=True)
     reading = Real("BinReading", external=True)
     with Program() as prog:
-        with Rung(count > 2, count < 9, reading > 4.6, reading < 5.4, count == reading):
+        with rung(count > 2, count < 9, reading > 4.6, reading < 5.4, count == reading):
             out(Bool("BinCountMatches"))
-        with Rung(count < reading):
+        with rung(count < reading):
             out(Bool("BinCountBelow"))
     return prog
 
@@ -1850,11 +1850,11 @@ def shown_count_compared_with_an_hmi_count() -> Any:
     boxes = Counter.clone("Boxes")
     shown = Dint("BoxesShown")
     with Program() as prog:
-        with Rung(Bool("BoxPulse", external=True)):
+        with rung(Bool("BoxPulse", external=True)):
             count_up(boxes, 3).reset(Bool("BoxesClear", external=True))
-        with Rung():
+        with rung():
             copy(boxes.Acc, shown)
-        with Rung(shown == Dint("HmiBoxes", external=True)):
+        with rung(shown == Dint("HmiBoxes", external=True)):
             out(Bool("BoxesAtHmi"))
     return prog
 

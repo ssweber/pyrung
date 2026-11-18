@@ -12,7 +12,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
-from pyrung.core import Bool, Counter, Or, Program, Rung
+from pyrung.core import Bool, Counter, Or, Program, rung
 from pyrung.core.program import And, branch, count_up, latch, out
 
 OUT = Path(tempfile.mkdtemp(prefix="ladder_"))
@@ -60,7 +60,7 @@ base_map = {
 
 # ── Case 1: Deep AND chain + branch ──
 with Program() as logic:
-    with Rung(A, B, C, D):
+    with rung(A, B, C, D):
         out(Y1)
         with branch(E):
             out(Y2)
@@ -72,7 +72,7 @@ _dump("Case 1: A,B,C,D + branch(E) + branch(F)", pyrung_to_ladder(logic, mapping
 
 # ── Case 2: Deep AND + branch with its own condition ──
 with Program() as logic:
-    with Rung(A, B, C):
+    with rung(A, B, C):
         out(Y1)
         with branch(D, E):
             out(Y2)
@@ -82,7 +82,7 @@ _dump("Case 2: A,B,C + branch(D,E)", pyrung_to_ladder(logic, mapping))
 
 # ── Case 3: Single condition + many branches ──
 with Program() as logic:
-    with Rung(A):
+    with rung(A):
         out(Y1)
         with branch(B):
             out(Y2)
@@ -96,7 +96,7 @@ _dump("Case 3: A + branch(B) + branch(C) + branch(D)", pyrung_to_ladder(logic, m
 
 # ── Case 4: Branch after multiple outputs ──
 with Program() as logic:
-    with Rung(A):
+    with rung(A):
         out(Y1)
         latch(Y2)
         with branch(Mode):
@@ -107,7 +107,7 @@ _dump("Case 4: A out+latch + branch(Mode)", pyrung_to_ladder(logic, mapping))
 
 # ── Case 5: Branch sandwiched between instructions ──
 with Program() as logic:
-    with Rung(A, B):
+    with rung(A, B):
         out(Y1)
         with branch(Mode):
             out(Y2)
@@ -120,7 +120,7 @@ _dump("Case 5: A,B out branch out branch", pyrung_to_ladder(logic, mapping))
 
 # ── Case 6: Or inside And ──
 with Program() as logic:
-    with Rung(And(A, Or(B, C), D)):
+    with rung(And(A, Or(B, C), D)):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -128,7 +128,7 @@ _dump("Case 6: And(A, Or(B,C), D)", pyrung_to_ladder(logic, mapping))
 
 # ── Case 7: Or(And, And) ──
 with Program() as logic:
-    with Rung(Or(And(A, B), And(C, D))):
+    with rung(Or(And(A, B), And(C, D))):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -136,7 +136,7 @@ _dump("Case 7: Or(And(A,B), And(C,D))", pyrung_to_ladder(logic, mapping))
 
 # ── Case 8: Or with mixed leaf/chain ──
 with Program() as logic:
-    with Rung(Or(A, B, C, And(D, E, F))):
+    with rung(Or(A, B, C, And(D, E, F))):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -144,7 +144,7 @@ _dump("Case 8: Or(A, B, C, And(D,E,F))", pyrung_to_ladder(logic, mapping))
 
 # ── Case 9: Deep AND then OR ──
 with Program() as logic:
-    with Rung(A, B, C, D, Or(E, F, G)):
+    with rung(A, B, C, D, Or(E, F, G)):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -152,7 +152,7 @@ _dump("Case 9: A,B,C,D,Or(E,F,G)", pyrung_to_ladder(logic, mapping))
 
 # ── Case 10: nested Or ──
 with Program() as logic:
-    with Rung(Or(Or(A, B), Or(C, D))):
+    with rung(Or(Or(A, B), Or(C, D))):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -160,7 +160,7 @@ _dump("Case 10: Or(Or(A,B), Or(C,D))", pyrung_to_ladder(logic, mapping))
 
 # ── Case 11: negated OR branches ──
 with Program() as logic:
-    with Rung(A, Or(~B, C, ~D)):
+    with rung(A, Or(~B, C, ~D)):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -170,9 +170,9 @@ _dump("Case 11: A, Or(~B, C, ~D)", pyrung_to_ladder(logic, mapping))
 ResetCond = Bool("ResetCond")
 
 with Program() as logic:
-    with Rung(A, B):
+    with rung(A, B):
         out(Y1)
-    with Rung(A, B, Mode).continued():
+    with rung(A, B, Mode).continued():
         count_up(Counter[1], preset=10).reset(ResetCond)
 
 mapping = TagMap(
@@ -183,7 +183,7 @@ _dump("Case 12: A,B out + continued A,B,Mode count_up.reset", pyrung_to_ladder(l
 
 # ── Case 13: asymmetric OR widths ──
 with Program() as logic:
-    with Rung(Or(A, And(B, C, D))):
+    with rung(Or(A, And(B, C, D))):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -191,7 +191,7 @@ _dump("Case 13: Or(A, And(B,C,D))", pyrung_to_ladder(logic, mapping))
 
 # ── Case 14: ORs sandwiching ANDs ──
 with Program() as logic:
-    with Rung(Or(A, B), E, Or(C, D), F):
+    with rung(Or(A, B), E, Or(C, D), F):
         out(Y1)
 
 mapping = TagMap({**base_map}, include_system=False)
@@ -199,7 +199,7 @@ _dump("Case 14: Or(A,B), E, Or(C,D), F", pyrung_to_ladder(logic, mapping))
 
 # ── Case 15: OR + branch ──
 with Program() as logic:
-    with Rung(Or(A, B)):
+    with rung(Or(A, B)):
         out(Y1)
         with branch(Mode):
             out(Y2)
@@ -209,7 +209,7 @@ _dump("Case 15: Or(A,B) + out + branch(Mode)", pyrung_to_ladder(logic, mapping))
 
 # ── Case 16: 3-OR + branch ──
 with Program() as logic:
-    with Rung(Or(A, B, C)):
+    with rung(Or(A, B, C)):
         out(Y1)
         with branch(Mode):
             out(Y2)
@@ -219,7 +219,7 @@ _dump("Case 16: Or(A,B,C) + out + branch(Mode)", pyrung_to_ladder(logic, mapping
 
 # ── Case 17: OR + two branches ──
 with Program() as logic:
-    with Rung(Or(A, B)):
+    with rung(Or(A, B)):
         out(Y1)
         with branch(Mode):
             out(Y2)
@@ -231,7 +231,7 @@ _dump("Case 17: Or(A,B) + out + branch(M1) + branch(M2)", pyrung_to_ladder(logic
 
 # ── Case 18: OR + branch + trailing out ──
 with Program() as logic:
-    with Rung(Or(A, B)):
+    with rung(Or(A, B)):
         out(Y1)
         with branch(Mode):
             out(Y2)
@@ -242,7 +242,7 @@ _dump("Case 18: Or(A,B) + out + branch(Mode) + out", pyrung_to_ladder(logic, map
 
 # ── Case 19: OR + branch-first (no leading instruction) ──
 with Program() as logic:
-    with Rung(Or(A, B)):
+    with rung(Or(A, B)):
         with branch(Mode):
             out(Y1)
         with branch(Mode2):

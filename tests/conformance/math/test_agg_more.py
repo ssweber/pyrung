@@ -38,7 +38,7 @@ The cases own DD41..DD56, DS4318..DS4321, DF170..DF191, DH61..DH66, C522..C526 a
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, latch, math, reset, system
+from pyrung.core import copy, fill, latch, math, reset, rung, system
 from pyrung.core.expression import randint
 from tests.conformance.memory import c, dd, df, dh, ds
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
@@ -48,17 +48,17 @@ SC43 = system.fault.out_of_range
 
 
 def prove_sum_int_wrap(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(32767, ds[4318])
         copy(1, ds[4319])
         math(ds.select(4318, 4319).sum(), slot.Result1)
     flag_bit(slot, SC43, slot.Result2, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(2147483647, dd[41])
         copy(1, dd[42])
         math(dd.select(41, 42).sum(), dd[43])
     flag_bit(slot, SC43, slot.Result2, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(ds.select(4318, 4319).sum(), dd[44])
         copy(0xFFFF, dh[61])
         copy(1, dh[62])
@@ -77,7 +77,7 @@ def init_sum_int_wrap(slot):
 
 
 def prove_sum_bits(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         latch(c[522])
         latch(c[524])
         latch(c[525])
@@ -95,7 +95,7 @@ def init_sum_bits(slot):
 
 
 def prove_agg_signed(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-5, ds[4320])
         copy(3, ds[4321])
         math(ds.select(4320, 4321).max(), slot.Result1)
@@ -110,9 +110,9 @@ def prove_agg_signed(slot):
         copy(0xFFFF, dh[64])
         copy(0xFFFF, dh[65])
         math(dh.select(64, 65).mean(), dh[66])
-    with Rung(*once(slot), dd[47] == 3):
+    with rung(*once(slot), dd[47] == 3):
         math(slot.Result3 + 10, slot.Result3)
-    with Rung(*once(slot), dd[48] == -100000):
+    with rung(*once(slot), dd[48] == -100000):
         math(slot.Result3 + 1, slot.Result3)
     class_of(slot, dh[66], [0xFFFF, 0x7FFF], slot.ErrorCode)
     finish(slot)
@@ -125,14 +125,14 @@ def init_agg_signed(slot):
 
 
 def _nan_class(slot, value, into):
-    with Rung(*once(slot), value == 1.0):
+    with rung(*once(slot), value == 1.0):
         copy(1, into)
-    with Rung(*once(slot), value != value):
+    with rung(*once(slot), value != value):
         copy(2, into)
 
 
 def prove_agg_nan_order(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(3.0e38, df[171])
         math(df[171] * 10, df[172])
         math(df[172] - df[172], df[173])
@@ -155,12 +155,12 @@ def init_agg_nan_order(slot):
 
 
 def _inf_class(slot, value, into):
-    with Rung(*once(slot), value > 3.4028235e38):
+    with rung(*once(slot), value > 3.4028235e38):
         copy(1, into)
 
 
 def prove_agg_inf(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(3.0e38, df[181])
         math(df[181] * 10, df[182])
         math(df[181] * -10, df[183])
@@ -171,19 +171,19 @@ def prove_agg_inf(slot):
         copy(3.0e38, df[188])
         copy(3.0e38, df[189])
         math(df.select(188, 189).mean(), df[190])
-    with Rung(*once(slot), df[184] != df[184]):
+    with rung(*once(slot), df[184] != df[184]):
         copy(2, slot.Result1)
     _inf_class(slot, df[187], slot.Result2)
-    with Rung(*once(slot), df[190] == 3.0e38):
+    with rung(*once(slot), df[190] == 3.0e38):
         copy(1, slot.Result3)
-    with Rung(*once(slot), df[190] > 3.4028235e38):
+    with rung(*once(slot), df[190] > 3.4028235e38):
         copy(2, slot.Result3)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(df.select(188, 189).sum(), df[191])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
-    with Rung(*once(slot), df[191] > 3.4028235e38):
+    with rung(*once(slot), df[191] > 3.4028235e38):
         copy(1, slot.Result4)
-    with Rung(*once(slot), df[191] == 3.4028235e38):
+    with rung(*once(slot), df[191] == 3.4028235e38):
         copy(2, slot.Result4)
     finish(slot)
 
@@ -194,22 +194,22 @@ def init_agg_inf(slot):
 
 def prove_rand_sites(slot):
     count_scans(slot)
-    with Rung(slot.Scratch == 1):
+    with rung(slot.Scratch == 1):
         copy(5, dd[51])
         copy(5, dd[52])
-    with Rung(slot.Scratch <= 8, slot.Scratch != 0):
+    with rung(slot.Scratch <= 8, slot.Scratch != 0):
         math(randint(1, 30000), dd[53])
         math(randint(1, 30000), dd[54])
         math(randint(1, 30000) - randint(1, 30000), dd[55])
-    with Rung(slot.Scratch <= 8, slot.Scratch != 0, dd[53] == dd[54]):
+    with rung(slot.Scratch <= 8, slot.Scratch != 0, dd[53] == dd[54]):
         math(slot.Result1 + 1, slot.Result1)
-    with Rung(slot.Scratch >= 2, slot.Scratch <= 8, dd[53] != dd[56]):
+    with rung(slot.Scratch >= 2, slot.Scratch <= 8, dd[53] != dd[56]):
         math(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Scratch <= 8, slot.Scratch != 0, dd[55] == 0):
+    with rung(slot.Scratch <= 8, slot.Scratch != 0, dd[55] == 0):
         math(slot.Result3 + 1, slot.Result3)
-    with Rung():
+    with rung():
         copy(dd[53], dd[56])
-    with Rung(slot.Scratch == 4):
+    with rung(slot.Scratch == 4):
         copy(9, dd[51])
         copy(9, dd[52])
         math(randint(dd[51], dd[52]), slot.Result4)

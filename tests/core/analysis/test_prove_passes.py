@@ -9,13 +9,13 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     call,
     copy,
     math,
     out,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -41,11 +41,11 @@ def _discovery_program() -> Program:
     dump_mode = Bool("DumpMode")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(step, stored_step)
-        with Rung():
+        with rung():
             copy(threshold_in, stored_threshold)
-        with Rung(stored_step > stored_threshold):
+        with rung(stored_step > stored_threshold):
             out(dump_mode)
 
     return logic
@@ -75,7 +75,7 @@ class TestIndividualPasses:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(sensor):
+            with rung(sensor):
                 out(alarm)
 
         ctx = _PassContext(program=logic)
@@ -109,13 +109,13 @@ class TestScanLocalStateElision:
         table = Block("Table", TagType.INT, 1, 2)
 
         with Program(strict=False) as logic:
-            with Rung(~init_done):
+            with rung(~init_done):
                 copy(10, table[1])
                 copy(20, table[2])
                 copy(1, init_done)
-            with Rung():
+            with rung():
                 math(selector, idx)
-            with Rung():
+            with rung():
                 copy(table[idx], tmp)
 
         reduced = _elide_stateful_dims(
@@ -131,11 +131,11 @@ class TestScanLocalStateElision:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(0, idx)
-            with Rung():
+            with rung():
                 math(idx + 1, idx)
-            with Rung(idx == 1):
+            with rung(idx == 1):
                 out(flag)
 
         reduced = _elide_stateful_dims(logic, {"Idx": (0, 1, 2)}, {})
@@ -149,16 +149,16 @@ class TestScanLocalStateElision:
 
         @subroutine("worker", strict=False)
         def worker():
-            with Rung(req):
+            with rung(req):
                 copy(1, pulse)
-            with Rung(pulse == 1):
+            with rung(pulse == 1):
                 copy(0, pulse)
                 return_early()
-            with Rung():
+            with rung():
                 copy(0, pulse)
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 call(worker)
 
         reduced = _elide_stateful_dims(logic, {"Pulse": (0, 1)}, {"Req": (False, True)})
@@ -175,13 +175,13 @@ class TestScanLocalStateElision:
         seen = Int("Seen", choices={0: "No", 1: "Yes"})
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(0, seen)
-            with Rung(req_a):
+            with rung(req_a):
                 copy(1, pulse)
-            with Rung(req_b):
+            with rung(req_b):
                 copy(1, pulse)
-            with Rung(pulse == 1):
+            with rung(pulse == 1):
                 copy(1, seen)
                 copy(0, pulse)
 
@@ -200,13 +200,13 @@ class TestScanLocalStateElision:
         table = Block("Table", TagType.INT, 10, 11)
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(0, outv)
-            with Rung():
+            with rung():
                 copy(7, table[11])
-            with Rung():
+            with rung():
                 copy(table[selector], tmp)
-            with Rung(tmp != 0):
+            with rung(tmp != 0):
                 copy(tmp, outv)
                 copy(0, tmp)
 
@@ -224,9 +224,9 @@ class TestScanLocalStateElision:
         stored = Int("Stored", choices={0: "No", 1: "Yes"})
 
         with Program(strict=False) as logic:
-            with Rung(tmp == 1):
+            with rung(tmp == 1):
                 copy(1, stored)
-            with Rung():
+            with rung():
                 copy(inp, tmp)
 
         reduced = _elide_stateful_dims(
@@ -252,13 +252,13 @@ class TestFunctionalDepAdvice:
         table = Block("Table", TagType.INT, 1, 8)
 
         with Program() as logic:
-            with Rung(adv):
+            with rung(adv):
                 copy(3, req)
-            with Rung():
+            with rung():
                 math(req + 2, scratch)
-            with Rung():
+            with rung():
                 copy(table[scratch], dest)
-            with Rung(dest != 0):
+            with rung(dest != 0):
                 copy(dest, req)  # rewrites Req AFTER Scratch's writer (loop shape)
 
         return logic

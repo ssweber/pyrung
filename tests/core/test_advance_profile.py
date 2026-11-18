@@ -9,7 +9,6 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     count_down,
@@ -19,6 +18,7 @@ from pyrung.core import (
     on_delay,
     out,
     rise,
+    rung,
     shift,
     time_drum,
     time_event_drum,
@@ -41,7 +41,7 @@ def test_on_delay_describes_one_hold_to_the_accumulator_boundary() -> None:
     timer = Timer.clone("WD")
     run = Bool("run", external=True)
     with Program() as program:
-        with Rung(run):
+        with rung(run):
             on_delay(timer, 2000, "ms")
 
     profile = _only_profile(program)
@@ -68,7 +68,7 @@ def test_off_delay_advances_while_its_enable_is_false() -> None:
     timer = Timer.clone("TOF")
     run = Bool("run", external=True)
     with Program() as program:
-        with Rung(run):
+        with rung(run):
             off_delay(timer, 1000, "ms")
 
     profile = _only_profile(program)
@@ -85,7 +85,7 @@ def test_done_settlement_uses_the_visible_done_boundary() -> None:
     timer = Timer.clone("Settle")
     run = Bool("run", external=True)
     with Program() as program:
-        with Rung(run):
+        with rung(run):
             on_delay(timer, 20, "ms")
 
     profile = _only_profile(program)
@@ -108,7 +108,7 @@ def test_edge_counter_requests_a_pulse_and_keeps_one_bounded_frontier() -> None:
     reset = Bool("reset", external=True)
     clock = Bool("clock", external=True)
     with Program() as program:
-        with Rung(rise(clock)):
+        with rung(rise(clock)):
             count_up(Counter[1], preset=7).reset(reset)
 
     profile = _only_profile(program)
@@ -132,7 +132,7 @@ def test_level_counter_requests_a_pulse() -> None:
     reset = Bool("reset", external=True)
     clock = Bool("clock", external=True)
     with Program() as program:
-        with Rung(clock):
+        with rung(clock):
             count_up(Counter[1], preset=7).reset(reset)
 
     profile = _only_profile(program)
@@ -148,7 +148,7 @@ def test_count_down_is_done_at_its_preset() -> None:
     reset = Bool("reset", external=True)
     clock = Bool("clock", external=True)
     with Program() as program:
-        with Rung(clock):
+        with rung(clock):
             count_down(Counter[1], preset=4).reset(reset)
 
     profile = _only_profile(program)
@@ -171,7 +171,7 @@ def test_count_down_tag_preset_boundary_reads_the_tag() -> None:
     clock = Bool("clock", external=True)
     preset = Dint("Preset", external=True)
     with Program() as program:
-        with Rung(clock):
+        with rung(clock):
             count_down(Counter[1], preset=preset).reset(reset)
 
     profile = _only_profile(program)
@@ -196,7 +196,7 @@ def test_a_negative_literal_preset_keeps_its_sign() -> None:
     )
     for build, owner in owners:
         with Program() as program:
-            with Rung(run):
+            with rung(run):
                 build()
         profile = _only_profile(program)
         assert profile is not None
@@ -205,7 +205,7 @@ def test_a_negative_literal_preset_keeps_its_sign() -> None:
 
     # A run agrees: the counter is done at Acc 0, before any count.
     with Program() as program:
-        with Rung(run):
+        with rung(run):
             count_up(Counter[1], preset=-5).reset(reset)
     plc = PLC(program, dt=0.010)
     plc.step()
@@ -217,7 +217,7 @@ def test_plain_output_has_no_advance_profile() -> None:
     source = Bool("source", external=True)
     result = Bool("result")
     with Program() as program:
-        with Rung(source):
+        with rung(source):
             out(result)
     assert _only_profile(program) is None
 
@@ -234,7 +234,7 @@ def test_event_drum_describes_only_the_next_event_boundary() -> None:
     done = Bool("Done")
     y1, y2 = Bool("Y1"), Bool("Y2")
     with Program() as program:
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[y1, y2],
                 events=[e1, e2, e3],
@@ -269,7 +269,7 @@ def test_time_drum_retraces_at_each_step_boundary() -> None:
     done = Bool("DrumDone")
     output = Bool("Y1")
     with Program() as program:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[output],
                 presets=[50, 60, 70],
@@ -333,7 +333,7 @@ def test_a_drum_with_its_flag_on_waits_for_the_reset_that_frees_it() -> None:
     )
     for drum in drums:
         with Program() as program:
-            with Rung(enable):
+            with rung(enable):
                 drum().reset(reset)
         profile = _only_profile(program)
         assert profile is not None
@@ -356,7 +356,7 @@ def test_time_drum_uses_the_step_boundary_when_acc_will_reset() -> None:
     done = Bool("DrumDone")
     output = Bool("Y1")
     with Program() as program:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[output],
                 presets=[50, 100],
@@ -384,7 +384,7 @@ def test_shift_establishes_one_more_prefix_bit_then_retraces() -> None:
     bits = Block("AdvanceBits", TagType.BOOL, 1, 3)
     selected = bits.select(1, 3)
     with Program() as program:
-        with Rung(data):
+        with rung(data):
             shift(selected).clock(clock).reset(reset)
 
     profile = _only_profile(program)
@@ -406,7 +406,7 @@ def _off_delay_at_rest() -> tuple[Program, Timer, Bool]:
     timer = Timer.clone("TOF")
     run = Bool("run", external=True)
     with Program() as program:
-        with Rung(run):
+        with rung(run):
             off_delay(timer, 50, "ms")
     return program, timer, run
 

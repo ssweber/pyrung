@@ -14,7 +14,6 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     Timer,
     copy,
     latch,
@@ -22,6 +21,7 @@ from pyrung.core import (
     on_delay,
     out,
     rise,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -47,11 +47,11 @@ class TestThresholdAbsorptionIndirectCopy:
         midpoint = Bool("MidpointFlag")
 
         with Program(strict=False) as logic:
-            with Rung(run):
+            with rung(run):
                 on_delay(t1, preset=100)
-            with Rung():
+            with rung():
                 copy(t1.Acc, shadow)
-            with Rung(shadow >= 50):
+            with rung(shadow >= 50):
                 out(midpoint)
 
         plc = PLC(logic, dt=1.0)
@@ -81,7 +81,7 @@ class TestBackwardPropagationNumericEnumeration:
         valve = Bool("Valve")
 
         with Program(strict=False) as logic:
-            with Rung(sensor > setpoint):
+            with rung(sensor > setpoint):
                 out(valve)
 
         result = _classify_dimensions(logic)
@@ -98,9 +98,9 @@ class TestBackwardPropagationNonInvertible:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(sensor * sensor, squared)
-            with Rung(squared >= 100):
+            with rung(squared >= 100):
                 out(alarm)
 
         plc = PLC(logic, dt=0.010)
@@ -120,11 +120,11 @@ class TestBackwardPropagationMultiHop:
         high = Bool("High")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(level, stored)
-            with Rung():
+            with rung():
                 math(stored + 10, shifted)
-            with Rung(shifted >= 85):
+            with rung(shifted >= 85):
                 out(high)
 
         plc = PLC(logic, dt=0.010)
@@ -143,9 +143,9 @@ class TestBackwardPropagationElisionPromotion:
         result_tag = Bool("Result")
 
         with Program(strict=False) as logic:
-            with Rung(mode >= 5):
+            with rung(mode >= 5):
                 copy(mode, value)
-            with Rung(value >= 10):
+            with rung(value >= 10):
                 out(result_tag)
 
         plc = PLC(logic, dt=0.010)
@@ -166,9 +166,9 @@ class TestBackwardPropagationWordBitwise:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(mask & 0x00FF, masked)
-            with Rung(masked >= 16):
+            with rung(masked >= 16):
                 out(flag)
 
         plc = PLC(logic, dt=0.010)
@@ -186,7 +186,7 @@ class TestBackwardPropagationIntEquality:
         match = Bool("Match")
 
         with Program(strict=False) as logic:
-            with Rung(selector == 42):
+            with rung(selector == 42):
                 out(match)
 
         plc = PLC(logic, dt=0.010)
@@ -217,11 +217,11 @@ class TestFastForwardChainedTimers:
         both = Bool("Both")
 
         with Program(strict=False) as logic:
-            with Rung(run):
+            with rung(run):
                 on_delay(t1, preset=100)
-            with Rung(t1.Done):
+            with rung(t1.Done):
                 on_delay(t2, preset=100)
-            with Rung(t1.Done, t2.Done):
+            with rung(t1.Done, t2.Done):
                 out(both)
 
         plc = PLC(logic, dt=1.0)
@@ -250,9 +250,9 @@ class TestElisionNonBool:
         result_tag = Int("Result")
 
         with Program(strict=False) as logic:
-            with Rung(mode == 7):
+            with rung(mode == 7):
                 copy(temp, result_tag)
-            with Rung():
+            with rung():
                 math(sensor + 10, temp)
 
         plc = PLC(logic, dt=0.010)
@@ -283,9 +283,9 @@ class TestElisionOneshotInteraction:
         result_tag = Bool("Result")
 
         with Program(strict=False) as logic:
-            with Rung(condition):
+            with rung(condition):
                 out(x, oneshot=True)
-            with Rung(x):
+            with rung(x):
                 out(result_tag)
 
         plc = PLC(logic, dt=0.010)
@@ -317,7 +317,7 @@ class TestCompiledKernelOverflowParity:
         c = Int("C", default=32760)
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(c + 10, c)
 
         plc = PLC(logic, dt=0.010)
@@ -356,9 +356,9 @@ class TestExclusiveInputsCrossScan:
         bad = Bool("Bad")
 
         with Program(strict=False) as logic:
-            with Rung(rise(a)):
+            with rung(rise(a)):
                 latch(latched)
-            with Rung(latched, c):
+            with rung(latched, c):
                 out(bad)
 
         plc = PLC(logic, dt=0.010)
@@ -392,10 +392,10 @@ class TestOteInForLoopClassification:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 with ForLoop(count_tag):
                     out(light)
-            with Rung(light):
+            with rung(light):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -416,7 +416,7 @@ class TestOteInForLoopClassification:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 with ForLoop(count_tag):
                     out(light)
 
@@ -442,10 +442,10 @@ class TestOteInForLoopClassification:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 with ForLoop(3):
                     out(light)
-            with Rung(light):
+            with rung(light):
                 out(alarm)
 
         result = _classify_dimensions(logic)

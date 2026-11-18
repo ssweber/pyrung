@@ -3,7 +3,7 @@
 CompiledPLC state does not hold that slot.
 """
 
-from pyrung.core import PLC, Block, CompiledPLC, Dint, Program, Rung, TagType, search, Bool
+from pyrung.core import PLC, Block, CompiledPLC, Dint, Program, rung, TagType, search, Bool
 
 
 def test_reproducer():
@@ -13,7 +13,7 @@ def test_reproducer():
     DS[1]  # noqa: B018  (the touch is the case)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             search(DS.select(6, 7) != -66, result=D0, found=B1)
 
     interpreted = PLC(logic, dt=0.010)

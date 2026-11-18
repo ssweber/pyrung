@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, reset, search
+from pyrung.core import copy, fill, math, reset, rung, search
 from tests.conformance.memory import c, dh, ds
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -35,27 +35,27 @@ def prove_oneshot_against_dd_result(slot: Any) -> None:
     moving, fixed = dh.select(11, 12), dh.select(13, 14)
     found = [c[n] for n in range(201, 205)]
     results = [ds[3931], ds[3916], ds[3932], ds[3917]]
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(9, dh[11])
         copy(9, dh[13])
     running = (slot.Cmd != 0, slot.Scratch >= 2)
-    with Rung(*running):
+    with rung(*running):
         search(moving == 9, result=results[0], found=found[0], oneshot=True)
-    with Rung(*running):
+    with rung(*running):
         search(moving == 9, result=results[1], found=found[1], oneshot=True)
-    with Rung(*running):
+    with rung(*running):
         search(fixed == 9, result=results[2], found=found[2])
-    with Rung(*running):
+    with rung(*running):
         search(fixed == 9, result=results[3], found=found[3])
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(0, dh[11])
         copy(9, dh[12])
     fields = (slot.Result1, slot.Result2, slot.Result3, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch == READ_SCAN):
+    with rung(slot.Cmd != 0, slot.Scratch == READ_SCAN):
         for result, field in zip(results, fields, strict=True):
             copy(result, field)
     for k, bit in enumerate(found):
-        with Rung(slot.Cmd != 0, slot.Scratch == READ_SCAN, bit):
+        with rung(slot.Cmd != 0, slot.Scratch == READ_SCAN, bit):
             math(slot.ErrorCode + (1 << k), slot.ErrorCode)
     done(slot)
 

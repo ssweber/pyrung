@@ -259,7 +259,7 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
     to finalize and add the instruction.
 
     Example:
-        with Rung(DataBit):
+        with rung(DataBit):
             shift(C.select(2, 7)).clock(ClockBit).reset(ResetBit)
     """
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
@@ -882,7 +882,7 @@ def count_up(
     True.  Done is True while acc >= preset.
 
     Example:
-        with Rung(PartSensor):
+        with rung(PartSensor):
             count_up(Counter[1], preset=100).reset(ResetBtn)
 
     A box with pins: it ends its rung. Requires .reset() chaining.
@@ -922,7 +922,7 @@ def count_down(
     ``copy()`` to count down to it.
 
     Example:
-        with Rung(Dispense):
+        with rung(Dispense):
             count_down(Counter[1], preset=-25).reset(Reload)
 
     A box with pins: it ends its rung. Requires .reset() chaining.
@@ -1097,7 +1097,7 @@ def on_delay(
     Accumulates time while rung is true.
 
     Example:
-        with Rung(MotorRunning):
+        with rung(MotorRunning):
             on_delay(Timer[1], preset=5000)                 # TON keyword
             on_delay(Timer[1], 5000)                        # TON positional
             on_delay(Timer[1], 5, "s")                      # TON 5 seconds
@@ -1145,7 +1145,7 @@ def off_delay(
     then done bit goes False. Auto-resets when re-enabled.
 
     Example:
-        with Rung(MotorCommand):
+        with rung(MotorCommand):
             off_delay(Timer[2], preset=10000)
             off_delay(Timer[2], 10, "s")       # 10 seconds
 
@@ -1230,7 +1230,7 @@ def toggle(target: Tag | ImmediateRef) -> Tag | ImmediateRef:
     value while the rung is false.
 
     Example:
-        with Rung(PushButton):
+        with rung(PushButton):
             toggle(Light)
             toggle(Y[1].immediate)
     """
@@ -1256,7 +1256,7 @@ def debounce(
     false for the ``off`` time.  CLICK requires both sides.
 
     Example:
-        with Rung(LevelSwitch):
+        with rung(LevelSwitch):
             debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
 
     Args:
@@ -1303,7 +1303,7 @@ def flasher(
     turns it off at once.
 
     Example:
-        with Rung(Alarm):
+        with rung(Alarm):
             flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 
     Args:
@@ -1352,7 +1352,7 @@ def timed(
     ``preset`` and then follows the rung.
 
     Example:
-        with Rung(CallButton):
+        with rung(CallButton):
             timed(Horn, Timer[5], 1000)
             timed(Lamp, Timer[6], 3, "sec", maintained=True)
 

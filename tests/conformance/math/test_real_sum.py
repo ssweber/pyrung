@@ -40,7 +40,7 @@ The cases own DF70..DF100 and DF142..DF150.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math
+from pyrung.core import copy, fill, math, rung
 from tests.conformance.memory import df
 from tests.conformance.probe_kit import finish, once
 
@@ -50,7 +50,7 @@ def _orderings(slot, first, big, fields):
     orderings = ((big, 1.0, -big), (1.0, big, -big), (big, -big, 1.0))
     address = first
     for values, field in zip(orderings, fields, strict=True):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             copy(values[0], df[address])
             copy(values[1], df[address + 1])
             copy(values[2], df[address + 2])
@@ -78,7 +78,7 @@ def init_f64_row(slot):
 
 
 def prove_sum_absorbs(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(16777216.0, df[94])
         copy(1.0, df[95])
         copy(1.0, df[96])
@@ -92,7 +92,7 @@ def init_sum_absorbs(slot):
 
 
 def prove_math_keeps_the_one(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1.0e8, df[142])
         copy(1.0e30, df[143])
         math(df[142] + 1.0 - df[142], slot.Result1)

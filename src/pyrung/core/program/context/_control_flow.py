@@ -32,7 +32,7 @@ class Subroutine:
 
     Example:
         with subroutine("my_sub"):
-            with Rung():
+            with rung():
                 out(Light)
     """
 
@@ -53,7 +53,7 @@ class Subroutine:
         Example:
             @subroutine("init")
             def init_sequence():
-                with Rung():
+                with rung():
                     out(Light)
         """
         if self._strict:
@@ -79,11 +79,11 @@ class SubroutineFunc:
     Example:
         @subroutine("init")
         def init_sequence():
-            with Rung():
+            with rung():
                 out(Light)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call(init_sequence)
     """
 
@@ -120,11 +120,11 @@ def subroutine(name: str, *, strict: bool = True) -> Subroutine:
 
     Example:
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(Light)
     """
     return Subroutine(name, strict=strict)
@@ -184,7 +184,7 @@ class ForLoop:
         return self
 
     def _add_body_rung(self, rung: RungLogic) -> None:
-        """Attach a ``with Rung(...)`` written directly in this loop's body."""
+        """Attach a ``with rung(...)`` written directly in this loop's body."""
         assert self._capture_rung is not None
         self._body_rungs.append((len(self._capture_rung._instructions), rung))
 
@@ -268,7 +268,7 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
     """Create a repeated block context.
 
     A bare instruction in the body is an always-true body rung.  A body rung
-    with contacts is written as ``with Rung(...)`` inside the loop.  Its
+    with contacts is written as ``with rung(...)`` inside the loop.  Its
     contacts are evaluated on every iteration.  Loops nest up to three deep,
     each with its own ``loop.idx``.
 
@@ -279,10 +279,10 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
     constant is read whole, so ``forloop(70000)`` runs 70000.
 
     Example:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(10) as loop:
                 copy(Source[loop.idx + 1], Dest[loop.idx + 1])
-                with Rung(Fault):
+                with rung(Fault):
                     break_loop()
     """
     source_file, source_line = _capture_source(depth=2)
@@ -296,7 +296,7 @@ class Branch:
     the branch's own conditions are true.
 
     Example:
-        with Rung(Step == 0):
+        with rung(Step == 0):
             out(Light1)
             with branch(AutoMode):  # Only executes if Step==0 AND AutoMode
                 out(Light2)
@@ -395,7 +395,7 @@ def branch(*conditions: ConditionTerm) -> Branch:
     the branch's own conditions are true.
 
     Example:
-        with Rung(Step == 0):
+        with rung(Step == 0):
             out(Light1)
             with branch(AutoMode):  # Only executes if Step==0 AND AutoMode
                 out(Light2)

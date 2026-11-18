@@ -31,7 +31,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, on_delay
+from pyrung.core import copy, on_delay, rung
 from tests.conformance.memory import ClickTimer
 from tests.conformance.scans import deadline
 
@@ -50,17 +50,17 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 
 def prove_ton_counts_on_from_written_td(slot: Any) -> None:
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(TIMER, PRESET)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 1):
+    with rung(slot.Cmd != 0, slot.Scratch >= 1):
         on_delay(CLOCK, 5000)
-    with Rung(*_step(slot, 2)):
+    with rung(*_step(slot, 2)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 1), TIMER.Done):
+    with rung(*_step(slot, 1), TIMER.Done):
         copy(CLOCK.Acc, slot.Result1)
         copy(TIMER.Acc, slot.Result2)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), TIMER.Acc >= WRITE_AT):
+    with rung(*_step(slot, 0), TIMER.Acc >= WRITE_AT):
         copy(WRITTEN, TIMER.Acc)
         copy(1, slot.Scratch)
     deadline(slot, DEADLINE, DEADLINE_MS)

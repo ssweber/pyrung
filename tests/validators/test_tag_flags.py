@@ -13,10 +13,10 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     copy,
     latch,
     out,
+    rung,
 )
 from pyrung.core.memory_block import Block
 from pyrung.core.structure import Field, udt
@@ -229,7 +229,7 @@ class TestReadonlyWriteValidator:
         Button = Bool("Button")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         report = validate_readonly_writes(prog)
@@ -244,7 +244,7 @@ class TestReadonlyWriteValidator:
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung(Sensor):
+            with rung(Sensor):
                 out(Light)
 
         report = validate_readonly_writes(prog)
@@ -258,7 +258,7 @@ class TestReadonlyWriteValidator:
         Setpoint = Int("Setpoint", readonly=True)
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(42, Setpoint)
 
         report = validate_readonly_writes(prog)
@@ -274,7 +274,7 @@ class TestReadonlyWriteValidator:
         Trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(Flag)
 
         report = validate_readonly_writes(prog)
@@ -297,7 +297,7 @@ class TestChoicesViolationValidator:
         Mode = Int("Mode", choices={0: "Off", 1: "On", 2: "Auto"})
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(99, Mode)
 
         report = validate_choices(prog)
@@ -313,7 +313,7 @@ class TestChoicesViolationValidator:
         Mode = Int("Mode", choices={0: "Off", 1: "On"})
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(1, Mode)
 
         report = validate_choices(prog)
@@ -326,7 +326,7 @@ class TestChoicesViolationValidator:
         Cmd = Int("Cmd")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(Cmd, Mode)
 
         report = validate_choices(prog)
@@ -345,7 +345,7 @@ class TestFinalWritersValidator:
         Counter = Int("Counter", final=True)
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(0, Counter)
 
         report = validate_final_writers(prog)
@@ -361,9 +361,9 @@ class TestFinalWritersValidator:
         Button = Bool("Button")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(0, Total)
-            with Rung(Button):
+            with rung(Button):
                 copy(100, Total)
 
         report = validate_final_writers(prog)
@@ -387,9 +387,9 @@ class TestFinalWritersValidator:
         Button = Bool("Button")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(0, Counter)
-            with Rung(Button):
+            with rung(Button):
                 copy(100, Counter)
 
         report = validate_final_writers(prog)
@@ -409,7 +409,7 @@ class TestStuckBitsReadonlySkip:
         Trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(Alarm)
 
         report = validate_stuck_bits(prog)
@@ -424,7 +424,7 @@ class TestStuckBitsExternalSkip:
         Trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(HmiCmd)
 
         report = validate_stuck_bits(prog)
@@ -437,7 +437,7 @@ class TestStuckBitsExternalSkip:
         Trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(Light)
 
         report = validate_stuck_bits(prog)
@@ -456,7 +456,7 @@ class TestRecoversExternal:
         Trigger = Bool("Trigger")
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(HmiCmd)
 
         with PLC(prog, dt=0.1) as plc:

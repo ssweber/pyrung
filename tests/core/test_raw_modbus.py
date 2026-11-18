@@ -7,7 +7,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Dint, Int, Program, Rung, TagType
+from pyrung.core import PLC, Block, Bool, Dint, Int, Program, TagType, rung
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
@@ -222,7 +222,7 @@ class TestCLICKV4TargetForms:
 
         target = ModbusRtuTarget("vfd", device_id=0)
         with Program():
-            with Rung():
+            with rung():
                 send(target=target, remote_start=ModbusAddress(400001), source=Int("Out"))
                 with pytest.raises(
                     ValueError, match="cannot read from device_id 0 on an RTU target"
@@ -419,7 +419,7 @@ class TestDslConstruction:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100),
@@ -451,7 +451,7 @@ class TestDslConstruction:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_RTU_TARGET,
                     remote_start="DS1",
@@ -477,7 +477,7 @@ class TestDslConstruction:
 
         with pytest.raises(ValueError, match="cannot write to"):
             with Program():
-                with Rung(Enable):
+                with rung(Enable):
                     mod.send(
                         target=_TCP_TARGET,
                         remote_start=ModbusAddress(0x100, RegisterType.INPUT),
@@ -500,7 +500,7 @@ class TestDslConstruction:
 
         with pytest.raises(ValueError, match="cannot write to"):
             with Program():
-                with Rung(Enable):
+                with rung(Enable):
                     mod.send(
                         target=_TCP_TARGET,
                         remote_start=ModbusAddress(0x100, RegisterType.DISCRETE_INPUT),
@@ -527,7 +527,7 @@ class TestDslConstruction:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.receive(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100, RegisterType.INPUT),
@@ -554,7 +554,7 @@ class TestDslConstruction:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.receive(
                     target="my_plc",
                     remote_start=ModbusAddress(0x100),
@@ -592,7 +592,7 @@ class TestDslConstruction:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100),
@@ -640,7 +640,7 @@ class TestRawExecuteStateMachine:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
@@ -692,7 +692,7 @@ class TestRawExecuteStateMachine:
         Local = Block("Local", TagType.INT, 1, 2)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.receive(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
@@ -737,7 +737,7 @@ class TestRawExecuteStateMachine:
         Dest = Dint("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.receive(
                     target=target,
                     remote_start=ModbusAddress(0x100),
@@ -781,7 +781,7 @@ class TestRawExecuteStateMachine:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100),
@@ -828,7 +828,7 @@ class TestRawExecuteStateMachine:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_TCP_TARGET,
                     remote_start=ModbusAddress(0x100),
@@ -875,7 +875,7 @@ class TestRawExecuteStateMachine:
         ExCode = Int("ExCode")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 mod.send(
                     target=_RTU_TARGET,
                     remote_start=ModbusAddress(0x2000, RegisterType.HOLDING),

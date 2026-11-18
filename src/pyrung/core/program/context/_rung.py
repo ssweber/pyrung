@@ -37,10 +37,10 @@ class Rung:
     """Context manager for defining a rung.
 
     Example:
-        with Rung(Button):
+        with rung(Button):
             out(Light)
 
-        with Rung(Step == 0):
+        with rung(Step == 0):
             out(Light1)
             copy(1, Step, oneshot=True)
     """
@@ -99,7 +99,7 @@ class Rung:
         execution scope (main or the current subroutine).
 
         Returns:
-            self, for chaining: ``with Rung(B).continued(): ...``
+            self, for chaining: ``with rung(B).continued(): ...``
         """
         if self._loop is not None:
             raise RuntimeError("continued() is not permitted on a forloop body rung")
@@ -180,13 +180,13 @@ _MAX_COMMENT_LENGTH = 1400
 def comment(text: str) -> None:
     """Attach a comment to the next rung.
 
-    The comment is consumed by the immediately following ``Rung()`` constructor.
+    The comment is consumed by the immediately following ``rung()`` constructor.
     Must be called inside a ``Program`` context.
 
     Example::
 
         comment("UnitMode Change")
-        with Rung(C_UnitModeChgRequest):
+        with rung(C_UnitModeChgRequest):
             copy(1, C_UnitModeChgRequestBool, oneshot=True)
     """
     prog = Program._current()

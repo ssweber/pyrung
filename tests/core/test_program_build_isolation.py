@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from pyrung.core import Bool, Program, Rung, out
+from pyrung.core import Bool, Program, out, rung
 
 
 def _targets(program: Program) -> list[str]:
@@ -14,12 +14,12 @@ def _targets(program: Program) -> list[str]:
 
 def test_a_program_built_inside_another_gives_the_outer_one_back():
     with Program(strict=False) as outer:
-        with Rung():
+        with rung():
             out(Bool("Before"))
         with Program(strict=False) as inner:
-            with Rung():
+            with rung():
                 out(Bool("Inner"))
-        with Rung():
+        with rung():
             out(Bool("After"))
     assert _targets(outer) == ["Before", "After"]
     assert _targets(inner) == ["Inner"]
@@ -32,7 +32,7 @@ def test_two_threads_build_two_programs_at_once():
 
     def build_a() -> None:
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 a_open.set()
                 assert b_open.wait(5)
                 out(Bool("A"))
@@ -42,7 +42,7 @@ def test_two_threads_build_two_programs_at_once():
     def build_b() -> None:
         assert a_open.wait(5)
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 b_open.set()
                 assert a_wrote.wait(5)
                 out(Bool("B"))

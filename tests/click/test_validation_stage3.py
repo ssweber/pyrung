@@ -28,7 +28,6 @@ from pyrung.core import Bool, Char, Dint, Int, Timer, to_ascii, to_binary, to_te
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
 from pyrung.core.program import (
     Program,
-    Rung,
     blockcopy,
     copy,
     event_drum,
@@ -38,6 +37,7 @@ from pyrung.core.program import (
     out,
     pack_text,
     reset,
+    rung,
     time_drum,
 )
 
@@ -77,7 +77,7 @@ def _modbus_codes(verb: str, *, dest="ds", flag="c", exception="ds", **instructi
     ]
 
     def logic():
-        with Rung():
+        with rung():
             if verb == "receive":
                 receive(
                     target=_TARGET,
@@ -145,7 +145,7 @@ def test_a_status_bit_left_off_is_not_reported():
     data = Int("Data")
 
     def logic():
-        with Rung():
+        with rung():
             receive(target=_TARGET, remote_start="DS1", dest=data)
 
     report = validate_click_program(
@@ -159,7 +159,7 @@ def test_r6_non_writable_target_bank():
     target = Bool("Target")
 
     def logic():
-        with Rung():
+        with rung():
             out(target)
 
     prog = _build_program(logic)
@@ -174,7 +174,7 @@ def test_r6_sc_subset_address_aware():
     bad = Bool("Bad")
 
     def logic():
-        with Rung():
+        with rung():
             out(ok)
             out(bad)
 
@@ -187,7 +187,7 @@ def test_r6_sc_subset_address_aware():
 
 def test_r7_timer_role_validation():
     def logic():
-        with Rung():
+        with rung():
             on_delay(Timer[1], preset=10)
             on_delay(Timer2, preset=10)
 
@@ -211,7 +211,7 @@ def test_r8_copy_family_incompatible_pair():
     dest = Int("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             copy(source, dest)
 
     prog = _build_program(logic)
@@ -226,7 +226,7 @@ def test_r8_copy_family_compatible_pair():
     dest = Bool("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             copy(source, dest)
 
     prog = _build_program(logic)
@@ -238,7 +238,7 @@ def test_r8_copy_family_compatible_pair():
 
 def test_r8_blockcopy_reports_each_incompatible_bank_pair_once():
     def logic():
-        with Rung():
+        with rung():
             blockcopy(x.select(1, 16), ds.select(1, 16))
 
     prog = _build_program(logic)
@@ -264,7 +264,7 @@ def test_validation_reuses_operand_resolutions_within_each_invocation(monkeypatc
     monkeypatch.setattr(click_resolve, "_resolve_direct_tag", count_direct_resolution)
 
     def logic():
-        with Rung():
+        with rung():
             blockcopy(ds.select(1, 16), dd.select(1, 16))
 
     prog = _build_program(logic)
@@ -280,7 +280,7 @@ def test_stage3_recurses_into_forloop_children_for_r6():
     target = Bool("Target")
 
     def logic():
-        with Rung():
+        with rung():
             with forloop(2):
                 out(target)
 
@@ -296,7 +296,7 @@ def test_stage3_recurses_into_forloop_children_for_r8():
     dest = Int("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             with forloop(2):
                 copy(source, dest)
 
@@ -311,7 +311,7 @@ def test_unmapped_target_emits_bank_unresolved():
     target = Bool("Target")
 
     def logic():
-        with Rung():
+        with rung():
             out(target)
 
     prog = _build_program(logic)
@@ -326,7 +326,7 @@ def test_profile_unavailable_still_reports_stage2_findings(monkeypatch):
     dest = Int("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             copy(a * 2, dest)
 
     prog = _build_program(logic)
@@ -343,7 +343,7 @@ def test_tagmap_validation_matches_direct():
     target = Bool("Target")
 
     def logic():
-        with Rung():
+        with rung():
             out(target)
 
     prog = _build_program(logic)
@@ -360,7 +360,7 @@ def test_pack_text_stage3_compatible_banks():
     dest = Int("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             pack_text(source, dest)
 
     prog = _build_program(logic)
@@ -374,7 +374,7 @@ def test_pack_text_stage3_incompatible_source_bank():
     dest = Int("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             pack_text(ds.select(1, 2), dest)
 
     prog = _build_program(logic)
@@ -394,7 +394,7 @@ def test_wrapped_copy_source_keeps_copy_context_rules():
     dest = Int("Dest")
 
     def logic():
-        with Rung():
+        with rung():
             copy(txt[pointer], dest, convert=to_value)
 
     prog = _build_program(logic)
@@ -419,7 +419,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     event2 = Bool("Event2")
 
     def logic():
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[out1, out2],
                 events=[event1, event2],
@@ -427,7 +427,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
                 current_step=step,
                 completion_flag=done,
             ).reset(reset).jump(jump, step=step).jog(jog)
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[out1, out2],
                 presets=[100, 200],
@@ -470,7 +470,7 @@ def test_drum_stage3_wrong_role_failures_are_reported():
     out1 = Bool("Out1")
 
     def logic():
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[out1],
                 events=[step > 0],
@@ -478,7 +478,7 @@ def test_drum_stage3_wrong_role_failures_are_reported():
                 current_step=step,
                 completion_flag=done,
             ).reset(reset)
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[out1],
                 presets=[100],
@@ -525,7 +525,7 @@ def test_time_drum_register_preset_validates_and_exports():
     preset_tag = Int("PresetTag")
 
     def logic():
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[out1],
                 presets=[preset_tag],
@@ -565,7 +565,7 @@ def test_event_drum_literal_jump_step_reports_tag_required():
     event1 = Bool("Event1")
 
     def logic():
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[out1],
                 events=[event1],
@@ -602,7 +602,7 @@ def test_time_drum_literal_jump_step_reports_tag_required():
     out1 = Bool("Out1")
 
     def logic():
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[out1],
                 presets=[100],
@@ -643,7 +643,7 @@ class TestConverterBankCompatibility:
         dest = Char("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_text())
 
         prog = _build_program(logic)
@@ -656,7 +656,7 @@ class TestConverterBankCompatibility:
         dest = Char("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_text())
 
         prog = _build_program(logic)
@@ -669,7 +669,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_text())
 
         prog = _build_program(logic)
@@ -682,7 +682,7 @@ class TestConverterBankCompatibility:
         dest = Char("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_binary)
 
         prog = _build_program(logic)
@@ -695,7 +695,7 @@ class TestConverterBankCompatibility:
         dest = Char("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_binary)
 
         prog = _build_program(logic)
@@ -708,7 +708,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -721,7 +721,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -734,7 +734,7 @@ class TestConverterBankCompatibility:
         dest = Char("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -747,7 +747,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_ascii)
 
         prog = _build_program(logic)
@@ -760,7 +760,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_ascii)
 
         prog = _build_program(logic)
@@ -774,7 +774,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest)
 
         prog = _build_program(logic)
@@ -786,7 +786,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 blockcopy(txt.select(1, 3), dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -798,7 +798,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 blockcopy(ds.select(1, 3), dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -816,7 +816,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -835,7 +835,7 @@ class TestConverterBankCompatibility:
         dest = Int("Dest")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(source, dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -877,7 +877,7 @@ class TestOutVariants:
         preset = Int("OnTime")
 
         def body():
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 from pyrung import debounce, flasher, timed, toggle
 
                 toggle(Bool("Lamp"))
@@ -892,7 +892,7 @@ class TestOutVariants:
         timers = self.Timers
 
         def body():
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 from pyrung import debounce
 
                 debounce(Bool("Coil"), on=(timers[1], 10), off=(timers[2], 10))
@@ -905,7 +905,7 @@ class TestOutVariants:
         preset = Dint("OnTime")
 
         def body():
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 from pyrung import timed
 
                 timed(Bool("Coil"), timers[1], preset)
@@ -919,7 +919,7 @@ class TestOutVariants:
         timers = self.Timers
 
         def body():
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 from pyrung import debounce, flasher, timed
 
                 debounce(Bool("Coil"), on=(timers[1], 1), off=(timers[2], 1), unit="min")
@@ -939,7 +939,7 @@ class TestOutVariants:
         timers = self.Timers
 
         def body():
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 from pyrung import debounce
 
                 debounce(Bool("Coil"), on=(timers[1], 40_000), off=(timers[2], 50_000))
@@ -952,7 +952,7 @@ class TestOutVariants:
         from pyrung.click.validation import CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y
 
         def body():
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 toggle(immediate(Bool("Lamp")))
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
@@ -971,7 +971,7 @@ def test_timer_done_and_acc_must_share_one_number():
     paired = Timer.clone("PairedTimer")
 
     def logic():
-        with Rung(Bool("In")):
+        with rung(Bool("In")):
             debounce(Bool("Coil"), on=(split, 10), off=(paired, 10))
             on_delay(other, preset=10)
 
@@ -1010,7 +1010,7 @@ def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
     coil = {reset: "Reset", latch: "Set", out: "Out"}[instruction]
 
     def logic():
-        with Rung(c[1]):
+        with rung(c[1]):
             instruction(target)
 
     prog = _build_program(logic)
@@ -1027,7 +1027,7 @@ def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
 
 def test_coil_on_bit_memory_passes():
     def logic():
-        with Rung(x[1]):
+        with rung(x[1]):
             out(y[1])
             latch(c[1])
             reset(c.select(2, 4))

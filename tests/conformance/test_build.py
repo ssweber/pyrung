@@ -32,7 +32,7 @@ from pyrung.conformance import (
 from pyrung.conformance._ladder import case_comment, emit_case
 from pyrung.conformance._modbus import check_scan_time
 from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
-from pyrung.core import PLC, Program, Rung, copy, math, on_delay
+from pyrung.core import PLC, Program, copy, math, on_delay, rung
 from pyrung.core.system_points import system
 from pyrung.core.validation._common import _collect_write_sites
 from tests.conformance import memory, suite
@@ -50,13 +50,13 @@ ds = ClickBlocks().ds
 
 
 def _prove_constant(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(7, slot.Result1)
         copy(1, slot.Fired)
 
 
 def _prove_other_constant(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(8, slot.Result1)
         copy(1, slot.Fired)
 
@@ -662,7 +662,7 @@ def test_pending_and_probe_are_checked_and_reported() -> None:
 
 def _prove_calls(slot):
     # Result1 counts the calls while Cmd is up; in-process the case runs 10 scans.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         math(slot.Result1 + 1, slot.Result1)
         copy(1, slot.Fired)
 
@@ -740,7 +740,7 @@ def test_the_reset_rung_zeroes_the_slot_with_one_fill(tmp_path) -> None:
 
 def _prove_counts_runs(slot):
     # Leaks unless DS4000 is reset: each run adds one to it.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(ds[4000] + 1, ds[4000])
         copy(ds[4000], slot.Result1)
         copy(1, slot.Fired)
@@ -802,11 +802,11 @@ def test_a_reset_that_never_completes_fails_only_its_case() -> None:
 
 def _prove_waits_past_its_deadline(slot):
     # Step 1 waits for a Result2 that never comes.
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         copy(1, slot.Fired)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1, slot.Result2 == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1, slot.Result2 == 1):
         copy(2, slot.Scratch)
-    with Rung(slot.Cmd != 0, slot.Scratch == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 0):
         copy(7, slot.Result1)
         copy(1, slot.Scratch)
     deadline(slot, memory.ClickTimer(1), 100)
@@ -814,9 +814,9 @@ def _prove_waits_past_its_deadline(slot):
 
 def _prove_ends_before_its_deadline(slot):
     clock = memory.ClickTimer(2)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(clock, 1000)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, clock.Acc >= 50):
+    with rung(slot.Cmd != 0, slot.Fired == 0, clock.Acc >= 50):
         copy(7, slot.Result1)
         copy(1, slot.Fired)
     deadline(slot, memory.ClickTimer(3), 100)
@@ -843,13 +843,13 @@ def test_cases_that_share_memory_are_rejected() -> None:
 def _prove_calls_a_helper(slot):
     from pyrung.core import call, forloop, subroutine
 
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with forloop(3):
             call("Conf_H_Inc")
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Fired)
     with subroutine("Conf_H_Inc"):
-        with Rung():
+        with rung():
             math(slot.Result1 + 1, slot.Result1)
 
 
@@ -878,13 +878,13 @@ def _in_main_case(id: str, helper_step: int):
     from pyrung.core import call, forloop, subroutine
 
     def ladder(slot):
-        with Rung(slot.Cmd != 0, slot.Fired == 0):
+        with rung(slot.Cmd != 0, slot.Fired == 0):
             with forloop(2):
                 call(f"Conf_H_{id}")
-        with Rung(slot.Cmd != 0):
+        with rung(slot.Cmd != 0):
             copy(1, slot.Fired)
         with subroutine(f"Conf_H_{id}"):
-            with Rung():
+            with rung():
                 math(slot.Result1 + helper_step, slot.Result1)
 
     return case("c", ladder=ladder, expect={"Result1": 2 * helper_step}, id=id)

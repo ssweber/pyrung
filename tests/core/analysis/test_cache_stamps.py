@@ -8,7 +8,6 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     call,
@@ -16,6 +15,7 @@ from pyrung import (
     forloop,
     on_delay,
     out,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.pilot.advance import _program_owners
@@ -34,12 +34,12 @@ def test_written_value_follows_a_readonly_default_edit():
     Dest = Int("Dest")
     Go = Bool("Go")
     with Program() as prog:
-        with Rung(Go):
+        with rung(Go):
             copy(limits[1], Dest)
-    rung = prog.rungs[0]
-    assert not isinstance(_written_value_for_tag(rung, "Dest"), Literal)
+    rung0 = prog.rungs[0]
+    assert not isinstance(_written_value_for_tag(rung0, "Dest"), Literal)
     limits.slot(1, readonly=True, default=5)
-    assert _written_value_for_tag(rung, "Dest") == Literal(5)
+    assert _written_value_for_tag(rung0, "Dest") == Literal(5)
 
 
 def test_caller_guard_follows_a_readonly_default_edit():
@@ -47,10 +47,10 @@ def test_caller_guard_follows_a_readonly_default_edit():
     Count = Int("Count")
     Lamp = Bool("Lamp")
     with Program() as prog:
-        with Rung(Count > limits[1]):
+        with rung(Count > limits[1]):
             call("sub")
         with subroutine("sub"):
-            with Rung():
+            with rung():
                 out(Lamp)
     guard = caller_guard_context(prog).caller_guards["sub"]
     assert (guard.operand, guard.operand_is_tag) == ("Lim1", True)
@@ -70,7 +70,7 @@ def test_advance_owners_follow_a_slot_rename():
     T1 = Timer.clone("T1")
     Go = Bool("Go")
     with Program() as prog:
-        with Rung(Go):
+        with rung(Go):
             on_delay(T1, limits[1])
     before = _program_owners(prog)
     assert _preset_name(prog) == "Lim1"
@@ -84,12 +84,12 @@ def test_loop_call_gates_follow_a_readonly_default_edit():
     Count = Int("Count")
     Lamp = Bool("Lamp")
     with Program() as prog:
-        with Rung(Count > 0):
+        with rung(Count > 0):
             with forloop(3):
-                with Rung(Count > limits[1]):
+                with rung(Count > limits[1]):
                     call("sub")
         with subroutine("sub"):
-            with Rung():
+            with rung():
                 out(Lamp)
     (gate,) = _loop_call_gates(prog).values()
     assert (gate.operand, gate.operand_is_tag) == ("Lim1", True)
@@ -103,7 +103,7 @@ def test_plc_graph_follows_a_slot_rename():
     Dest = Int("Dest")
     Go = Bool("Go")
     with Program() as prog:
-        with Rung(Go):
+        with rung(Go):
             copy(limits[2], Dest)
     plc = PLC(prog)
     assert plc.dataview.inputs().tags == {"Lim2", "Go"}
@@ -116,7 +116,7 @@ def test_capture_filter_follows_a_slot_rename_without_a_graph_call():
     Dest = Int("Dest")
     Go = Bool("Go")
     with Program() as prog:
-        with Rung(Go):
+        with rung(Go):
             copy(limits[2], Dest)
     plc = PLC(prog)
     plc.step()

@@ -41,7 +41,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, latch, math, out, reset
+from pyrung.core import latch, math, out, reset, rung
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pool_of, put, track
 from tests.conformance.drum_shift_search.test_drum_settle import (
     acc_thousands,
@@ -87,7 +87,7 @@ def rig(slot: Any, index: int) -> Rig:
 
 def _over(slot: Any, s: Side, scan: int, into: Any) -> None:
     """Set *into* to Acc - 1000 on scan *scan*, in a rung below the drum."""
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(s.acc - 1000, into)
 
 
@@ -114,11 +114,11 @@ def prove_flag_cleared_from_outside(slot):
     jog, e1, e2 = r.take(3)
     count_scans(slot)
     on_scans(slot, jog, 1, 3)
-    with Rung(slot.Scratch == 5):
+    with rung(slot.Scratch == 5):
         reset(tm.flag)
         reset(te.flag)
     put(slot, 6, 2500, tm.acc)
-    with Rung(slot.Scratch >= 6):
+    with rung(slot.Scratch >= 6):
         out(e2)
     time_side(slot, tm, (LONG, 2000), jog=jog)
     te_side(slot, te, [e1, e2], jog=jog)
@@ -136,11 +136,11 @@ def prove_flag_set_from_outside(slot):
     tm, te = r.side(0), r.side(1)
     jog, e1, e2 = r.take(3)
     count_scans(slot)
-    with Rung(slot.Scratch == 3):
+    with rung(slot.Scratch == 3):
         latch(tm.flag)
         latch(te.flag)
     put(slot, 4, 2500, tm.acc)
-    with Rung(slot.Scratch >= 4):
+    with rung(slot.Scratch >= 4):
         out(e1)
     on_scans(slot, jog, 6)
     time_side(slot, tm, (2000, LONG), jog=jog)
@@ -164,7 +164,7 @@ def prove_return_after_jog_back(slot):
     on_scans(slot, jog, 1, 3, 5)
     on_scans(slot, jump, 4)
     pause_on(slot, pause, 6, 7)
-    with Rung(slot.Scratch == 7):
+    with rung(slot.Scratch == 7):
         reset(tm.b)
         reset(te.b)
     time_side(slot, tm, pause=pause, jog=jog, jump=jump, jump_step=slot.Result1)
@@ -187,7 +187,7 @@ def prove_return_after_jump(slot):
     on_scans(slot, jog, 1, 3)
     on_scans(slot, jump, 4)
     pause_on(slot, pause, 5, 6)
-    with Rung(slot.Scratch == 6):
+    with rung(slot.Scratch == 6):
         latch(tm.b)
         latch(te.b)
     time_side(slot, tm, pause=pause, jog=jog, jump=jump, jump_step=slot.Result1)
@@ -209,14 +209,14 @@ def prove_return_scan_moves(slot):
     # Result1 holds the jump step, 1 (a DS address).
     put(slot, 1, 1, slot.Result1)
     # One rung pauses the drum on scans 3..4 and 6..7. A second Out on the bit would turn it off.
-    with Rung(slot.Scratch >= 3, slot.Scratch <= 7, slot.Scratch != 5):
+    with rung(slot.Scratch >= 3, slot.Scratch <= 7, slot.Scratch != 5):
         out(pause)
     pause_on(slot, pause_last, 3, 4)
     on_scans(slot, jog, 5)
     on_scans(slot, jog_last, 1)
     on_scans(slot, jump, 8)
     put(slot, 4, 2500, last_tm.acc)
-    with Rung(slot.Scratch >= 5):
+    with rung(slot.Scratch >= 5):
         out(e1)
     time_side(slot, jog_tm, pause=pause, jog=jog, jump=jump, jump_step=slot.Result1)
     te_side(

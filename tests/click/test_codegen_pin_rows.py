@@ -17,7 +17,7 @@ from pyrung.click.codegen.analyzer import _analyze_single_rung
 from pyrung.click.codegen.models import _RawRung
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
 from pyrung.click.ladder.types import LadderBundle
-from pyrung.core import Counter, Or, Program, Rung, Timer
+from pyrung.core import Counter, Or, Program, Timer, rung
 from pyrung.core.program import (
     count_down,
     count_up,
@@ -80,57 +80,57 @@ def _time_event_drum():
 
 
 def _on_delay_reset_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         on_delay(Timer[1], preset=100).reset(Or(c[6], c[7]))
 
 
 def _count_up_down_or_then_reset() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         count_up(Counter[1], 5).down(Or(c[4], c[5])).reset(c[6])
 
 
 def _count_up_both_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         count_up(Counter[1], 5).down(Or(c[4], c[5])).reset(Or(c[6], c[7]))
 
 
 def _count_down_reset_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         count_down(Counter[1], 5).reset(Or(c[6], c[7]))
 
 
 def _shift_clock_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         shift(c.select(21, 28)).clock(Or(c[4], c[5])).reset(c[6])
 
 
 def _shift_both_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         shift(c.select(21, 28)).clock(Or(c[4], c[5])).reset(Or(c[6], c[7]))
 
 
 def _event_drum_first_pin_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         _event_drum().reset(Or(c[6], c[7])).jog(c[8])
 
 
 def _event_drum_middle_pin_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         _event_drum().reset(c[6]).jump(Or(c[7], c[9]), step=ds[2]).jog(c[8])
 
 
 def _event_drum_all_pins_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         _event_drum().reset(Or(c[6], c[7])).jump(Or(c[2], c[3]), step=ds[2]).jog(Or(c[8], c[9]))
 
 
 def _time_drum_middle_pin_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         _time_drum().reset(c[6]).jump(Or(c[7], c[9]), step=ds[2]).jog(c[8])
 
 
 def _time_event_drum_first_pin_or() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         _time_event_drum().reset(Or(c[6], c[7])).jog(c[8])
 
 

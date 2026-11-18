@@ -37,11 +37,11 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     fall,
     rise,
+    rung,
 )
 from pyrung.core.program import (
     blockcopy,
@@ -132,31 +132,31 @@ def _build_program_and_mapping():
     # ── Program ──────────────────────────────────────────────────────────
     with Program() as logic:
         # R1: Run-latch — OR with rising/falling edges
-        with Rung(Or(Enable, rise(Start), fall(Stop))):
+        with rung(Or(Enable, rise(Start), fall(Stop))):
             latch(Running)
 
         # R2: Stop conditions — simple OR
-        with Rung(Or(Stop, Abort)):
+        with rung(Or(Stop, Abort)):
             reset(Running)
 
         # R3: Retentive on-delay with reset pin
-        with Rung(Running):
+        with rung(Running):
             on_delay(Timer[1], preset=250).reset(ShiftReset)
 
         # R4: Off-delay
-        with Rung(Running):
+        with rung(Running):
             off_delay(Timer2, preset=100)
 
         # R5: Count-up with reset pin
-        with Rung(Running):
+        with rung(Running):
             count_up(Counter[1], preset=50).reset(Stop)
 
         # R6: Count-down with reset pin
-        with Rung(Running):
+        with rung(Running):
             count_down(Counter2, preset=-5).reset(ShiftReset)
 
         # R7: copy + Math + indirect copy + blockcopy + fill
-        with Rung(Running, Timer[1].Done):
+        with rung(Running, Timer[1].Done):
             copy(120, Source)
             math((Source * 2) + (Idx * 2) - 3, CalcOut)
             copy(ds[Idx], DstBlk[1])
@@ -164,7 +164,7 @@ def _build_program_and_mapping():
             fill(CalcOut, DstBlk.select(1, 5))
 
         # R8: Numeric search (continuous)
-        with Rung(Running):
+        with rung(Running):
             search(
                 DstBlk.select(1, 5) >= CalcOut,
                 result=FoundAddr,
@@ -173,15 +173,15 @@ def _build_program_and_mapping():
             )
 
         # R9: Text search
-        with Rung(Running):
+        with rung(Running):
             search(Chars.select(1, 8) == "AB", result=FoundAddr, found=Found)
 
         # R10: Shift with clock + reset
-        with Rung(Running):
+        with rung(Running):
             shift(Bits.select(1, 8)).clock(Clock).reset(ShiftReset)
 
         # R11: Event drum with reset / jump (AND condition) / jog (AND condition)
-        with Rung(Running):
+        with rung(Running):
             event_drum(
                 outputs=[DrumOut1, DrumOut2, DrumOut3],
                 events=[DrumEvt1, DrumEvt2, DrumEvt3, DrumEvt4],
@@ -196,7 +196,7 @@ def _build_program_and_mapping():
             ).reset(ShiftReset).jump((AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
 
         # R12: Time drum with reset / jump / jog
-        with Rung(Running):
+        with rung(Running):
             time_drum(
                 outputs=[DrumOut1, DrumOut2, DrumOut3],
                 presets=[50, 100, 75, 200],
@@ -212,7 +212,7 @@ def _build_program_and_mapping():
             ).reset(ShiftReset).jump(Found, step=DrumJumpStep).jog(Start)
 
         # R13: Pack / unpack family
-        with Rung(Running):
+        with rung(Running):
             pack_bits(Bits.select(1, 16), PackedWord)
             pack_words(Words.select(1, 2), PackedDword)
             pack_text(Chars.select(1, 8), PackedDword, allow_whitespace=True)
@@ -220,16 +220,16 @@ def _build_program_and_mapping():
             unpack_to_words(PackedDword, Words.select(1, 2))
 
         # R14: For-loop (must be alone on rung for Click)
-        with Rung(Running, AutoMode):
+        with rung(Running, AutoMode):
             with forloop(3, oneshot=True):
                 out(StepDone)
 
         # R15: Subroutine call
-        with Rung(Running, AutoMode):
+        with rung(Running, AutoMode):
             call("service")
 
         # R16: Branches — parallel paths under parent rung power
-        with Rung(Running):
+        with rung(Running):
             copy(Idx, DstBlk[4])
             with branch(AutoMode):
                 copy(CalcOut, DstBlk[1])
@@ -238,7 +238,7 @@ def _build_program_and_mapping():
             copy(Source, DstBlk[5])
 
         # R17: Send
-        with Rung():
+        with rung():
             send(
                 target=ModbusTcpTarget("plc1", "10.0.0.1", port=502, device_id=1),
                 remote_start="DS1",
@@ -250,7 +250,7 @@ def _build_program_and_mapping():
             )
 
         # R18: Receive
-        with Rung():
+        with rung():
             receive(
                 target=ModbusTcpTarget("plc1", "10.0.0.1", port=502, device_id=1),
                 remote_start="DS10",
@@ -262,18 +262,18 @@ def _build_program_and_mapping():
             )
 
         # R19: OR condition
-        with Rung(Or(AutoMode, Found)):
+        with rung(Or(AutoMode, Found)):
             out(StepDone)
 
         # R20: Compare condition
-        with Rung(CalcOut > 0):
+        with rung(CalcOut > 0):
             out(StepDone)
 
         # ── Subroutine ───────────────────────────────────────────────────
         with subroutine("service"):
-            with Rung(Abort):
+            with rung(Abort):
                 return_early()
-            with Rung(And(Running, Found)):
+            with rung(And(Running, Found)):
                 copy(CalcOut, DstBlk[3])
 
     # ── TagMap ───────────────────────────────────────────────────────────
@@ -523,7 +523,7 @@ def test_indirect_ref_prebuilt_click_block_unmapped():
     Dest = Int("Dest")
 
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(ds[Pointer], Dest)
 
     mapping = TagMap(

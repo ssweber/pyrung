@@ -4,7 +4,7 @@ Covers _conjunction_satisfiable which replaces pairwise contradiction
 detection with interval/domain feasibility per tag.
 """
 
-from pyrung.core import Bool, Int, Program, Rung, call, latch, out, reset, subroutine
+from pyrung.core import Bool, Int, Program, call, latch, out, reset, rung, subroutine
 from pyrung.core.condition import (
     AnyCondition,
     BitCondition,
@@ -176,15 +176,15 @@ class TestCrossChainMutualExclusivity:
         No pairwise contradiction, but combined is infeasible.
         """
         with Program() as prog:
-            with Rung(State > 5, State < 8):
+            with rung(State > 5, State < 8):
                 call("sub_a")
-            with Rung(State > 10):
+            with rung(State > 10):
                 call("sub_b")
             with subroutine("sub_a"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_b"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -305,15 +305,15 @@ class TestTagValueComplementary:
     def test_tag_value_exclusivity_in_subroutine_callers(self):
         """Subroutines called under CompareEq(T, T2) vs CompareNe(T, T2) are exclusive."""
         with Program() as prog:
-            with Rung(T == T2):
+            with rung(T == T2):
                 call("sub_eq")
-            with Rung(T != T2):
+            with rung(T != T2):
                 call("sub_ne")
             with subroutine("sub_eq"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_ne"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -329,9 +329,9 @@ class TestStuckBitsIntegration:
     def test_transitive_unreachable_latch(self):
         """Latch gated by State == 4 AND State > 5 → unreachable → stuck low."""
         with Program() as prog:
-            with Rung(State == 4, State > 5):
+            with rung(State == 4, State > 5):
                 latch(Light)
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -341,12 +341,12 @@ class TestStuckBitsIntegration:
     def test_transitive_unreachable_caller(self):
         """Reset's caller has State > 5 AND State < 3 → unreachable → stuck high."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(State > 5, State < 3):
+            with rung(State > 5, State < 3):
                 call("do_reset")
             with subroutine("do_reset"):
-                with Rung():
+                with rung():
                     reset(Light)
 
         report = validate_stuck_bits(prog)

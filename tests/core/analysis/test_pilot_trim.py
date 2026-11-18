@@ -14,12 +14,12 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     copy,
     latch,
     on_delay,
     rise,
+    rung,
     system,
     time_drum,
 )
@@ -32,9 +32,9 @@ def _enable_times_a_wait() -> tuple[PLC, Bool]:
     enable, hit = Bool("En", external=True), Bool("Hit")
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(wait, 3000)
-        with Rung(wait.Done):
+        with rung(wait.Done):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -87,9 +87,9 @@ def test_a_goal_on_a_tag_no_scan_has_written_keeps_what_writes_it():
     enable = Bool("En", external=True)
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(wait, 3000)
-        with Rung(wait.Done):
+        with rung(wait.Done):
             copy(30, system.rtc.new_second)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -111,11 +111,11 @@ def _armed_then_held(dt: float) -> tuple[PLC, Bool]:
     armed = Bool("Armed")
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
-        with Rung(rise(start), ~enable):
+        with rung(rise(start), ~enable):
             latch(armed)
-        with Rung(armed, enable):
+        with rung(armed, enable):
             on_delay(wait, 3000)
-        with Rung(wait.Done):
+        with rung(wait.Done):
             latch(hit)
     plc = PLC(logic, dt=dt)
     plc.step()
@@ -156,11 +156,11 @@ def test_a_set_less_than_a_second_before_the_next_set_stays_temporary_logic():
     armed = Bool("Armed")
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(wait, 3000)
-        with Rung(rise(start), wait.Acc > 20):
+        with rung(rise(start), wait.Acc > 20):
             latch(armed)
-        with Rung(armed, wait.Done):
+        with rung(armed, wait.Done):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -206,19 +206,19 @@ def _dwell() -> tuple[PLC, object]:
     on_wd, off_wd, run = Timer.clone("HoldOnWD"), Timer.clone("HoldOffWD"), Timer.clone("HoldRun")
     state = Int("HoldState", default=6)
     with Program(strict=False) as logic:
-        with Rung(state == 6, sensor):
+        with rung(state == 6, sensor):
             on_delay(stable_on, 30, "ms")
-        with Rung(state == 6, ~sensor):
+        with rung(state == 6, ~sensor):
             on_delay(stable_off, 30, "ms")
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(on_wd, 70, "ms").reset(stable_off.Done)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(off_wd, 70, "ms").reset(stable_on.Done)
-        with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+        with rung(state == 6, Or(on_wd.Done, off_wd.Done)):
             copy(8, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(run, 250, "ms")
-        with Rung(state == 6, run.Done):
+        with rung(state == 6, run.Done):
             copy(7, state)
     return PLC(logic, dt=0.01), state == 7
 
@@ -307,7 +307,7 @@ def test_logic_patched_where_it_went_in_stays_when_its_set_would_come_too_soon()
 def test_a_reset_nothing_needed_goes_and_the_waits_either_side_of_it_are_one():
     start, reset = Bool("TrStart", external=True), Bool("TrReset", external=True)
     with Program(strict=False) as logic:
-        with Rung(start):
+        with rung(start):
             time_drum(
                 outputs=[Bool("TrO1"), Bool("TrO2")],
                 presets=[20, 40],

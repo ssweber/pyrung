@@ -6,8 +6,8 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     out,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -34,7 +34,7 @@ class TestReceiveDestAutoND:
         target = ModbusTcpTarget("peer", "127.0.0.1", port=502, device_id=1)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 receive(
                     target=target,
                     remote_start="DS1",
@@ -44,7 +44,7 @@ class TestReceiveDestAutoND:
                     error=Error,
                     exception_response=ExCode,
                 )
-            with Rung(Dest == 2):
+            with rung(Dest == 2):
                 out(Alarm)
 
         assert not Dest.external
@@ -68,7 +68,7 @@ class TestReceiveDestAutoND:
         target = ModbusTcpTarget("peer", "127.0.0.1", port=502, device_id=1)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 receive(
                     target=target,
                     remote_start="DS1",
@@ -78,7 +78,7 @@ class TestReceiveDestAutoND:
                     error=Error,
                     exception_response=ExCode,
                 )
-            with Rung(Dest == 2):
+            with rung(Dest == 2):
                 out(Alarm)
 
         result = _classify_dimensions(logic)

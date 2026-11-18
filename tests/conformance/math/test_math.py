@@ -34,15 +34,15 @@ truncated mean of the middle two from the middle value nearer zero:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, randint
+from pyrung.core import copy, fill, math, randint, rung
 from tests.conformance.memory import dd, df, dh, ds
 
 
 def prove_avg_mdn_positive(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, ds[4401])
         copy(2, ds[4402])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(ds.select(4401, 4402).mean(), slot.Result1)
         math(ds.select(4401, 4402).median(), slot.Result2)
         math(ds.select(4401, 4402).mean(), df[1])
@@ -52,39 +52,39 @@ def prove_avg_mdn_positive(slot):
 
 
 def prove_avg_mdn_negative(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(-1, ds[4411])
         copy(-2, ds[4412])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(ds.select(4411, 4412).mean(), slot.Result1)
         math(ds.select(4411, 4412).median(), slot.Result2)
         copy(1, slot.Fired)
 
 
 def prove_avg_odd_count(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, ds[4421])
         copy(1, ds[4422])
         copy(2, ds[4423])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(ds.select(4421, 4423).mean(), slot.Result1)
         copy(1, slot.Fired)
 
 
 def prove_avg_dint_no_overflow(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(2147483647, dd[1])
         copy(2147483647, dd[2])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dd.select(1, 2).mean(), dd[3])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[3] == 2147483647):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[3] == 2147483647):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_mdn_even_count(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(9, ds[4431])
         copy(2, ds[4432])
         copy(10, ds[4433])
@@ -93,7 +93,7 @@ def prove_mdn_even_count(slot):
         copy(-2, ds[4436])
         copy(-10, ds[4437])
         copy(-1, ds[4438])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(ds.select(4431, 4434).median(), slot.Result1)
         math(ds.select(4431, 4434).median() * 10, slot.Result2)
         math(ds.select(4431, 4434).median(), df[2])
@@ -103,7 +103,7 @@ def prove_mdn_even_count(slot):
 
 
 def prove_mdn_real_range(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(9.0, df[11])
         copy(2.0, df[12])
         copy(10.0, df[13])
@@ -111,7 +111,7 @@ def prove_mdn_real_range(slot):
         copy(1.5, df[15])
         copy(2.5, df[16])
         copy(0.5, df[17])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(df.select(11, 14).median(), df[18])
         math(df.select(15, 17).median(), df[19])
         math(df[18] * 10, slot.Result1)
@@ -120,22 +120,22 @@ def prove_mdn_real_range(slot):
 
 
 def prove_max_min_word_unsigned(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(0x0001, dh[1])
         copy(0xFFFF, dh[2])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dh.select(1, 2).max(), dh[3])
         math(dh.select(1, 2).min(), dh[4])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dh[3] == 0xFFFF):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dh[3] == 0xFFFF):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dh[4] == 0x0001):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dh[4] == 0x0001):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_rand_range(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(randint(1, 6), slot.Result1)
         math(randint(10, 12), slot.Result2)
         math(randint(6, 1), slot.Result3)

@@ -17,7 +17,6 @@ from pyrung import (
     ModbusTcpTarget,
     Physical,
     Program,
-    Rung,
     TagType,
     Timer,
     latch,
@@ -25,6 +24,7 @@ from pyrung import (
     out,
     receive,
     run_function,
+    rung,
     system,
 )
 from pyrung.circuitpy import codegen
@@ -63,9 +63,9 @@ def _receipt(*scans: int, epoch: str = "e", waited: tuple[int, ...] = ()) -> Sim
 
 def _slow_lamp(preset: int) -> PLC:
     with Program() as logic:
-        with Rung():
+        with rung():
             on_delay(Slow, preset=preset)
-        with Rung(Slow.Done):
+        with rung(Slow.Done):
             out(Lamp)
     return PLC(logic, dt=0.001)
 
@@ -163,11 +163,11 @@ def most_calls(request: pytest.FixtureRequest) -> int:
 def _no_loop(preset_scans: int) -> tuple[PLC, _Stateful]:
     function = _Stateful()
     with Program() as logic:
-        with Rung():
+        with rung():
             on_delay(Slow, preset=preset_scans)
-        with Rung():
+        with rung():
             run_function(function, outs={"seen": Seen})
-        with Rung(Slow.Done):
+        with rung(Slow.Done):
             out(Lamp)
     plc = PLC(logic, dt=0.001)
     assert plc._compiled_replay_supported_kernel() is None
@@ -202,18 +202,18 @@ class TestASearchWithNoLoop:
         assert function.calls < most_calls
 
 
-def _unreachable(rung: Callable[[], None] = lambda: None) -> PLC:
+def _unreachable(add_rungs: Callable[[], None] = lambda: None) -> PLC:
     with Program() as logic:
-        with Rung():
+        with rung():
             on_delay(Slow, preset=50_000_000)
-        with Rung(Slow.Done):
+        with rung(Slow.Done):
             out(Lamp)
-        rung()
+        add_rungs()
     return PLC(logic, dt=0.001)
 
 
 def _receives() -> None:
-    with Rung(Never):
+    with rung(Never):
         receive(
             target=ModbusTcpTarget(name="peer", ip="127.0.0.1", port=1),
             remote_start="DS1",
@@ -226,7 +226,7 @@ def _receives() -> None:
 
 
 def _writes_a_read_only_system_tag() -> None:
-    with Rung(Never):
+    with rung(Never):
         latch(system.sys.always_on)
 
 
@@ -276,7 +276,7 @@ class TestAWaitNoLoopMayRun:
 
     def test_a_call_in_the_overlay_that_keeps_state_pays_by_the_scan(self) -> None:
         with Program() as overlay:
-            with Rung():
+            with rung():
                 run_function(_Stateful(), outs={"seen": Seen})
         plc = _unreachable()
         plc._synthesis = Synthesis(plant=list(overlay.rungs))
@@ -347,9 +347,9 @@ def _linked_motor() -> PLC:
     o_Motor = Bool("o_Motor")
     x_MotorFB = Bool("x_MotorFB", physical=Physical("MotorFb", on_delay="20ms"), link="o_Motor")
     with Program() as logic:
-        with Rung(x_Go):
+        with rung(x_Go):
             out(o_Motor)
-        with Rung(o_Motor, x_MotorFB):
+        with rung(o_Motor, x_MotorFB):
             out(y_Done)
     return PLC(logic, dt=0.01)
 

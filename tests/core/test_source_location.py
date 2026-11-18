@@ -16,7 +16,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -29,6 +28,7 @@ from pyrung.core import (
     on_delay,
     out,
     rise,
+    rung,
     shift,
     time_drum,
 )
@@ -54,18 +54,18 @@ def test_rung_captures_source_file_start_line_and_end_line():
 
     with Program(strict=False) as prog:
         rung_line = _line_no() + 1
-        with Rung(enable):
+        with rung(enable):
             out_line = _line_no() + 1
             out(light)
             end_line = _line_no() + 1
             latch(latched)
 
-    rung = prog.rungs[0]
-    assert rung.source_file is not None
-    assert Path(rung.source_file).name == Path(__file__).name
-    assert rung.source_line == rung_line
-    assert rung.end_line == end_line
-    assert rung._instructions[0].source_line == out_line
+    rung0 = prog.rungs[0]
+    assert rung0.source_file is not None
+    assert Path(rung0.source_file).name == Path(__file__).name
+    assert rung0.source_line == rung_line
+    assert rung0.end_line == end_line
+    assert rung0._instructions[0].source_line == out_line
 
 
 def test_condition_helpers_and_operators_capture_source_lines():
@@ -119,35 +119,35 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     bits = Block("C", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             branch_line = _line_no() + 1
             with branch(branch_enable):
                 branch_end_line = _line_no() + 1
                 out(branch_out)
 
-        with Rung(enable):
+        with rung(enable):
             forloop_line = _line_no() + 1
             with forloop(2):
                 forloop_copy_line = _line_no() + 1
                 copy(forloop_counter + 1, forloop_counter)
 
-        with Rung(enable):
+        with rung(enable):
             count_up_line = _line_no() + 1
             count_up(Counter[1], preset=5).reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             count_down_line = _line_no() + 1
             count_down(Counter2, preset=5).reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             on_delay_line = _line_no() + 1
             on_delay(Timer[1], preset=50).reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             shift_line = _line_no() + 1
             shift(bits.select(1, 4)).clock(clock).reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             event_drum_line = _line_no() + 1
             event_drum(
                 outputs=[drum_out1, drum_out2],
@@ -157,7 +157,7 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
                 completion_flag=drum_done,
             ).reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             time_drum_line = _line_no() + 1
             time_drum(
                 outputs=[drum_out1, drum_out2],
@@ -209,7 +209,7 @@ def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
 
     with Program(strict=False) as prog:
         marker_line = _line_no()
-        with Rung(
+        with rung(
             step == 1,
             auto_mode,
         ):
@@ -217,9 +217,9 @@ def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
 
     step_condition_line = marker_line + 2
     auto_condition_line = marker_line + 3
-    rung = prog.rungs[0]
-    assert rung._conditions[0].source_line == step_condition_line
-    assert rung._conditions[1].source_line == auto_condition_line
+    rung0 = prog.rungs[0]
+    assert rung0._conditions[0].source_line == step_condition_line
+    assert rung0._conditions[1].source_line == auto_condition_line
 
 
 def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_line():
@@ -227,7 +227,7 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
     reset_cond = Bool("Reset")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             count_up_line = _line_no() + 1
             count_up(
                 Counter3,
@@ -267,7 +267,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     bits = Block("C", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             cu_line = _line_no() + 1
             cu_builder = count_up(Counter4, preset=5)
             cu_down_line = _line_no() + 1
@@ -275,19 +275,19 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
             cu_reset_line = _line_no() + 1
             cu_builder.reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             cd_line = _line_no() + 1
             cd_builder = count_down(Counter5, preset=5)
             cd_reset_line = _line_no() + 1
             cd_builder.reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             timer_line = _line_no() + 1
             timer_builder = on_delay(Timer2, preset=50)
             timer_reset_line = _line_no() + 1
             timer_builder.reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             shift_line = _line_no() + 1
             shift_builder = shift(bits.select(1, 4))
             shift_clock_line = _line_no() + 1
@@ -295,7 +295,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
             shift_reset_line = _line_no() + 1
             shift_builder.reset(reset_cond)
 
-        with Rung(enable):
+        with rung(enable):
             event_line = _line_no() + 1
             event_builder = event_drum(
                 outputs=[drum_out1, drum_out2],
@@ -311,7 +311,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
             event_jog_line = _line_no() + 1
             event_builder.jog(jog)
 
-        with Rung(enable):
+        with rung(enable):
             time_line = _line_no() + 1
             time_builder = time_drum(
                 outputs=[drum_out1, drum_out2],

@@ -1,7 +1,7 @@
 """Math expression support for pyrung engine.
 
 Enables native Python expressions with Tags in conditions and instruction arguments:
-    with Rung((DS[1] + DS[2]) > 100):     # Expression in condition
+    with rung((DS[1] + DS[2]) > 100):     # Expression in condition
     copy(DS[1] * 2 + Offset, Result)      # Expression in copy source
 """
 

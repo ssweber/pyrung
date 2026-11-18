@@ -24,13 +24,13 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     copy,
     latch,
     on_delay,
     out,
     reset,
+    rung,
     system,
 )
 from pyrung.core import AvoidCheckError
@@ -66,11 +66,11 @@ def _two_ways():
     Level = Int("Level")
     Target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(Fast):
+        with rung(Fast):
             out(Danger)
-        with Rung(Fast):
+        with rung(Fast):
             copy(5, Level)
-        with Rung(Or(Fast, Slow)):
+        with rung(Or(Fast, Slow)):
             out(Target)
     return prog, Target, Danger, Level
 
@@ -181,11 +181,11 @@ def test_a_check_raising_only_on_a_coasted_endpoint_reaches_the_caller() -> None
     Tmr = Timer.clone("RaisesLateTmr")
     Target = Bool("RaisesLateTarget")
     with Program(strict=False) as prog:
-        with Rung(Or(Start, Run)):
+        with rung(Or(Start, Run)):
             out(Run)
-        with Rung(Run):
+        with rung(Run):
             on_delay(Tmr, 1000, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Target)
 
     def _raises_once_timing(snapshot: dict) -> bool:
@@ -357,7 +357,7 @@ def _seen_coast_program():
     Tick = Bool("CoastTick", external=True)
     Out = Bool("CoastOut")
     with Program(strict=False) as prog:
-        with Rung(Tick):
+        with rung(Tick):
             out(Out)
     return prog
 
@@ -498,26 +498,26 @@ def _dwell_program(limit_from=None, limit_to=None, watching=None):
     state = Int("HoldState", default=6)
     limit = Int("HoldLimit", default=0 if limit_from is None else limit_from)
     with Program(strict=False) as prog:
-        with Rung(state == 6, sensor):
+        with rung(state == 6, sensor):
             on_delay(stable_on, 30, "ms")
-        with Rung(state == 6, ~sensor):
+        with rung(state == 6, ~sensor):
             on_delay(stable_off, 30, "ms")
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(on_wd, 70, "ms").reset(stable_off.Done)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(off_wd, 70, "ms").reset(stable_on.Done)
-        with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+        with rung(state == 6, Or(on_wd.Done, off_wd.Done)):
             copy(8, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(run, 250, "ms")
-        with Rung(state == 6, run.Done):
+        with rung(state == 6, run.Done):
             copy(7, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(settle, 20, "ms")
-        with Rung(settle.Done):
+        with rung(settle.Done):
             copy(limit_to if limit_to is not None else limit_from or 0, limit)
         if watching is not None:
-            with Rung(watching > 100):
+            with rung(watching > 100):
                 out(Bool("WatchingHigh"))
     return prog, state, sensor, limit
 
@@ -611,25 +611,25 @@ def _armed_dwell(release_needed: bool):
     state = Int("St", default=6)
     gate = ready if release_needed else armed
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(5, lim)
-        with Rung(start):
+        with rung(start):
             latch(armed)
-        with Rung(armed, ~start):
+        with rung(armed, ~start):
             latch(ready)
-        with Rung(gate, state == 6, sensor):
+        with rung(gate, state == 6, sensor):
             on_delay(stable_on, 30, "ms")
-        with Rung(gate, state == 6, ~sensor):
+        with rung(gate, state == 6, ~sensor):
             on_delay(stable_off, 30, "ms")
-        with Rung(gate, state == 6):
+        with rung(gate, state == 6):
             on_delay(on_wd, 70, "ms").reset(stable_off.Done)
-        with Rung(gate, state == 6):
+        with rung(gate, state == 6):
             on_delay(off_wd, 70, "ms").reset(stable_on.Done)
-        with Rung(gate, state == 6, Or(on_wd.Done, off_wd.Done)):
+        with rung(gate, state == 6, Or(on_wd.Done, off_wd.Done)):
             copy(8, state)
-        with Rung(gate, state == 6):
+        with rung(gate, state == 6):
             on_delay(run, 250, "ms")
-        with Rung(gate, state == 6, run.Done):
+        with rung(gate, state == 6, run.Done):
             copy(7, state)
     return prog, state
 
@@ -735,21 +735,21 @@ def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
     run = Timer.clone("HoldRun")
     state = Int("HoldState", default=6)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(recipe, shown)
-        with Rung(state == 6, sensor):
+        with rung(state == 6, sensor):
             on_delay(stable_on, 30, "ms")
-        with Rung(state == 6, ~sensor):
+        with rung(state == 6, ~sensor):
             on_delay(stable_off, 30, "ms")
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(on_wd, 70, "ms").reset(stable_off.Done)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(off_wd, 70, "ms").reset(stable_on.Done)
-        with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+        with rung(state == 6, Or(on_wd.Done, off_wd.Done)):
             copy(8, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(run, 250, "ms")
-        with Rung(state == 6, run.Done):
+        with rung(state == 6, run.Done):
             copy(7, state)
 
     def _in_step(snapshot: dict) -> bool:
@@ -863,13 +863,13 @@ def _start_then_wait():
     phase = Int("Phase")
     rate = Int("Rate", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1, phase)
-        with Rung(rate > 100):
+        with rung(rate > 100):
             out(Bool("RateHigh"))
-        with Rung(start):
+        with rung(start):
             on_delay(delay, 100, "ms")
-        with Rung(delay.Done):
+        with rung(delay.Done):
             latch(target)
     return prog, target
 
@@ -923,9 +923,9 @@ def test_a_goal_already_true_keeps_a_check_raising_only_on_the_scan_before() -> 
     go = Bool("Go", external=True)
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             out(target)
-        with Rung(go):
+        with rung(go):
             out(Bool("Other"))
 
     plan = _scanned(prog, 1).how(target, avoid=lambda s: s["fault.out_of_range"], max_scans=2000)
@@ -955,7 +955,7 @@ def _route_with_no_hold():
     go = Bool("Go", external=True)
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             out(target)
     return prog, target, 0.1
 
@@ -964,9 +964,9 @@ def _route_by_waiting():
     delay = Timer.clone("Delay")
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(delay, 100, "ms")
-        with Rung(delay.Done):
+        with rung(delay.Done):
             out(target)
     return prog, target, 0.010
 
@@ -975,9 +975,9 @@ def _goal_true_at_the_start():
     go = Bool("Go", external=True)
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             out(target)
-        with Rung(go):
+        with rung(go):
             out(Bool("Other"))
     return prog, target, 0.1
 
@@ -1022,9 +1022,9 @@ def _rate_on_speed():
     run = Timer.clone("Rn")
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(speed > 3):
+        with rung(speed > 3):
             on_delay(run, 1000, "ms")
-        with Rung(run.Done):
+        with rung(run.Done):
             out(target)
     return prog, target
 
@@ -1084,15 +1084,15 @@ def _entry_preset():
     preset = Int("HP")
     first_scan = system.sys.first_scan
     with Program(strict=False) as prog:
-        with Rung(first_scan):
+        with rung(first_scan):
             latch(x)
-        with Rung():
+        with rung():
             on_delay(wait, preset)
-        with Rung(wait.Done):
+        with rung(wait.Done):
             reset(x)
-        with Rung(x):
+        with rung(x):
             latch(target)
-        with Rung(first_scan):
+        with rung(first_scan):
             latch(x)
     return prog, target
 
@@ -1105,15 +1105,15 @@ def _entry_step():
     preset = Int("HP")
     first_scan = system.sys.first_scan
     with Program(strict=False) as prog:
-        with Rung(first_scan):
+        with rung(first_scan):
             copy(10, step)
-        with Rung():
+        with rung():
             on_delay(wait, preset)
-        with Rung(first_scan, wait.Done):
+        with rung(first_scan, wait.Done):
             copy(5, step)
-        with Rung(step == 10, first_scan):
+        with rung(step == 10, first_scan):
             latch(target)
-        with Rung(first_scan, step == 5):
+        with rung(first_scan, step == 5):
             copy(10, step)
     return prog, target
 

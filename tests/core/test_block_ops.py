@@ -8,13 +8,13 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     TagType,
     Word,
     blockcopy,
     copy,
     fill,
     pack_text,
+    rung,
     search,
     unpack_to_bits,
     unpack_to_words,
@@ -28,7 +28,7 @@ class TestBlockCopy:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 blockcopy(DS.select(1, 3), DS.select(10, 12))
 
         runner = runner_factory(logic)
@@ -43,7 +43,7 @@ class TestBlockCopy:
         DS = Block("DS", TagType.INT, 1, 3)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(1, DS.select(1, 1))
                 blockcopy(DS.select(1, 2), DS.select(2, 3))
 
@@ -59,7 +59,7 @@ class TestBlockCopy:
         DD = Block("DD", TagType.DINT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 blockcopy(DS.select(1, 3), DD.select(1, 3))
 
         runner = runner_factory(logic)
@@ -75,7 +75,7 @@ class TestBlockCopy:
         DS = Block("DS", TagType.INT, 1, 10)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_value)
 
         runner = runner_factory(logic)
@@ -90,7 +90,7 @@ class TestBlockCopy:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 blockcopy(DS.select(1, 3), DS.select(10, 12))
 
         runner = runner_factory(logic)
@@ -105,7 +105,7 @@ class TestFill:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(999, DS.select(1, 5))
 
         runner = runner_factory(logic)
@@ -120,7 +120,7 @@ class TestFill:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(Source, DS.select(1, 3))
 
         runner = runner_factory(logic)
@@ -135,7 +135,7 @@ class TestFill:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(100, DS.select(1, 3), oneshot=True)
 
         runner = runner_factory(logic)
@@ -155,7 +155,7 @@ class TestPackText:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 pack_text(Chars.select(1, 2), Result)
 
         runner = runner_factory(logic)
@@ -172,7 +172,7 @@ class TestSearch:
         Found = Bool("Found")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 search(DS.select(1, 5) == 42, result=Result, found=Found)
 
         runner = runner_factory(logic)
@@ -199,7 +199,7 @@ class TestSearch:
         Found = Bool("Found")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 search(DS.select(1, 3) == 999, result=Result, found=Found)
 
         runner = runner_factory(logic)
@@ -224,7 +224,7 @@ class TestSearch:
         Found = Bool("Found")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 search(CH.select(1, 6) == "BC", result=Result, found=Found)
 
         runner = runner_factory(logic)
@@ -253,7 +253,7 @@ class TestUnpackToBits:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 unpack_to_bits(Source, C.select(1, 8))
 
         runner = runner_factory(logic)
@@ -280,7 +280,7 @@ class TestUnpackToBits:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 unpack_to_bits(Source, C.select(1, 16))
 
         runner = runner_factory(logic)
@@ -304,7 +304,7 @@ class TestUnpackToWords:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 unpack_to_words(Source, DS.select(1, 2))
 
         runner = runner_factory(logic)
@@ -319,7 +319,7 @@ class TestUnpackToWords:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 unpack_to_words(Source, DS.select(1, 2))
 
         runner = runner_factory(logic)
@@ -336,7 +336,7 @@ class TestCopyWithConverter:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(CH[5], Result, convert=to_value)
 
         runner = runner_factory(logic)

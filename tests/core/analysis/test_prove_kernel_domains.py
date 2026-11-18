@@ -6,12 +6,12 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     Timer,
     copy,
     math,
     on_delay,
     out,
+    rung,
 )
 
 
@@ -37,13 +37,13 @@ class TestKernelDomainDiscovery:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 copy(50, h1)
                 copy(75, h2)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t1, preset=h1)
                 on_delay(t2, preset=h2)
-            with Rung(h1 > 30, h2 > 60):
+            with rung(h1 > 30, h2 > 60):
                 out(flag)
 
         graph = build_program_graph(logic)
@@ -73,11 +73,11 @@ class TestKernelDomainDiscovery:
         flag = Bool("SelfFeedFlag")
 
         with Program(strict=False) as logic:
-            with Rung(boost):
+            with rung(boost):
                 math(counter + 2, counter)
-            with Rung(~boost):
+            with rung(~boost):
                 math(counter + 1, counter)
-            with Rung(counter > 50):
+            with rung(counter > 50):
                 out(flag)
 
         graph = build_program_graph(logic)
@@ -104,13 +104,13 @@ class TestKernelDomainDiscovery:
         flag = Bool("MixFlag")
 
         with Program(strict=False) as logic:
-            with Rung(boost):
+            with rung(boost):
                 math(counter + 3, counter)
-            with Rung(~boost):
+            with rung(~boost):
                 math(counter + 1, counter)
-            with Rung(reset_btn):
+            with rung(reset_btn):
                 copy(0, counter)
-            with Rung(counter > 50):
+            with rung(counter > 50):
                 out(flag)
 
         graph = build_program_graph(logic)
@@ -134,13 +134,13 @@ class TestKernelDomainDiscovery:
         active = Bool("Active")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(step % 2, odd)
-            with Rung(odd != 1):
+            with rung(odd != 1):
                 math(step + 1, step)
-            with Rung(step != stored):
+            with rung(step != stored):
                 copy(step, stored)
-            with Rung(step == 3):
+            with rung(step == 3):
                 out(active)
 
         graph = build_program_graph(logic)
@@ -172,9 +172,9 @@ class TestKernelDomainDiscovery:
         flag = Bool("OverwriteFlag")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(source, stored)
-            with Rung(stored > 150):
+            with rung(stored > 150):
                 out(flag)
 
         graph = build_program_graph(logic)

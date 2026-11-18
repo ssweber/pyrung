@@ -104,7 +104,7 @@ For tests that observe behavior over time (timers, counters), use `oneshot=True`
 
 ```python
 def prove_ton_resets(slot):
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Scratch, oneshot=True)   # setup fires once
         on_delay(timer, preset=100)
         copy(timer.Acc, slot.Result1)         # always updates
@@ -132,7 +132,7 @@ One Out to a bit. A second Out rung writes the bit off whenever its own rung is 
 
 1. `fill(0, <the whole slot>)` -- one instruction, `fill(0, DS111..DS119)` for `rungs` slot 1. This also zeroes `Cmd` (already 0) and `Ready`.
 2. The case's `init(slot)`, if it has one: instructions that put the case's own state back.
-3. `copy(1, slot.Ready)`. A case with `ready=` raises `Ready` in a second rung instead, `Rung(slot.Cmd == 0, *ready(slot))`, so `Ready` is 1 at the end of a scan only once those conditions hold.
+3. `copy(1, slot.Ready)`. A case with `ready=` raises `Ready` in a second rung instead, `rung(slot.Cmd == 0, *ready(slot))`, so `Ready` is 1 at the end of a scan only once those conditions hold.
 
 After the zero write, the harness waits for SD9 to move on two scans. Only then does it trust `Ready = 1` with `Cmd = 0` and `Fired = 0`. A read just after a write can return a scan from before it.
 

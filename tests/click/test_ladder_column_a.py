@@ -15,7 +15,7 @@ import pytest
 
 from pyrung.click import ClickBlocks, LadderExportError, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.layout import assert_no_column_a_vertical
-from pyrung.core import Counter, Program, Rung, Timer
+from pyrung.core import Counter, Program, Timer, rung
 from pyrung.core.program import (
     branch,
     copy,
@@ -45,7 +45,7 @@ def _tag_map() -> TagMap:
 
 def _multi():
     with Program() as p:
-        with Rung():
+        with rung():
             out(c[1])
             out(c[2])
             out(c[3])
@@ -54,7 +54,7 @@ def _multi():
 
 def _calc_copy():
     with Program() as p:
-        with Rung():
+        with rung():
             math(ds[1] + 1, ds[1])
             copy(1, ds[2])
     return p
@@ -62,7 +62,7 @@ def _calc_copy():
 
 def _branch_after_out():
     with Program() as p:
-        with Rung():
+        with rung():
             out(c[1])
             with branch(c[2]):
                 out(c[3])
@@ -71,7 +71,7 @@ def _branch_after_out():
 
 def _two_branches():
     with Program() as p:
-        with Rung():
+        with rung():
             with branch(c[2]):
                 out(c[3])
             with branch(c[4]):
@@ -82,7 +82,7 @@ def _two_branches():
 
 def _branch_with_two_outputs():
     with Program() as p:
-        with Rung():
+        with rung():
             with branch(c[2]):
                 out(c[3])
                 out(c[4])
@@ -92,7 +92,7 @@ def _branch_with_two_outputs():
 
 def _nested_branch():
     with Program() as p:
-        with Rung():
+        with rung():
             with branch():
                 with branch(c[2]):
                     out(c[3])
@@ -103,7 +103,7 @@ def _nested_branch():
 
 def _branches_only_2():
     with Program() as p:
-        with Rung():
+        with rung():
             with branch(c[2]):
                 out(c[1])
             with branch(c[3]):
@@ -113,7 +113,7 @@ def _branches_only_2():
 
 def _branches_only_3():
     with Program() as p:
-        with Rung():
+        with rung():
             with branch(c[2]):
                 out(c[1])
             with branch(c[3]):
@@ -125,23 +125,23 @@ def _branches_only_3():
 
 def _box_with_pins():
     with Program() as p:
-        with Rung():
+        with rung():
             count_up(Counter[1], 5).down(c[4]).reset(c[2])
     return p
 
 
 def _timer_pin():
     with Program() as p:
-        with Rung():
+        with rung():
             on_delay(Timer[1], 100).reset(c[2])
     return p
 
 
 def _for_body():
     with Program() as p:
-        with Rung(c[1]):
+        with rung(c[1]):
             with forloop(3):
-                with Rung():
+                with rung():
                     copy(1, ds[1])
                     copy(2, ds[2])
     return p
@@ -150,7 +150,7 @@ def _for_body():
 def _subroutine():
     with Program() as p:
         with subroutine("Gate"):
-            with Rung():
+            with rung():
                 math(ds[1] + 1, ds[1])
                 copy(1, ds[2])
     return p
@@ -158,9 +158,9 @@ def _subroutine():
 
 def _continued():
     with Program() as p:
-        with Rung():
+        with rung():
             out(c[1])
-        with Rung(c[2]):
+        with rung(c[2]):
             out(c[3])
             out(c[4])
     return p
@@ -239,9 +239,9 @@ def test_each_item_on_the_rail_is_a_rung_of_its_own_in_a_loop_or_subroutine():
 
 def test_importer_reads_the_wires_of_one_click_rung_as_continued_rungs():
     with Program() as p:
-        with Rung(c[1]):
+        with rung(c[1]):
             out(c[2])
-        with Rung(c[3]).continued():
+        with rung(c[3]).continued():
             out(c[4])
     bundle = join_continued(pyrung_to_ladder(p, _tag_map()), p)
     assert [row[0] for row in bundle.main_rows[1:]] == ["R", "", "R"]

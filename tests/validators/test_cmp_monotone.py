@@ -16,12 +16,12 @@ from pyrung.core import (
     Bool,
     Counter,
     Program,
-    Rung,
     Timer,
     copy,
     count_down,
     count_up,
     on_delay,
+    rung,
 )
 from pyrung.core.validation.report import check
 
@@ -30,9 +30,9 @@ def _timer_eq_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Acc == 5):
+        with rung(tmr.Acc == 5):
             copy(1, out)
     return prog
 
@@ -55,9 +55,9 @@ def _reset_floor_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Acc != 0):
+        with rung(tmr.Acc != 0):
             copy(1, out)
     return prog
 
@@ -72,9 +72,9 @@ def _timer_ne_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Acc != 5):
+        with rung(tmr.Acc != 5):
             copy(1, out)
     return prog
 
@@ -93,9 +93,9 @@ def _count_up_program() -> Program:
     reset = Bool("Rst", external=True)
     counter = Counter.clone("Ctr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             count_up(counter, preset=10).reset(reset)
-        with Rung(counter.Acc == 10):
+        with rung(counter.Acc == 10):
             copy(1, out)
     return prog
 
@@ -105,9 +105,9 @@ def _count_down_program() -> Program:
     out = Bool("Out", external=True)
     reset = Bool("Rst", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             count_down(counter, preset=3).reset(reset)
-        with Rung(counter.Acc == 3):
+        with rung(counter.Acc == 3):
             copy(1, out)
     return prog
 
@@ -129,9 +129,9 @@ def _correct_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Done):
+        with rung(tmr.Done):
             copy(1, out)
     return prog
 

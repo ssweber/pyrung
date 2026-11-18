@@ -6,7 +6,7 @@ other. Requires a multi-phase sequence: arm A, reset guard, arm B.
 
 from __future__ import annotations
 
-from pyrung import And, Bool, Or, Program, Rung, Timer, on_delay, out, rise
+from pyrung import And, Bool, Or, Program, Timer, on_delay, out, rise, rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
 
@@ -25,19 +25,19 @@ def _nogood_program() -> tuple[Program, Bool]:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(Input_A):
+        with rung(Input_A):
             on_delay(TimerA, 100, "ms")
-        with Rung(Input_B):
+        with rung(Input_B):
             on_delay(TimerB, 100, "ms")
-        with Rung(Or(And(TimerA.Done, ~Guard_B), Latch_A)):
+        with rung(Or(And(TimerA.Done, ~Guard_B), Latch_A)):
             out(Latch_A)
-        with Rung(Or(And(TimerB.Done, ~Guard_A), Latch_B)):
+        with rung(Or(And(TimerB.Done, ~Guard_A), Latch_B)):
             out(Latch_B)
-        with Rung(Or(TimerA.Done, Guard_A), ~Reset_Cmd):
+        with rung(Or(TimerA.Done, Guard_A), ~Reset_Cmd):
             out(Guard_A)
-        with Rung(Or(TimerB.Done, Guard_B), ~Reset_Cmd):
+        with rung(Or(TimerB.Done, Guard_B), ~Reset_Cmd):
             out(Guard_B)
-        with Rung(Latch_A, Latch_B):
+        with rung(Latch_A, Latch_B):
             out(Target)
 
     return prog, Target
@@ -55,15 +55,15 @@ def _clobber_program() -> tuple[Program, Bool]:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(Or(rise(Input_A), Latch_A), ~Blocker):
+        with rung(Or(rise(Input_A), Latch_A), ~Blocker):
             out(Latch_A)
-        with Rung(Input_B):
+        with rung(Input_B):
             on_delay(TimerB, 100, "ms")
-        with Rung(Or(TimerB.Done, Latch_B)):
+        with rung(Or(TimerB.Done, Latch_B)):
             out(Latch_B)
-        with Rung(Or(rise(Input_B), Blocker), ~Reset_Cmd):
+        with rung(Or(rise(Input_B), Blocker), ~Reset_Cmd):
             out(Blocker)
-        with Rung(Latch_A, Latch_B):
+        with rung(Latch_A, Latch_B):
             out(Target)
 
     return prog, Target

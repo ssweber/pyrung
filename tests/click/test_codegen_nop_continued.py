@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, nop, pyrung_to_ladder
-from pyrung.core import Or, Program, Rung, Timer
+from pyrung.core import Or, Program, Timer, rung
 from pyrung.core.program import branch, call, copy, forloop, on_delay, out, subroutine
 from tests.click.helpers import (
     bundle_logic,
@@ -35,78 +35,78 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 
 
 def _contact_nop() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         pass
 
 
 def _contact_nop_then_continued() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         pass
-    with Rung(c[1], c[2]).continued():
+    with rung(c[1], c[2]).continued():
         copy(1, ds[1])
 
 
 def _or_contacts() -> None:
-    with Rung(Or(c[1], c[6])):
+    with rung(Or(c[1], c[6])):
         pass
-    with Rung(Or(c[1], c[6]), c[2]).continued():
+    with rung(Or(c[1], c[6]), c[2]).continued():
         copy(1, ds[1])
 
 
 def _continued_contact_nop_after_output() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         copy(3, ds[3])
-    with Rung(c[1], c[2]).continued():
+    with rung(c[1], c[2]).continued():
         pass
 
 
 def _branch_then_continued_contact_nop() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         copy(1, ds[1])
         with branch(c[2]):
             copy(2, ds[2])
-    with Rung(c[1], c[3]).continued():
+    with rung(c[1], c[3]).continued():
         pass
 
 
 def _contact_nop_in_subroutine() -> None:
-    with Rung(c[5]):
+    with rung(c[5]):
         call("Sub")
     with subroutine("Sub"):
-        with Rung(c[1]):
+        with rung(c[1]):
             pass
-        with Rung(c[1], c[2]).continued():
+        with rung(c[1], c[2]).continued():
             copy(1, ds[1])
 
 
 def _nop_then_continued() -> None:
-    with Rung():
+    with rung():
         pass
-    with Rung(c[1], c[2]).continued():
+    with rung(c[1], c[2]).continued():
         copy(1, ds[1])
 
 
 def _nop_then_continued_timer() -> None:
-    with Rung():
+    with rung():
         pass
-    with Rung(c[1], c[2]).continued():
+    with rung(c[1], c[2]).continued():
         on_delay(Timer[1], preset=100).reset(c[7])
 
 
 def _continued_nop_after_output() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         out(y[1])
-    with Rung().continued():
+    with rung().continued():
         pass
 
 
 def _nop_then_continued_in_subroutine() -> None:
-    with Rung(c[5]):
+    with rung(c[5]):
         call("Sub")
     with subroutine("Sub"):
-        with Rung():
+        with rung():
             pass
-        with Rung(c[1]).continued():
+        with rung(c[1]).continued():
             copy(1, ds[1])
 
 
@@ -152,7 +152,7 @@ def test_export_writes_a_contact_in_front_of_a_nop(name: str):
 
 def test_export_writes_the_nop_row_with_its_contact():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             nop()
     rows = pyrung_to_ladder(logic, TagMap()).main_rows
     assert rows[1][1] == "C1"
@@ -161,7 +161,7 @@ def test_export_writes_the_nop_row_with_its_contact():
 
 def test_contact_nop_round_trips_to_the_same_program():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             nop()
     bundle = pyrung_to_ladder(logic, TagMap())
     code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
@@ -170,7 +170,7 @@ def test_contact_nop_round_trips_to_the_same_program():
 
 def test_check_reports_a_nop_behind_a_condition():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             nop()
     assert _nop_codes(logic) == ["CLK_NOP_NO_COIL"]
 
@@ -200,7 +200,7 @@ def test_check_reports_nothing_for_a_bare_nop_wire_beside_a_coil():
 def test_check_reports_a_nop_in_a_branch_with_its_own_contact_beside_a_coil():
     # CLICK capture clicknick-wt/buildbot/jobs/nop-leg: C0003 with the NOP leg on top or bottom.
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             out(y[1])
             with branch(c[2]):
                 nop()
@@ -210,7 +210,7 @@ def test_check_reports_a_nop_in_a_branch_with_its_own_contact_beside_a_coil():
 def test_check_reports_nothing_for_a_nop_branch_with_no_contact_beside_a_coil():
     # On the coil's net with no contact of its own, so CLICK reports nothing.
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             out(y[1])
             with branch():
                 nop()
@@ -219,14 +219,14 @@ def test_check_reports_nothing_for_a_nop_branch_with_no_contact_beside_a_coil():
 
 def test_check_reports_nothing_for_a_bare_nop():
     with Program() as logic:
-        with Rung():
+        with rung():
             nop()
     assert _nop_codes(logic) == []
 
 
 def test_export_warns_instead_of_refusing_a_contact_nop():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             nop()
     with pytest.warns(UserWarning, match="CLK_NOP_NO_COIL"):
         pyrung_to_ladder(logic, TagMap(include_system=False))
@@ -247,11 +247,11 @@ def test_a_nop_beside_a_continued_rung_is_a_click_rung_of_its_own(name: str):
 def test_bare_nop_between_rungs_exports():
     """A bare NOP with normal rungs on either side is its own CLICK rung."""
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             copy(1, ds[1])
-        with Rung():
+        with rung():
             pass
-        with Rung(c[2]):
+        with rung(c[2]):
             copy(2, ds[2])
     code = strip_pyrung_boilerplate(ladder_to_pyrung(pyrung_to_ladder(logic, TagMap())))
     assert "with rung():\n    pass" in code
@@ -260,9 +260,9 @@ def test_bare_nop_between_rungs_exports():
 def test_continued_rows_come_back_as_continued_rungs():
     """Each wire of a CLICK rung is a rung of its own, row for row."""
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             copy(1, ds[1])
-        with Rung(c[1], c[2]).continued():
+        with rung(c[1], c[2]).continued():
             copy(2, ds[2])
     bundle = join_continued(pyrung_to_ladder(logic, TagMap()), logic)
     code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
@@ -296,7 +296,7 @@ def test_nop_leg_imports_as_nop_in_a_branch():
 
 def test_branch_nop_beside_a_coil_exports_and_round_trips():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             out(y[1])
             with branch(c[2]):
                 nop()
@@ -307,7 +307,7 @@ def test_branch_nop_beside_a_coil_exports_and_round_trips():
 
 def test_check_reports_a_nop_branch_under_a_contact_with_no_coil():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             with branch(c[2]):
                 nop()
     assert _nop_codes(logic) == ["CLK_NOP_NO_COIL"]
@@ -315,7 +315,7 @@ def test_check_reports_a_nop_branch_under_a_contact_with_no_coil():
 
 def test_check_reports_a_nop_branch_under_a_bare_rung():
     with Program() as logic:
-        with Rung():
+        with rung():
             with branch(c[2]):
                 nop()
     assert _nop_codes(logic) == ["CLK_NOP_NO_COIL"]
@@ -323,24 +323,24 @@ def test_check_reports_a_nop_branch_under_a_bare_rung():
 
 def test_check_reports_a_forloop_body_rung_with_a_contact_and_no_output():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             with forloop(3):
-                with Rung(c[2]):
+                with rung(c[2]):
                     pass
     assert _nop_codes(logic) == ["CLK_NOP_NO_COIL"]
 
 
 def test_check_reports_nothing_for_a_forloop_body_rung_with_no_contact():
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             with forloop(3):
-                with Rung():
+                with rung():
                     pass
     assert _nop_codes(logic) == []
 
 
 def _two_nop_legs() -> None:
-    with Rung(c[1]):
+    with rung(c[1]):
         with branch(c[2]):
             nop()
         with branch(c[3]):
@@ -380,7 +380,7 @@ def test_nop_wires_from_the_rail_come_back_as_branches(tmp_path: Path):
 
 def test_check_reports_nothing_for_a_nop_leg_the_export_factors_onto_the_coil_net():
     with Program() as logic:
-        with Rung():
+        with rung():
             with branch(c[1]):
                 out(y[1])
             with branch(c[1]):

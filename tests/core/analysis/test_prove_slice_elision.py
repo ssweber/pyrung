@@ -14,7 +14,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     call,
@@ -27,6 +26,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
     search,
     subroutine,
     time_drum,
@@ -57,9 +57,9 @@ def test_unconditional_write_before_read_is_elided() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             reset(tmp)
-        with Rung(tmp):
+        with rung(tmp):
             out(seen)
 
     reduced, elided = _slice_elide(logic, {"Tmp": (False, True), "Seen": (False, True)}, {})
@@ -74,7 +74,7 @@ def test_tag_with_no_readers_is_elided() -> None:
     dump = Int("Dump", choices={0: "a", 1: "b"})
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(trig, dump)
 
     _reduced, elided = _slice_elide(logic, {"Dump": (0, 1)}, {"Trig": (False, True)})
@@ -88,7 +88,7 @@ def test_seal_in_flag_is_kept_stateful() -> None:
     held = Bool("Held")
 
     with Program(strict=False) as logic:
-        with Rung(Or(start, held)):
+        with rung(Or(start, held)):
             out(held)
 
     reduced, elided = _slice_elide(logic, {"Held": (False, True)}, {"Start": (False, True)})
@@ -101,7 +101,7 @@ def test_oneshot_write_does_not_hide_entry_read() -> None:
     """A oneshot copy goes inert on later scans, exposing an entry read.
 
     ``copy(src, n2, oneshot=True)`` writes ``N2`` only on first activation;
-    afterwards ``Rung(N2)`` observes the scan-entry value, so ``N2`` must stay
+    afterwards ``rung(N2)`` observes the scan-entry value, so ``N2`` must stay
     stateful.  The def-use fast path must not short-circuit this.
     """
     src = Int("Src", external=True, min=0, max=3)
@@ -109,9 +109,9 @@ def test_oneshot_write_does_not_hide_entry_read() -> None:
     flag = Bool("Flag")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(src, n2, oneshot=True)
-        with Rung(n2):
+        with rung(n2):
             latch(flag)
 
     reduced, elided = _slice_elide(logic, {"N2": (0, 1, 2, 3)}, {"Src": (0, 1, 2, 3)})
@@ -127,7 +127,7 @@ def test_edge_contact_memory_exposes_entry_read(edge) -> None:
     ``fall(B)`` is True only when the contact's memory (``_edge:e1``) holds
     True and ``B`` is False, so the slice must try both memory values: with
     the memory left at its default False, ``fall(B)`` never fires, the copy
-    never reads ``X`` before ``Rung(): copy(5, X)`` writes it, and ``X`` would
+    never reads ``X`` before ``rung(): copy(5, X)`` writes it, and ``X`` would
     look scan-local.  ``rise(B)`` fires from either memory value, so it is
     caught either way.
     """
@@ -136,9 +136,9 @@ def test_edge_contact_memory_exposes_entry_read(edge) -> None:
     y = Int("Y", min=0, max=5)
 
     with Program(strict=False) as logic:
-        with Rung(edge(b)):
+        with rung(edge(b)):
             copy(x, y)
-        with Rung():
+        with rung():
             copy(5, x)
 
     _reduced, elided = _slice_elide(logic, {"X": (0, 5), "Y": (0, 5)}, {"B": (False, True)})
@@ -159,13 +159,13 @@ def test_subroutine_scratch_is_elided() -> None:
 
     @subroutine("worker", strict=False)
     def worker() -> None:
-        with Rung():
+        with rung():
             copy(1, scratch)
-        with Rung(scratch == 1):
+        with rung(scratch == 1):
             out(result)
 
     with Program(strict=False) as logic:
-        with Rung(trigger):
+        with rung(trigger):
             call(worker)
 
     _reduced, elided = _slice_elide(logic, {"Scratch": (0, 1)}, {"Trigger": (False, True)})
@@ -181,11 +181,11 @@ def test_all_conditional_writers_can_all_skip_keeps_tag() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(req_a):
+        with rung(req_a):
             copy(1, pulse)
-        with Rung(req_b):
+        with rung(req_b):
             copy(1, pulse)
-        with Rung(pulse == 1):
+        with rung(pulse == 1):
             out(seen)
 
     reduced, elided = _slice_elide(
@@ -207,11 +207,11 @@ def _indexed_entry_read_program() -> tuple[Program, Bool]:
     ds = Block("DS", TagType.INT, 1, 4)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(ds[p], n)
-        with Rung():
+        with rung():
             copy(k, ds[2])
-        with Rung(n == 7):
+        with rung(n == 7):
             latch(hit)
     return logic, hit
 
@@ -242,30 +242,30 @@ def _historian_program(shape: str) -> tuple[Program, Bool]:
 
     @subroutine("hist", strict=False)
     def hist() -> None:
-        with Rung():
+        with rung():
             math(hid * 10 + 9, idx)
         if shape == "read_first":
-            with Rung():
+            with rung():
                 copy(ds[idx], echo)
         if shape == "compare_first":
-            with Rung(~bit, ds[idx] == 7):
+            with rung(~bit, ds[idx] == 7):
                 latch(hit)
-        with Rung(bit):
+        with rung(bit):
             copy(7, ds[idx])
         if shape in ("write_then_read", "compare_first"):
-            with Rung(~bit):
+            with rung(~bit):
                 copy(0, ds[idx])
         if shape != "read_first":
-            with Rung():
+            with rung():
                 copy(ds[idx], echo)
-        with Rung(~bit, echo == 7):
+        with rung(~bit, echo == 7):
             latch(hit)
 
     with Program(strict=False) as logic:
-        with Rung(go1):
+        with rung(go1):
             copy(1, hid)
             call(hist)
-        with Rung(go2):
+        with rung(go2):
             copy(2, hid)
             call(hist)
     return logic, hit
@@ -341,15 +341,15 @@ def _preset_program(kind: str, *, writes_above: bool) -> Program:
     preset = Int("Preset")
 
     def write() -> None:
-        with Rung(slow):
+        with rung(slow):
             copy(300, preset)
-        with Rung(~slow):
+        with rung(~slow):
             copy(100, preset)
 
     with Program(strict=False) as logic:
         if writes_above:
             write()
-        with Rung(Bool("Run", external=True)):
+        with rung(Bool("Run", external=True)):
             _preset_box(kind, preset)
         if not writes_above:
             write()
@@ -376,13 +376,13 @@ def test_drum_preset_set_in_its_subroutine_is_kept() -> None:
 
     @subroutine("mixer", strict=False)
     def mixer() -> None:
-        with Rung(Bool("Slow", external=True)):
+        with rung(Bool("Slow", external=True)):
             copy(300, preset)
-        with Rung(Bool("Run", external=True)):
+        with rung(Bool("Run", external=True)):
             _preset_box("drum", preset)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call(mixer)
 
     _reduced, elided = _slice_elide(logic, {"Preset": (0, 300)}, dict(_PRESET_INPUTS))
@@ -405,9 +405,9 @@ def test_drum_preset_written_first_each_scan_is_elided() -> None:
     preset = Int("Preset")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Int("HmiPreset", external=True, min=0, max=500), preset)
-        with Rung(Bool("Run", external=True)):
+        with rung(Bool("Run", external=True)):
             _preset_box("drum", preset)
 
     dims = {"Preset": (0, 100, 500)}
@@ -426,11 +426,11 @@ def test_search_table_filled_above_each_scan_is_elided() -> None:
         for i in range(1, 5):
             sel = Bool(f"Sel{i}", external=True)
             inputs[sel.name] = (False, True)
-            with Rung(sel):
+            with rung(sel):
                 copy(i * 10, table[i])
-            with Rung(~sel):
+            with rung(~sel):
                 copy(0, table[i])
-        with Rung(Bool("Look", external=True)):
+        with rung(Bool("Look", external=True)):
             search(table.select(1, 4) == 30, result=Int("At"), found=Bool("Hit"))
 
     dims = {f"Tbl{i}": (0, i * 10) for i in range(1, 5)}
@@ -444,9 +444,9 @@ def test_continuous_search_result_is_kept() -> None:
     bins = Block("Bin", TagType.INT, 1, 3)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             search(bins.select(1, 3) == 5, result=Int("At"), found=Bool("Hit"), continuous=True)
-        with Rung(Int("At") == 2):
+        with rung(Int("At") == 2):
             out(Bool("AtTwo"))
 
     _reduced, elided = _slice_elide(logic, {"At": (-1, 0, 1, 2, 3)}, {})

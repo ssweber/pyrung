@@ -6,7 +6,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, run_enabled_function
+from pyrung.core import PLC, Bool, Int, Program, run_enabled_function, rung
 
 
 def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
@@ -37,7 +37,7 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
     )
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(
                 email,
                 ins={"subject": Subject, "body": Body},
@@ -134,7 +134,7 @@ def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.Monk
     )
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(
                 email,
                 ins={"subject": Subject, "body": Body},

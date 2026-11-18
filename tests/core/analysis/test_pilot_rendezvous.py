@@ -6,7 +6,7 @@ The walker must hold both enables simultaneously.
 
 from __future__ import annotations
 
-from pyrung import Bool, Program, Rung, Timer, call, on_delay, out, reset, rung, subroutine
+from pyrung import Bool, Program, Timer, call, on_delay, out, reset, rung, subroutine
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
 
@@ -35,15 +35,15 @@ def _rendezvous_program() -> tuple[Program, Bool]:
             out(InitB)
 
     with Program() as prog:
-        with Rung(EnableA):
+        with rung(EnableA):
             call(sfc_a)
-        with Rung(~EnableA):
+        with rung(~EnableA):
             reset(InitA)
-        with Rung(EnableB):
+        with rung(EnableB):
             call(sfc_b)
-        with Rung(~EnableB):
+        with rung(~EnableB):
             reset(InitB)
-        with Rung(InitA, InitB):
+        with rung(InitA, InitB):
             out(Output)
 
     return prog, Output

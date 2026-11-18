@@ -24,7 +24,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, math, on_delay, out
+from pyrung import Bool, Int, Program, Real, Timer, copy, latch, math, on_delay, out, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.corrections import _absence_root_correctives
@@ -46,17 +46,17 @@ def _sail_trap_program() -> Program:
     Phase = Int("Phase")
 
     with Program() as prog:
-        with Rung(Phase == 0):
+        with rung(Phase == 0):
             copy(6, Phase)  # boot straight into Execute
-        with Rung(Phase == 6, ~Sail):
+        with rung(Phase == 6, ~Sail):
             out(HeatErr)  # intermediate error register
-        with Rung(HeatErr):
+        with rung(HeatErr):
             on_delay(Tmr, 100, "ms")  # alarm delay (10 scans at 10 ms)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             latch(AlmTrig)  # latched alarm
-        with Rung(Phase >= 0):
+        with rung(Phase >= 0):
             math(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
-        with Rung(AlmExtent >= 1, ~Suspend):
+        with rung(AlmExtent >= 1, ~Suspend):
             copy(8, Phase)  # abort Execute -> Aborting
 
     return prog
@@ -168,18 +168,18 @@ def _cold_heater_program() -> Program:
     Setpoint = Int("Setpoint")
 
     with Program() as prog:
-        with Rung(Phase == 0):
+        with rung(Phase == 0):
             copy(130, Setpoint)  # computed threshold, resolved from the snapshot
             copy(6, Phase)  # boot straight into Execute
-        with Rung(Phase == 6, Temp <= Setpoint):
+        with rung(Phase == 6, Temp <= Setpoint):
             out(HeatErr)  # cold heater -> intermediate error register
-        with Rung(HeatErr):
+        with rung(HeatErr):
             on_delay(Tmr, 100, "ms")  # alarm delay (10 scans at 10 ms)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             latch(AlmTrig)  # latched alarm
-        with Rung(Phase >= 0):
+        with rung(Phase >= 0):
             math(AlmTrig * 1, AlmExtent)  # laundering hop (block-sum stand-in)
-        with Rung(AlmExtent >= 1, ~Suspend):
+        with rung(AlmExtent >= 1, ~Suspend):
             copy(8, Phase)  # abort Execute -> Aborting
 
     return prog

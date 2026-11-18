@@ -46,7 +46,6 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
-    Rung,
     copy,
     count_up,
     event_drum,
@@ -55,6 +54,7 @@ from pyrung.core import (
     math,
     out,
     reset,
+    rung,
 )
 from pyrung.core.expression import randint
 from tests.conformance.drum_shift_search.test_drum import entered, first_on_from
@@ -84,11 +84,11 @@ def prove_jump_to_own_step_register(slot):
     # The event (C752) of every step is on scans 2 and 4, and the jump (C753) is on
     # scan 4. The jump's step register is the drum's current-step register.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
         out(c[752])
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         out(c[753])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[751]],
             events=[c[752], c[752], c[752]],
@@ -132,7 +132,7 @@ def init_rand_real_bounds(slot):
 
 
 def _fire(slot):
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Fired, oneshot=True)
 
 
@@ -141,15 +141,15 @@ def prove_loop_body_split(slot):
     # iterations 1, 2 and 4 of 4. The Math above the counter is a body rung of
     # its own with the same contacts, because a box with pins ends its rung.
     counter = ClickCounter(196)
-    with Rung():
+    with rung():
         with forloop(4):
-            with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with rung(slot.Cmd != 0, slot.Fired == 0):
                 math(slot.Scratch + 1, slot.Scratch)
-            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
+            with rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 math(slot.Result2 + 1, slot.Result2)
-            with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
+            with rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch != 3):
                 count_up(counter, 100).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(counter.Acc, slot.Result1)
     _fire(slot)
 

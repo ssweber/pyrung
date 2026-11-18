@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, latch, math, reset, system
+from pyrung.core import copy, latch, math, reset, rung, system
 from tests.conformance.copy.test_past_bank_write import ADDRESS, POINTER
 from tests.conformance.memory import c, dd
 from tests.conformance.scans import count_scans, done, scans_for
@@ -43,35 +43,35 @@ UNREAD = -7
 
 
 def _read(slot: Any, scan: int, into: Any) -> None:
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         copy(UNREAD, into)
         copy(dd[POINTER], into)
 
 
 def _write(slot: Any, scan: int, value: int) -> None:
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         copy(value, dd[POINTER])
 
 
 def prove_clear_then_write(slot: Any) -> None:
     raised43, raised44 = c[231], c[232]
     count_scans(slot, WINDOW)
-    with Rung(slot.Scratch == 2):
+    with rung(slot.Scratch == 2):
         copy(ADDRESS, POINTER)
     _read(slot, 3, slot.ErrorCode)
     _write(slot, 4, 0)
     _read(slot, 5, slot.Result1)
     _write(slot, 6, 1234)
-    with Rung(slot.Scratch == 6, SC43):
+    with rung(slot.Scratch == 6, SC43):
         latch(raised43)
-    with Rung(slot.Scratch == 6, SC44):
+    with rung(slot.Scratch == 6, SC44):
         latch(raised44)
     _read(slot, 7, slot.Result2)
     _write(slot, 8, 0)
     _read(slot, 9, slot.Result3)
-    with Rung(slot.Scratch == 9, raised43):
+    with rung(slot.Scratch == 9, raised43):
         math(slot.Result4 + 1, slot.Result4)
-    with Rung(slot.Scratch == 9, raised44):
+    with rung(slot.Scratch == 9, raised44):
         math(slot.Result4 + 2, slot.Result4)
     done(slot, WINDOW)
 

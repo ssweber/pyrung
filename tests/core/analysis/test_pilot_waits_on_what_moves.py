@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Program, Rung, Timer, latch, on_delay
+from pyrung import PLC, Bool, Program, Timer, latch, on_delay, rung
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 
@@ -21,11 +21,11 @@ def _chain(*, first_running: bool, second_running: bool = False) -> tuple[PLC, A
     enable, lamp = Bool("En"), Bool("Lamp")
     first, second = Timer.clone("Tw1"), Timer.clone("Tw2")
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             on_delay(first, 3, "min")
-        with Rung(first.Done):
+        with rung(first.Done):
             on_delay(second, 2, "min")
-        with Rung(second.Done):
+        with rung(second.Done):
             latch(lamp)
     plc = PLC(prog, dt=0.01)
     if first_running:
@@ -71,7 +71,7 @@ def _pulse_program(*, on_ms: int = 500, off_ms: int = 500) -> tuple[Any, Any, An
     )
     hit = Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(enable, feedback):
+        with rung(enable, feedback):
             latch(hit)
     return prog, enable, hit
 

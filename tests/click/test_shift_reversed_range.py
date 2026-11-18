@@ -16,7 +16,7 @@ from pyrung.click import (
     ladder_to_pyrung_project,
     pyrung_to_ladder,
 )
-from pyrung.core import Program, Rung
+from pyrung.core import Program, rung
 from pyrung.core.program import shift
 from tests.click.helpers import round_trip_logic, strip_pyrung_boilerplate
 
@@ -25,9 +25,9 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 
 def _program() -> Program:
     with Program() as logic:
-        with Rung(c[1]):
+        with rung(c[1]):
             shift(c.select(1011, 1018).reverse()).clock(c[2]).reset(c[3])
-        with Rung(c[1]):
+        with rung(c[1]):
             shift(c.select(11, 18)).clock(c[2]).reset(c[3])
     return logic
 

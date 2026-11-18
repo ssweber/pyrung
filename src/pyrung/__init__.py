@@ -2,7 +2,7 @@
 
 Import user-facing DSL symbols from this module:
 
-    from pyrung import Bool, Program, Rung, PLC
+    from pyrung import Bool, Program, rung, PLC
 """
 
 from pyrung.core import (

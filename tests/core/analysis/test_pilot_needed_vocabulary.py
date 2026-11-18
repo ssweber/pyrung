@@ -21,7 +21,7 @@ producing ``CurStep == 2`` from the odd step 1.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, copy, math
+from pyrung import PLC, Bool, Int, Program, copy, math, rung
 from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.pilot.availability import _writer_availability, _WriterAvailability
 from pyrung.core.analysis.pilot.trace import (
@@ -39,14 +39,14 @@ def _build_sfc() -> Program:
     valstepisodd = Int("valstepisodd")
     fb = Bool("fb", external=True)
     with Program(strict=False) as prog:
-        with Rung(CurStep == 1, fb):  # rung 0: Trans set ONLY from CurStep==1
+        with rung(CurStep == 1, fb):  # rung 0: Trans set ONLY from CurStep==1
             copy(1, Trans)
-        with Rung(Trans == 1):  # rung 1: transition increment
+        with rung(Trans == 1):  # rung 1: transition increment
             math(CurStep + 1, CurStep)
             copy(0, Trans)
-        with Rung():  # rung 2: parity derive
+        with rung():  # rung 2: parity derive
             math(CurStep % 2, valstepisodd)
-        with Rung(valstepisodd != 1):  # rung 3: even-step neutral bump
+        with rung(valstepisodd != 1):  # rung 3: even-step neutral bump
             math(CurStep + 1, CurStep)
     return prog
 

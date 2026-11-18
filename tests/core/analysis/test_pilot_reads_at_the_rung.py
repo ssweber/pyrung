@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung import PLC, Bool, Program, Rung, Timer, latch, on_delay, reset
+from pyrung import PLC, Bool, Program, Timer, latch, on_delay, reset, rung
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 
@@ -15,13 +15,13 @@ def _reset_at_the_top(*, go: bool) -> tuple[PLC, Any]:
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
     watch = Timer.clone("W")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             reset(enable)
-        with Rung(~enable, feedback):
+        with rung(~enable, feedback):
             on_delay(watch, 3000)
-        with Rung(go_tag):
+        with rung(go_tag):
             latch(enable)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
@@ -70,13 +70,13 @@ def test_a_read_of_the_scans_entry_value_says_nothing_about_the_next_scan() -> N
     )
     watch = Timer.clone("W")
     with Program(strict=False) as prog:
-        with Rung(clear):
+        with rung(clear):
             reset(enable)
-        with Rung(~enable):
+        with rung(~enable):
             on_delay(watch, 500)
-        with Rung(go):
+        with rung(go):
             latch(enable)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Go": True})

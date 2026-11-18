@@ -2,7 +2,7 @@
 
 A read that comes before a tag's first write in scan order sees the value the
 tag ended the previous scan with.  So a chain of coils written below their
-readers (``Rung(Y2): out(Y3)`` above ``Rung(Y1): out(Y2)``) keeps each coil as
+readers (``rung(Y2): out(Y3)`` above ``rung(Y1): out(Y2)``) keeps each coil as
 state in the facts.
 """
 
@@ -18,7 +18,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     branch,
     call,
     copy,
@@ -28,6 +27,7 @@ from pyrung.core import (
     out,
     return_early,
     rise,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.prove import Intractable
@@ -60,52 +60,52 @@ def _y3_with_g(tags: Any) -> bool:
 
 def _main_chain():
     with Program(strict=False) as logic:
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn"], Y3, _y3
 
 
 def _subroutine_chain():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("chain")
         with subroutine("chain"):
-            with Rung(Y2):
+            with rung(Y2):
                 out(Y3)
-            with Rung(Y1):
+            with rung(Y1):
                 out(Y2)
-            with Rung(rise(Btn)):
+            with rung(rise(Btn)):
                 out(Y1)
     return logic, ["Btn"], Y3, _y3
 
 
 def _main_reads_above_call():
     with Program(strict=False) as logic:
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
-        with Rung():
+        with rung():
             call("chain")
         with subroutine("chain"):
-            with Rung(Y1):
+            with rung(Y1):
                 out(Y2)
-            with Rung(rise(Btn)):
+            with rung(rise(Btn)):
                 out(Y1)
     return logic, ["Btn"], Y3, _y3
 
 
 def _for_body_chain():
     with Program(strict=False) as logic:
-        with Rung(Y2):
+        with rung(Y2):
             with forloop(1):
                 out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             with forloop(1):
                 out(Y2)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             with forloop(1):
                 out(Y1)
     return logic, ["Btn"], Y3, _y3
@@ -113,47 +113,47 @@ def _for_body_chain():
 
 def _for_body_skipped():
     with Program(strict=False) as logic:
-        with Rung(Btn):
+        with rung(Btn):
             with forloop(1):
                 out(Y2)
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
     return logic, ["Btn"], And(Y3, ~Btn), _y3_without_btn
 
 
 def _for_zero_count():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             copy(0, D)
-        with Rung(~G):
+        with rung(~G):
             copy(1, D)
-        with Rung(Btn):
+        with rung(Btn):
             with forloop(D):
                 out(Y2)
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
     return logic, ["Btn", "G"], And(Y3, ~Btn), _y3_without_btn
 
 
 def _through_or():
     with Program(strict=False) as logic:
-        with Rung(Or(Y2, G)):
+        with rung(Or(Y2, G)):
             out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn", "G"], And(Y3, ~G), _y3_without_g
 
 
 def _through_branch():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             with branch(Y2):
                 out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn", "G"], And(Y3, G), _y3_with_g
 
@@ -161,22 +161,22 @@ def _through_branch():
 def _rise_reader_pulse():
     # The pulse is in the entry value and the edge memory together: never seen.
     with Program(strict=False) as logic:
-        with Rung(rise(Y2)):
+        with rung(rise(Y2)):
             out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn"], Y3, _y3
 
 
 def _fall_reader_pulse():
     with Program(strict=False) as logic:
-        with Rung(fall(Y2)):
+        with rung(fall(Y2)):
             out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn"], Y3, _y3
 
@@ -185,64 +185,64 @@ def _rise_reader_level():
     # rise() compares against the previous scan's end value, so a rise(Y2) above
     # Y2's only writer never fires, so Y3 is never on.
     with Program(strict=False) as logic:
-        with Rung(rise(Y2)):
+        with rung(rise(Y2)):
             out(Y3)
-        with Rung(Btn):
+        with rung(Btn):
             out(Y2)
     return logic, ["Btn"], And(Y3, ~Btn), _y3_without_btn
 
 
 def _copy_dest_above_writer():
     with Program(strict=False) as logic:
-        with Rung(D == 1):
+        with rung(D == 1):
             out(Y3)
-        with Rung(Y1):
+        with rung(Y1):
             copy(1, D)
-        with Rung(~Y1):
+        with rung(~Y1):
             copy(0, D)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn"], Y3, _y3
 
 
 def _calc_dest_above_writer():
     with Program(strict=False) as logic:
-        with Rung(D == 1):
+        with rung(D == 1):
             out(Y3)
-        with Rung():
+        with rung():
             math(E * 1, D)
-        with Rung(Y1):
+        with rung(Y1):
             copy(1, E)
-        with Rung(~Y1):
+        with rung(~Y1):
             copy(0, E)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
     return logic, ["Btn"], Y3, _y3
 
 
 def _two_writers_read_between():
     with Program(strict=False) as logic:
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
-        with Rung(G):
+        with rung(G):
             out(Y2)
     return logic, ["Btn", "G"], And(Y3, ~G), _y3_without_g
 
 
 def _return_early_skips_writer():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung(G):
+            with rung(G):
                 return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, ["Btn", "G"], And(Y3, ~Btn), _y3_without_btn
 
@@ -280,11 +280,11 @@ def test_coil_read_above_its_writer_is_stateful(shape_name: str) -> None:
 
 def test_coil_read_only_below_its_writer_stays_combinational() -> None:
     with Program(strict=False) as logic:
-        with Rung(rise(Btn)):
+        with rung(rise(Btn)):
             out(Y1)
-        with Rung(Y1):
+        with rung(Y1):
             out(Y2)
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
 
     result = _classify_dimensions(logic)

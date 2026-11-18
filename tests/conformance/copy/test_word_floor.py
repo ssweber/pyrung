@@ -41,7 +41,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, system
+from pyrung.core import copy, fill, math, rung, system
 from tests.conformance.memory import dd, df, dh
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -57,7 +57,7 @@ def _class_of(slot: Any, value: Any, readings: list[int], into: Any) -> None:
     The rungs run after the stores.
     """
     for number, reading in enumerate(readings, start=1):
-        with Rung(slot.Scratch > WINDOW, value == reading):
+        with rung(slot.Scratch > WINDOW, value == reading):
             copy(number, into)
 
 
@@ -66,33 +66,33 @@ def prove_below_int_and_nan(slot: Any) -> None:
     inf, nan = df[31], df[32]
     words = [dh[n] for n in (21, 22, 23)]
     count_scans(slot, WINDOW)
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy(-40000, minus_40000)
         copy(-70000, minus_70000)
         copy(3.0e38, inf)
         math(inf * 10, inf)
         math(inf - inf, nan)
         fill(SENTINEL, dh.select(21, 23))
-    with Rung(slot.Scratch == STORE_SCAN):
+    with rung(slot.Scratch == STORE_SCAN):
         copy(1, slot.Result4)
-    with Rung(slot.Scratch == STORE_SCAN, nan >= 0):
+    with rung(slot.Scratch == STORE_SCAN, nan >= 0):
         copy(0, slot.Result4)
-    with Rung(slot.Scratch == STORE_SCAN, nan < 0):
+    with rung(slot.Scratch == STORE_SCAN, nan < 0):
         copy(0, slot.Result4)
-    with Rung(slot.Scratch == STORE_SCAN, SC43):
+    with rung(slot.Scratch == STORE_SCAN, SC43):
         math(slot.Result4 + 16, slot.Result4)
     for source, word, bit in zip((minus_40000, minus_70000, nan), words, (2, 4, 8), strict=True):
-        with Rung(slot.Scratch == STORE_SCAN):
+        with rung(slot.Scratch == STORE_SCAN):
             copy(source, word)
-        with Rung(slot.Scratch == STORE_SCAN, SC43):
+        with rung(slot.Scratch == STORE_SCAN, SC43):
             math(slot.Result4 + bit, slot.Result4)
     _class_of(slot, words[0], [25536, 32768, 0, SENTINEL], slot.Result1)
     _class_of(slot, words[1], [61072, 32768, 0, SENTINEL], slot.Result2)
     _class_of(slot, words[2], [0, SENTINEL, 65535, 32768, 32767], slot.Result3)
-    with Rung(slot.Scratch > WINDOW, slot.Fired == 0, slot.Result1 == 0):
+    with rung(slot.Scratch > WINDOW, slot.Fired == 0, slot.Result1 == 0):
         copy(words[0], size)
         math(size / 2, slot.ErrorCode)
-    with Rung(slot.Scratch > WINDOW, slot.Fired == 0, slot.Result1 != 0, slot.Result2 == 0):
+    with rung(slot.Scratch > WINDOW, slot.Fired == 0, slot.Result1 != 0, slot.Result2 == 0):
         copy(words[1], size)
         math(size / 2, slot.ErrorCode)
     done(slot, WINDOW)

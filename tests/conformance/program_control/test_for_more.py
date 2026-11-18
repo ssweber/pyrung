@@ -49,7 +49,6 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     Or,
-    Rung,
     copy,
     count_up,
     fill,
@@ -61,6 +60,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
     system,
     toggle,
 )
@@ -74,34 +74,34 @@ DEADLINE_MS = 1500
 
 def prove_oneshot_and_edges(slot):
     count_scans(slot)
-    rung, skip, bit, toggled = c[1722], c[1723], c[1724], c[1725]
-    with Rung(
+    rung_bit, skip, bit, toggled = c[1722], c[1723], c[1724], c[1725]
+    with rung(
         slot.Cmd != 0,
         Or(slot.Scratch == 3, slot.Scratch == 4, slot.Scratch == 5, slot.Scratch == 7),
     ):
-        out(rung)
-    with Rung(rung):
+        out(rung_bit)
+    with rung(rung_bit):
         with forloop(2, oneshot=True):
             math(slot.Result1 + 1, slot.Result1)
             copy(slot.Scratch, slot.Result2)
     # The bit rises on scan 3, the For's rung false on scans 2..4.  The rung is true
     # with Cmd at 0, so the reset reaches the body's edge.
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 4):
         out(skip)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(bit)
-    with Rung(~skip):
+    with rung(~skip):
         with forloop(1):
-            with Rung(rise(bit), slot.Cmd != 0):
+            with rung(rise(bit), slot.Cmd != 0):
                 copy(slot.Scratch, slot.Result3)
     # Likewise a toggle's rung: true from Cmd, in a For whose rung is always true.
-    with Rung():
+    with rung():
         with forloop(2):
-            with Rung(slot.Cmd != 0):
+            with rung(slot.Cmd != 0):
                 toggle(toggled)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, toggled):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, toggled):
         copy(1, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, ~toggled):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, ~toggled):
         copy(2, slot.Result4)
     done(slot)
 
@@ -118,52 +118,52 @@ def prove_timers_at_limits(slot):
     body_td, tof = td[245], ClickTimer(247)
     counter = ClickCounter(149)
     # The reset writes 0 to the presets, so this rung stages them on the first scan only.
-    with Rung(slot.Cmd != 0, ds[3930] == 0):
+    with rung(slot.Cmd != 0, ds[3930] == 0):
         copy(-5, ds[3929])
         copy(100, ds[3930])
-    with Rung(*step(0)):
+    with rung(*step(0)):
         out(c[1726])
     # The For's rung is true with Cmd at 0, so the reset reaches the TON.
-    with Rung(Or(slot.Cmd == 0, slot.Scratch != 1)):
+    with rung(Or(slot.Cmd == 0, slot.Scratch != 1)):
         with forloop(1):
-            with Rung(slot.Cmd != 0):
+            with rung(slot.Cmd != 0):
                 on_delay(ClickTimer(245), 30000)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ClickTimer(246), ds[3929])
-    with Rung(c[1726]):
+    with rung(c[1726]):
         off_delay(tof, ds[3930])
-    with Rung(slot.Cmd != 0, tof.Acc >= 200, ~tof.Done):
+    with rung(slot.Cmd != 0, tof.Acc >= 200, ~tof.Done):
         copy(1000, ds[3930])
-    with Rung(*once(slot), tof.Acc >= 300, ds[3930] == 1000, tof.Done):
+    with rung(*once(slot), tof.Acc >= 300, ds[3930] == 1000, tof.Done):
         copy(1, slot.Result3)
     # Below its TON, once the rung is true: a false rung clears the TD.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ClickTimer(248), 30000)
     # Above the write, so these rungs first see C1728 on the scan after it.
-    with Rung(*once(slot), c[1728], slot.Result4 == 0, td[248] < 0):
+    with rung(*once(slot), c[1728], slot.Result4 == 0, td[248] < 0):
         copy(1, slot.Result4)
-    with Rung(*once(slot), c[1728], slot.Result4 == 0, td[248] >= 0):
+    with rung(*once(slot), c[1728], slot.Result4 == 0, td[248] >= 0):
         copy(2, slot.Result4)
-    with Rung(slot.Cmd != 0, ~c[1728]):
+    with rung(slot.Cmd != 0, ~c[1728]):
         copy(-100, td[248])
         latch(c[1728])
-    with Rung(c[1727]):
+    with rung(c[1727]):
         count_up(counter, ds[3929]).reset(slot.Cmd == 0)
-    with Rung(*step(3), tof.Acc >= 300):
+    with rung(*step(3), tof.Acc >= 300):
         copy(1, slot.Fired)
-    with Rung(*step(2), body_td < 300):
+    with rung(*step(2), body_td < 300):
         copy(1, slot.Result1)
-    with Rung(*step(2), body_td >= 300):
+    with rung(*step(2), body_td >= 300):
         copy(2, slot.Result1)
-    with Rung(*step(2), t[246]):
+    with rung(*step(2), t[246]):
         copy(1, slot.Result2)
-    with Rung(*step(2), counter.Done):
+    with rung(*step(2), counter.Done):
         copy(1, slot.ErrorCode)
-    with Rung(*step(2)):
+    with rung(*step(2)):
         copy(3, slot.Scratch)
-    with Rung(*step(1), clock >= 400):
+    with rung(*step(1), clock >= 400):
         copy(2, slot.Scratch)
-    with Rung(*step(0), body_td >= 100):
+    with rung(*step(0), body_td >= 100):
         copy(1, slot.Scratch)
     time_out(slot, clock >= DEADLINE_MS)
 
@@ -175,26 +175,26 @@ def prove_clock_edges_in_a_body(slot):
         (system.sys.clock_100ms, dd[78], dd[82], dd[79]),
         (system.sys.scan_clock_toggle, dd[80], dd[83], dd[81]),
     ):
-        with Rung(rise(edge_clock), *live):
+        with rung(rise(edge_clock), *live):
             math(plain + 1, plain)
             math(double + 2, double)
         # The For's rung is always true, so the reset reaches the body's edge.
-        with Rung():
+        with rung():
             with forloop(2):
-                with Rung(rise(edge_clock), *live):
+                with rung(rise(edge_clock), *live):
                     math(inner + 1, inner)
     ready = (*once(slot), clock >= 550)
-    with Rung(*ready, dd[79] == dd[78]):
+    with rung(*ready, dd[79] == dd[78]):
         copy(1, slot.Result1)
-    with Rung(*ready, dd[79] == dd[82]):
+    with rung(*ready, dd[79] == dd[82]):
         copy(2, slot.Result1)
-    with Rung(*ready, dd[81] == dd[80]):
+    with rung(*ready, dd[81] == dd[80]):
         copy(1, slot.Result2)
-    with Rung(*ready, dd[81] == dd[83]):
+    with rung(*ready, dd[81] == dd[83]):
         copy(2, slot.Result2)
-    with Rung(*ready, dd[78] >= 3, dd[78] <= 7):
+    with rung(*ready, dd[78] >= 3, dd[78] <= 7):
         copy(1, slot.Result3)
-    with Rung(*ready):
+    with rung(*ready):
         copy(1, slot.Fired)
 
 

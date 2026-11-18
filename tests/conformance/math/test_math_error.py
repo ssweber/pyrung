@@ -33,7 +33,7 @@ models apart:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, system
+from pyrung.core import copy, fill, math, rung, system
 from pyrung.core.expression import acos, asin, log, log10, sqrt
 from tests.conformance.memory import df
 from tests.conformance.scans import count_scans, done, scans_for
@@ -60,13 +60,13 @@ def prove_math_errors_do_not_stop(slot):
     for k, (func, operand, _) in enumerate(ERRORS):
         on_scan = slot.Scratch == 2 * (k + 1)
         staged = df[401 + k]
-        with Rung(slot.Cmd != 0, on_scan):
+        with rung(slot.Cmd != 0, on_scan):
             copy(operand, staged)
             copy(99, slot.Result4)
             math(func(staged), slot.Result4)
-        with Rung(slot.Cmd != 0, on_scan, math_error):
+        with rung(slot.Cmd != 0, on_scan, math_error):
             math(slot.Result2 + (1 << k), slot.Result2)
-        with Rung(slot.Cmd != 0, on_scan, slot.Result4 == 0):
+        with rung(slot.Cmd != 0, on_scan, slot.Result4 == 0):
             math(slot.Result1 + (1 << k), slot.Result1)
     done(slot, WINDOW)
 

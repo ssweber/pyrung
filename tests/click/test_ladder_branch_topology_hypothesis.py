@@ -26,7 +26,7 @@ from hypothesis import strategies as st
 pytestmark = pytest.mark.hypothesis
 
 from pyrung.click import ClickBlocks, LadderExportError, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.core import And, Bool, Or, Program, Rung
+from pyrung.core import And, Bool, Or, Program, rung
 from pyrung.core.program import branch, out
 from tests.click.drawing_rule import assert_same_logic, check_scope, contact_size
 from tests.click.helpers import exec_with_source
@@ -264,7 +264,7 @@ def _export_branch(
     parent_conditions, before_outputs, branch_specs, after_outputs, cond_tags, out_tags
 ):
     with Program(strict=False) as logic:
-        with Rung(*parent_conditions):
+        with rung(*parent_conditions):
             for output in before_outputs:
                 out(output)
             for branch_conditions, branch_output in branch_specs:
@@ -287,7 +287,7 @@ def _export_nested(
     out_tags,
 ):
     with Program(strict=False) as logic:
-        with Rung(*parent_conditions):
+        with rung(*parent_conditions):
             with branch(*outer_conditions):
                 out(outer_output)
                 with branch(*inner_conditions):
@@ -308,9 +308,9 @@ def _export_continued(
     out_tags,
 ):
     with Program(strict=False) as logic:
-        with Rung(*first_conditions):
+        with rung(*first_conditions):
             out(first_output)
-        with Rung(*continued_conditions).continued():
+        with rung(*continued_conditions).continued():
             out(continued_output)
             with branch(*branch_conditions):
                 out(branch_output)
@@ -806,7 +806,7 @@ def _export_mixed(conditions, items, cond_tags, out_tags):
                 out(entry)
 
     with Program(strict=False) as logic:
-        with Rung(*conditions):
+        with rung(*conditions):
             place(items)
 
     x, y, c, *_ = ClickBlocks()

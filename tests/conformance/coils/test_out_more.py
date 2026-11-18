@@ -72,7 +72,6 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     Or,
-    Rung,
     copy,
     debounce,
     fill,
@@ -81,6 +80,7 @@ from pyrung.core import (
     on_delay,
     out,
     reset,
+    rung,
     timed,
     toggle,
 )
@@ -95,57 +95,57 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 def prove_toggle_and_timed(slot):
     count_scans(slot)
-    coil, rung = c[1702], c[1703]
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3, slot.Scratch >= 6)):
-        out(rung)
-    with Rung(rung):
+    coil, rung_bit = c[1702], c[1703]
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3, slot.Scratch >= 6)):
+        out(rung_bit)
+    with rung(rung_bit):
         toggle(coil)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, coil):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, coil):
         math(slot.Result1 + 100, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 5, coil):
+    with rung(slot.Cmd != 0, slot.Scratch == 5, coil):
         math(slot.Result1 + 10, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 7, coil):
+    with rung(slot.Cmd != 0, slot.Scratch == 7, coil):
         math(slot.Result1 + 1, slot.Result1)
     # The timed coils run from scan 9, where count_scans leaves Scratch, in steps 9..16.
     clock = td[226]
-    with Rung(slot.Cmd != 0, slot.Scratch >= 9):
+    with rung(slot.Cmd != 0, slot.Scratch >= 9):
         on_delay(ClickTimer(226), 5000)
     pulse, held = c[1705], c[1706]
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 9, slot.Scratch == 11, slot.Scratch == 14)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 9, slot.Scratch == 11, slot.Scratch == 14)):
         timed(pulse, ClickTimer(227), 300)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 9, slot.Scratch <= 14):
+    with rung(slot.Cmd != 0, slot.Scratch >= 9, slot.Scratch <= 14):
         timed(held, ClickTimer(228), 200)
-    with Rung(*_step(slot, 16)):
+    with rung(*_step(slot, 16)):
         copy(1, slot.Fired)
     fallen = (*_step(slot, 15), clock >= 700)
-    with Rung(*fallen, td[228] == 0):
+    with rung(*fallen, td[228] == 0):
         copy(1, slot.Result4)
-    with Rung(*fallen, td[228] >= 200):
+    with rung(*fallen, td[228] >= 200):
         copy(2, slot.Result4)
-    with Rung(*fallen):
+    with rung(*fallen):
         copy(16, slot.Scratch)
-    with Rung(*_step(slot, 14), clock >= 550, pulse):
+    with rung(*_step(slot, 14), clock >= 550, pulse):
         copy(1, slot.ErrorCode)
-    with Rung(*_step(slot, 14), clock >= 550):
+    with rung(*_step(slot, 14), clock >= 550):
         copy(15, slot.Scratch)
     held_on = (*_step(slot, 13), clock >= 500)
-    with Rung(*held_on, td[228] >= 200, td[228] < 300):
+    with rung(*held_on, td[228] >= 200, td[228] < 300):
         copy(1, slot.Result3)
-    with Rung(*held_on, td[228] >= 300):
+    with rung(*held_on, td[228] >= 300):
         copy(2, slot.Result3)
-    with Rung(*held_on, td[228] == 0):
+    with rung(*held_on, td[228] == 0):
         copy(3, slot.Result3)
-    with Rung(*held_on):
+    with rung(*held_on):
         copy(14, slot.Scratch)
-    with Rung(*_step(slot, 12), clock >= 360, pulse):
+    with rung(*_step(slot, 12), clock >= 360, pulse):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 12), clock >= 360):
+    with rung(*_step(slot, 12), clock >= 360):
         copy(13, slot.Scratch)
-    with Rung(*_step(slot, 11), clock >= 250):
+    with rung(*_step(slot, 11), clock >= 250):
         copy(12, slot.Scratch)
-    with Rung(*_step(slot, 10), clock >= 150):
+    with rung(*_step(slot, 10), clock >= 150):
         copy(11, slot.Scratch)
-    with Rung(*_step(slot, 9), clock >= 100):
+    with rung(*_step(slot, 9), clock >= 100):
         copy(10, slot.Scratch)
 
 
@@ -156,47 +156,47 @@ def init_toggle_and_timed(slot):
 def prove_timed_maintained(slot):
     clock = ms_clock(slot, 229)
     dropped, held = c[1707], c[1708]
-    with Rung(*_step(slot, 0)):
+    with rung(*_step(slot, 0)):
         timed(dropped, ClickTimer(230), 400, maintained=True)
-    with Rung(slot.Cmd != 0, slot.Scratch <= 2):
+    with rung(slot.Cmd != 0, slot.Scratch <= 2):
         timed(held, ClickTimer(231), 200, maintained=True)
-    with Rung(*_step(slot, 4)):
+    with rung(*_step(slot, 4)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 3), clock >= 700, held):
+    with rung(*_step(slot, 3), clock >= 700, held):
         copy(1, slot.Result4)
-    with Rung(*_step(slot, 3), clock >= 700):
+    with rung(*_step(slot, 3), clock >= 700):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2), clock >= 500, dropped):
+    with rung(*_step(slot, 2), clock >= 500, dropped):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 500, held):
+    with rung(*_step(slot, 2), clock >= 500, held):
         copy(1, slot.Result3)
-    with Rung(*_step(slot, 2), clock >= 500):
+    with rung(*_step(slot, 2), clock >= 500):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), clock >= 250, dropped):
+    with rung(*_step(slot, 1), clock >= 250, dropped):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 1), clock >= 250):
+    with rung(*_step(slot, 1), clock >= 250):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), clock >= 100):
+    with rung(*_step(slot, 0), clock >= 100):
         copy(1, slot.Scratch)
 
 
 def prove_zero_and_below(slot):
-    rung, deb, neg = c[1709], c[1710], c[1714]
+    rung_bit, deb, neg = c[1709], c[1710], c[1714]
     window = (slot.Cmd != 0, slot.Scratch >= 1, slot.Scratch <= 8)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(-5, ds[3926])
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
-        out(rung)
-    with Rung(rung):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+        out(rung_bit)
+    with rung(rung_bit):
         debounce(deb, on=(ClickTimer(232), 0), off=(ClickTimer(233), 0))
-    with Rung(rung):
+    with rung(rung_bit):
         timed(neg, ClickTimer(237), ds[3926])
-    with Rung(*window, deb, slot.Result1 == 0):
+    with rung(*window, deb, slot.Result1 == 0):
         copy(slot.Scratch, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 8, ~deb, slot.Result2 == 0):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 8, ~deb, slot.Result2 == 0):
         copy(slot.Scratch, slot.Result2)
-    with Rung(*window, neg):
+    with rung(*window, neg):
         math(slot.ErrorCode + 1, slot.ErrorCode)
     done(slot)
 
@@ -208,48 +208,48 @@ def init_zero_and_below(slot):
 def prove_preset_mid_phase(slot):
     clock = ms_clock(slot, 238)
     fla, deb, fla2, deb2 = c[1715], c[1716], c[1718], c[1719]
-    with Rung(*_step(slot, 0)):
+    with rung(*_step(slot, 0)):
         copy(1000, ds[3927])
         copy(200, ds[3928])
-    with Rung(slot.Cmd != 0, slot.Scratch >= 1):
+    with rung(slot.Cmd != 0, slot.Scratch >= 1):
         copy(2000, ds[3928])
-    with Rung(slot.Cmd != 0, slot.Scratch >= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 4):
         copy(100, ds[3927])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(fla, on=(ClickTimer(239), ds[3927]), off=(ClickTimer(240), 1000))
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         debounce(deb, on=(ClickTimer(241), ds[3928]), off=(ClickTimer(242), 1000))
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(fla2, on=(ClickTimer(225), 100), off=(ClickTimer(113), 100))
-    with Rung(*_step(slot, 0)):
+    with rung(*_step(slot, 0)):
         debounce(deb2, on=(ClickTimer(114), 2000), off=(ClickTimer(115), 2000))
-    with Rung(*_step(slot, 6)):
+    with rung(*_step(slot, 6)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 5), fla):
+    with rung(*_step(slot, 5), fla):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 5), deb):
+    with rung(*_step(slot, 5), deb):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 5), td[114] == 0):
+    with rung(*_step(slot, 5), td[114] == 0):
         copy(1, slot.Result4)
-    with Rung(*_step(slot, 5), td[114] > 0):
+    with rung(*_step(slot, 5), td[114] > 0):
         copy(2, slot.Result4)
-    with Rung(*_step(slot, 5)):
+    with rung(*_step(slot, 5)):
         copy(6, slot.Scratch)
-    with Rung(*_step(slot, 4), clock >= 450):
+    with rung(*_step(slot, 4), clock >= 450):
         copy(5, slot.Scratch)
-    with Rung(*_step(slot, 3), clock >= 300):
+    with rung(*_step(slot, 3), clock >= 300):
         copy(4, slot.Scratch)
     # Halfway through the second on phase, its TD reads 50 to 99.
     second_on = (*_step(slot, 2), fla2, td[225] >= 50)
-    with Rung(*second_on, td[113] >= 100):
+    with rung(*second_on, td[113] >= 100):
         copy(1, slot.Result3)
-    with Rung(*second_on, td[113] == 0):
+    with rung(*second_on, td[113] == 0):
         copy(2, slot.Result3)
-    with Rung(*second_on):
+    with rung(*second_on):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), ~fla2):
+    with rung(*_step(slot, 1), ~fla2):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), clock >= 100):
+    with rung(*_step(slot, 0), clock >= 100):
         copy(1, slot.Scratch)
 
 

@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, call, copy, latch, math, subroutine
+from pyrung import PLC, Bool, Int, Program, Real, call, copy, latch, math, rung, subroutine
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import trace_back
@@ -19,7 +19,7 @@ from pyrung.core.analysis.steerable import compute_steerable
 def test_a_goal_on_a_tag_nothing_reads_finds_the_writer() -> None:
     go, level = Bool("Go", external=True), Int("Level")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(5, level)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -34,9 +34,9 @@ def test_a_goal_on_a_tag_nothing_reads_finds_the_writer() -> None:
 def test_it_takes_the_writer_whose_value_meets_the_goal() -> None:
     low, high, level = Bool("Low", external=True), Bool("High", external=True), Int("Level")
     with Program(strict=False) as prog:
-        with Rung(low):
+        with rung(low):
             copy(2, level)
-        with Rung(high):
+        with rung(high):
             copy(9, level)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -51,7 +51,7 @@ def test_it_takes_the_writer_whose_value_meets_the_goal() -> None:
 def test_no_writer_meets_the_goal_and_how_does_not_claim_it() -> None:
     go, level = Bool("Go", external=True), Int("Level")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(2, level)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -64,9 +64,9 @@ def test_no_writer_meets_the_goal_and_how_does_not_claim_it() -> None:
 def test_a_goal_on_a_tag_the_program_also_reads_still_reaches() -> None:
     go, level, lamp = Bool("Go", external=True), Int("Level"), Bool("Lamp")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(5, level)
-        with Rung(level >= 5):
+        with rung(level >= 5):
             latch(lamp)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -80,7 +80,7 @@ def test_a_goal_on_a_tag_the_program_also_reads_still_reaches() -> None:
 def _counting(step: int) -> tuple[PLC, Int]:
     go, count = Bool("Go", external=True), Int("Count")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             math(count + step, count)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -125,7 +125,7 @@ def test_a_threshold_on_a_count_is_reached_by_counting(
 def test_a_constant_copy_that_differs_meets_a_not_equal_goal() -> None:
     go, level = Bool("Go", external=True), Int("Level")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(5, level)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -146,7 +146,7 @@ def test_a_goal_no_write_meets_is_not_reached(
 ) -> None:
     go, level = Bool("Go", external=True), Int("Level")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(value, level)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -163,9 +163,9 @@ def test_a_goal_no_write_meets_is_not_reached(
 def test_a_real_count_at_inf_takes_the_reset_writer() -> None:
     go, rst, count = Bool("Go", external=True), Bool("Rst", external=True), Real("Count")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             math(count - 1, count)
-        with Rung(rst):
+        with rung(rst):
             copy(0, count)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -185,9 +185,9 @@ def test_a_real_count_at_inf_takes_the_reset_writer() -> None:
 def test_a_count_against_a_limit_at_inf_still_reaches() -> None:
     go, low, n, lim = Bool("Go", external=True), Bool("Low", external=True), Int("N"), Real("Lim")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             math(n + 1, n)
-        with Rung(low):
+        with rung(low):
             copy(2.0, lim)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -208,7 +208,7 @@ def test_a_count_against_a_limit_at_inf_still_reaches() -> None:
 def test_a_real_count_at_nan_is_not_reached() -> None:
     go, count = Bool("Go", external=True), Real("Count")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             math(count - 1, count)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -227,7 +227,7 @@ def test_a_real_count_at_nan_is_not_reached() -> None:
 def test_a_count_stops_at_the_top_of_its_type() -> None:
     go, count = Bool("Go", external=True), Int("Count")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             math(count + 1, count)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Count": 32760})
@@ -250,7 +250,7 @@ def test_a_count_stops_at_the_top_of_its_type() -> None:
 def test_a_real_count_with_a_fractional_step_is_reached() -> None:
     go, level = Bool("Go", external=True), Real("Level")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             math(level + 0.5, level)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -270,11 +270,11 @@ def test_a_call_gate_beside_the_copy_source_adds_no_need() -> None:
     start, requested, current = Bool("Start", external=True), Int("Requested"), Int("Current")
     with Program(strict=False) as prog:
         with subroutine("finish"):
-            with Rung():
+            with rung():
                 copy(requested, current)
-        with Rung(start):
+        with rung(start):
             copy(6, requested)
-        with Rung(requested != 0):
+        with rung(requested != 0):
             call("finish")
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -296,9 +296,9 @@ def test_two_not_equal_goals_together_are_reached() -> None:
     go, bump = Bool("Go", external=True), Bool("Bump", external=True)
     level, count = Int("Level"), Int("Count")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(5, level)
-        with Rung(bump):
+        with rung(bump):
             math(count + 1, count)
     plc = PLC(prog, dt=0.01)
     plc.step()

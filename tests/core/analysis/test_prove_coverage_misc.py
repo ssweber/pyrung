@@ -6,9 +6,9 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     out,
     run_function,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -26,9 +26,9 @@ class TestAnnotatedFunctionOutput:
             return {"result": 1}
 
         with Program(strict=False) as logic:
-            with Rung(trigger):
+            with rung(trigger):
                 run_function(compute, outs={"result": result_tag})
-            with Rung(result_tag == 1):
+            with rung(result_tag == 1):
                 out(Bool("Output"))
 
         result = _classify_dimensions(logic)
@@ -43,9 +43,9 @@ class TestAnnotatedFunctionOutput:
             return {"level": 2}
 
         with Program(strict=False) as logic:
-            with Rung(trigger):
+            with rung(trigger):
                 run_function(read_level, outs={"level": level})
-            with Rung(level == 2):
+            with rung(level == 2):
                 out(Bool("High"))
 
         result = _classify_dimensions(logic)

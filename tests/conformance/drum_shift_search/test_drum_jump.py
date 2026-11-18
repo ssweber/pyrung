@@ -55,7 +55,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, latch, math, out, reset
+from pyrung.core import copy, latch, math, out, reset, rung
 from tests.conformance.drum_rig import (
     Pair,
     Resources,
@@ -81,7 +81,7 @@ RES = Resources(
 
 
 def _pause_on(slot: Any, p: Pair, first: int, last: int) -> None:
-    with Rung(slot.Scratch >= first, slot.Scratch <= last):
+    with rung(slot.Scratch >= first, slot.Scratch <= last):
         out(p.pause)
 
 
@@ -129,7 +129,7 @@ def prove_jump_with_jog_and_to_own_step(slot):
     def b_above(p: Pair) -> None:
         on_scans(slot, p.jog, 1)
         on_scans(slot, p.jump, 4)
-        with Rung(slot.Scratch == 4):
+        with rung(slot.Scratch == 4):
             reset(p.time.b)
             reset(p.event.b)
 
@@ -195,10 +195,10 @@ def prove_completed_drum_fires_again(slot):
         on_scans(slot, p.jog, 1)
         on_scans(slot, p.events[0], 2)
         # The last step's event is a level, on from scan 4.
-        with Rung(slot.Scratch >= 4):
+        with rung(slot.Scratch >= 4):
             out(p.events[1])
         # An output turned on from outside after the completion.
-        with Rung(slot.Scratch == 5):
+        with rung(slot.Scratch == 5):
             latch(p.time.b)
             latch(p.event.b)
 
@@ -223,11 +223,11 @@ def prove_acc_through_jog_completion(slot):
     # Acc 9000 staged on scan 2 below the drum.  The jog on scan 3 completes it.
     put(slot, 2, STAGED, a.time.acc)
     prev = a.time.state
-    with Rung(slot.Scratch == 3):
+    with rung(slot.Scratch == 3):
         math(a.time.acc / 1000, slot.Result2)
-    with Rung(slot.Scratch >= 4, slot.Scratch <= 8, a.time.acc > prev):
+    with rung(slot.Scratch >= 4, slot.Scratch <= 8, a.time.acc > prev):
         math(slot.Result3 + 1, slot.Result3)
-    with Rung():
+    with rung():
         copy(a.time.acc, prev)
 
     def b_above(p: Pair) -> None:
@@ -237,9 +237,9 @@ def prove_acc_through_jog_completion(slot):
         put(slot, 3, STAGED, p.time.acc)
 
     b = r.pair(1, jog=True, above=b_above)
-    with Rung(slot.Scratch == 3):
+    with rung(slot.Scratch == 3):
         math(b.time.acc - STAGED, slot.Result4)
-    with Rung(slot.Scratch == 4):
+    with rung(slot.Scratch == 4):
         math(b.time.acc / 1000, slot.ErrorCode)
     done(slot)
 

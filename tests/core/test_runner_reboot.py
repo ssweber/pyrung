@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, copy, system
+from pyrung.core import PLC, Block, Bool, Int, Program, TagType, copy, rung, system
 
 
 def _resolved(runner: PLC, tag_name: str):
@@ -68,7 +68,7 @@ def test_reboot_without_battery_resets_all_known_tags_to_defaults():
 def test_reboot_keeps_runner_in_run_mode_and_first_scan_is_true_on_next_scan():
     first_scan_latched = Bool("RebootFirstScanLatched")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(system.sys.first_scan, first_scan_latched)
 
     runner = PLC(logic=program)

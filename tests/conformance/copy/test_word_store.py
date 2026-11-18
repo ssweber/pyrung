@@ -35,7 +35,7 @@ few of DF434.. and of DH422..; DS4312..DS4315 are the Block copies' Ints.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, blockcopy, copy, fill, system
+from pyrung.core import blockcopy, copy, fill, rung, system
 from tests.conformance.memory import dd, df, dh, ds
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
 
@@ -45,18 +45,18 @@ BELOW = [0xFFFF, 0, 0xFFFE, PRESET]  # wrap, clamp, a Real rounded, left alone
 
 
 def prove_word_below_zero(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-1, slot.Scratch)
         copy(-1, dd[810])
         copy(-1.6, df[434])
         fill(PRESET, dh.select(422, 424))
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(slot.Scratch, dh[422])
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(dd[810], dh[423])
     flag_bit(slot, SC43, slot.Result4, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(df[434], dh[424])
     flag_bit(slot, SC43, slot.Result4, 4)
     class_of(slot, dh[422], BELOW, slot.Result1)
@@ -72,18 +72,18 @@ def init_word_below_zero(slot):
 
 
 def prove_word_above_top(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(70000, dd[820])
         copy(65536, dd[821])
         copy(70000.7, df[440])
         fill(PRESET, dh.select(432, 434))
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(dd[820], dh[432])
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(dd[821], dh[433])
     flag_bit(slot, SC43, slot.Result4, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(df[440], dh[434])
     flag_bit(slot, SC43, slot.Result4, 4)
     class_of(slot, dh[432], [4464, 65535, PRESET], slot.Result1)
@@ -99,16 +99,16 @@ def init_word_above_top(slot):
 
 
 def prove_word_into_signed(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0xFFFF, dh[442])
         copy(0x8000, dh[443])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(dh[442], slot.Result1)
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(dh[443], slot.Result2)
     flag_bit(slot, SC43, slot.Result4, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(dh[442], dd[830])
         copy(dh[442], df[445])
     class_of(slot, dd[830], [65535, -1], slot.Result3)
@@ -123,16 +123,16 @@ def init_word_into_signed(slot):
 
 
 def prove_block_into_word(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-1, ds[4312])
         copy(5, ds[4313])
         copy(70000, dd[835])
         copy(-1, dd[836])
         fill(PRESET, dh.select(446, 449))
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         blockcopy(ds.select(4312, 4313), dh.select(446, 447))
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         blockcopy(dd.select(835, 836), dh.select(448, 449))
     flag_bit(slot, SC43, slot.Result4, 2)
     class_of(slot, dh[446], BELOW, slot.Result1)
@@ -148,13 +148,13 @@ def init_block_into_word(slot):
 
 
 def prove_block_from_word(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0xFFFF, dh[450])
         copy(0x8000, dh[451])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         blockcopy(dh.select(450, 451), ds.select(4314, 4315))
     flag_bit(slot, SC43, slot.Result3, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(ds[4314], slot.Result1)
         copy(ds[4315], slot.Result2)
     finish(slot)
@@ -166,18 +166,18 @@ def init_block_from_word(slot):
 
 
 def prove_fill_into_word(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-1, slot.Scratch)
         copy(70000, dd[840])
         copy(-1.6, df[441])
         fill(PRESET, dh.select(452, 457))
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(slot.Scratch, dh.select(452, 453))
     flag_bit(slot, SC43, slot.Result4, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(dd[840], dh.select(454, 455))
     flag_bit(slot, SC43, slot.Result4, 2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(df[441], dh.select(456, 457))
     flag_bit(slot, SC43, slot.Result4, 4)
     class_of(slot, dh[453], BELOW, slot.Result1)
@@ -193,12 +193,12 @@ def init_fill_into_word(slot):
 
 
 def prove_word_literals(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(PRESET, dh.select(458, 463))
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-1, dh[458])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(-1, dh.select(460, 461))
     flag_bit(slot, SC43, slot.ErrorCode, 4)
     class_of(slot, dh[458], BELOW, slot.Result1)

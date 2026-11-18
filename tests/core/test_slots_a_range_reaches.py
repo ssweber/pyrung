@@ -24,13 +24,13 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     blockcopy,
     call,
     copy,
     fill,
     out,
+    rung,
     subroutine,
     udt,
 )
@@ -67,9 +67,9 @@ def _blocks(*, retentive: bool = True) -> tuple[Block, Block]:
 
 def _through_a_range(rc: Block, sink: Block) -> Program:
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             fill(7, rc.select(1, 3))
-        with Rung():
+        with rung():
             blockcopy(rc.select(1, 3), sink.select(1, 3))
     return program
 
@@ -106,11 +106,11 @@ def test_a_retentive_slot_named_outside_the_rungs_keeps_its_value(engine, reset)
 def test_a_retentive_slot_a_rung_names_keeps_its_value(engine, reset) -> None:
     rc, sink = _blocks()
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             fill(7, rc.select(1, 3))
-        with Rung():
+        with rung():
             blockcopy(rc.select(1, 3), sink.select(1, 3))
-        with Rung(rc[2] == 7):
+        with rung(rc[2] == 7):
             out(Other)
     assert _after(engine, program, sink, reset) == 7
 
@@ -142,9 +142,9 @@ def test_a_slot_a_pointer_reaches_keeps_its_value(engine, reset) -> None:
     rc, sink = _blocks()
     idx = Int("Idx", external=True, default=2)
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             copy(7, rc[idx])
-        with Rung():
+        with rung():
             blockcopy(rc.select(1, 3), sink.select(1, 3))
     assert _after(engine, program, sink, reset) == 7
 
@@ -154,14 +154,14 @@ def test_a_slot_a_pointer_reaches_keeps_its_value(engine, reset) -> None:
 def test_a_slot_a_subroutine_reaches_keeps_its_value(engine, reset) -> None:
     rc, sink = _blocks()
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("writes")
-        with Rung():
+        with rung():
             blockcopy(sink.select(4, 5), sink.select(1, 2))
         with subroutine("writes"):
-            with Rung(Go):
+            with rung(Go):
                 fill(7, rc.select(1, 3))
-            with Rung():
+            with rung():
                 blockcopy(rc.select(1, 2), sink.select(4, 5))
     assert _after(engine, program, sink, reset) == 7
 
@@ -203,7 +203,7 @@ def test_a_programs_analysis_caches_add_no_known_tag() -> None:
     # the runner knows.
     a, b = Bool("A", external=True), Bool("B")
     with Program(strict=False) as program:
-        with Rung(a):
+        with rung(a):
             out(b)
     before = set(PLC(program, dt=0.01)._known_tags_by_name)
     PLC(program, dt=0.01).how(b)
@@ -215,10 +215,10 @@ def test_a_programs_analysis_caches_add_no_known_tag() -> None:
 def test_a_call_in_bare_rungs_reaches_its_subroutine() -> None:
     a, b = Bool("A", external=True), Bool("B")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("writes")
         with subroutine("writes"):
-            with Rung(a):
+            with rung(a):
                 out(b)
     assert set(PLC(program.rungs, dt=0.01)._known_tags_by_name) == {"A", "B"}
 
@@ -287,9 +287,9 @@ def test_a_field_with_limits_holds_when_a_range_writes_it(touched) -> None:
         assert Motor[1].Speed.max == 5
     sink = Block("Sink", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             fill(7, Motor.Speed.select(1, 2))
-        with Rung():
+        with rung():
             blockcopy(Motor.Speed.select(1, 2), sink.select(1, 2))
     plc = PLC(program, dt=0.01)
     plc.patch({"Go": True})
@@ -467,7 +467,7 @@ def test_plc_tags_holds_both_ends_of_a_plant_on_a_slot() -> None:
     bank.slot(2, physical=RAMP, link="En2")
 
     def rungs() -> None:
-        with Rung():
+        with rung():
             fill(True, enables.select(1, 3))
 
     harness, plc = _ran_a_plant(bank, dst, rungs)
@@ -513,7 +513,7 @@ RAMP = Physical("Slow", ramp_on=1.0)
 def _ran_a_plant(bank: Block, dst: Block, rungs: Callable[[], None]) -> tuple[Harness, PLC]:
     with Program(strict=False) as program:
         rungs()
-        with Rung():
+        with rung():
             blockcopy(bank.select(1, 3), dst.select(1, 3))
     plc = PLC(program, dt=0.01)
     harness = Harness(plc)
@@ -530,7 +530,7 @@ def test_a_plant_on_a_slot_a_range_reads_drives_it(named) -> None:
         assert bank[2].name == "Bank2"
 
     def rungs() -> None:
-        with Rung():
+        with rung():
             out(Enable)
 
     harness, plc = _ran_a_plant(bank, dst, rungs)
@@ -544,7 +544,7 @@ def test_a_plant_linked_to_a_slot_a_range_writes_runs_on_it() -> None:
     bank.slot(2, physical=RAMP, link="En2")
 
     def rungs() -> None:
-        with Rung():
+        with rung():
             fill(True, enables.select(1, 3))
 
     harness, plc = _ran_a_plant(bank, dst, rungs)
@@ -557,7 +557,7 @@ def test_a_plant_on_a_slot_no_rung_reaches_is_not_declared() -> None:
     bank.slot(7, physical=RAMP, link="Enable")
 
     def rungs() -> None:
-        with Rung():
+        with rung():
             out(Enable)
 
     harness, _ = _ran_a_plant(bank, dst, rungs)
@@ -575,9 +575,9 @@ def test_a_plant_on_a_field_a_range_reads_drives_it(touched) -> None:
         assert Valve[1].Fb.physical is RAMP
     dst = Block("Dst", TagType.REAL, 1, 3)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             fill(True, Valve.En.select(1, 2))
-        with Rung():
+        with rung():
             blockcopy(Valve.Fb.select(1, 2), dst.select(1, 2))
     plc = PLC(program, dt=0.01)
     harness = Harness(plc)
@@ -612,7 +612,7 @@ def _pointing_at(addr: int, factory) -> tuple[Program, Block, Tag]:
     pointer = Int("Ptr", default=addr)
     seen = Int("Seen")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[pointer], seen)
     return program, slots, seen
 
@@ -704,9 +704,9 @@ def test_how_reads_a_readonly_slot_something_named_outside_the_rungs() -> None:
     held.slot(2, readonly=True, external=False)
     _ = held[2]
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(held.select(1, 3), copied.select(1, 3))
-        with Rung(copied[2] == 7):
+        with rung(copied[2] == 7):
             out(seen)
     plan = PLC(program, dt=0.01).how(seen)
     assert "Hq2" not in str(plan), plan

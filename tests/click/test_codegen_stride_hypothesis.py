@@ -12,7 +12,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.core import Bool, Int, Program, Rung, named_array
+from pyrung.core import Bool, Int, Program, named_array, rung
 from pyrung.core.program import copy
 from tests.click.helpers import exec_with_source
 
@@ -59,7 +59,7 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
     dst_tag = getattr(runtime[count], _field_name(field_count - 1))
 
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(src_tag, dst_tag)
 
     # --- Map to hardware ---

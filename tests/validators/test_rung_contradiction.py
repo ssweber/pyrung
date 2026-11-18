@@ -25,7 +25,7 @@ the should-fail fixture and pins what the new rules must report.  The
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Or, Program, Rung, copy, reset
+from pyrung.core import Bool, Int, Or, Program, copy, reset, rung
 from pyrung.core.condition import (
     AnyCondition,
     BitCondition,
@@ -53,7 +53,7 @@ def _buggy_guard_program() -> Program:
     mode_chg_request = Bool("ModeChgRequest", external=True)
 
     with Program(strict=False) as prog:
-        with Rung(
+        with rung(
             Or(
                 state_current != IDLE,
                 state_current != STOPPED,

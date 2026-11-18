@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Rung, copy, latch, out, reset, system
+from pyrung import PLC, Bool, Int, Program, copy, latch, out, reset, rung, system
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import api, budget
 from pyrung.core.analysis.pilot import restart as restart_module
@@ -19,7 +19,7 @@ def _only_on_a_first_scan():
     """Return a program where Target is on for the first scan alone, with the session past it."""
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             out(target)
     return prog, target
 
@@ -32,9 +32,9 @@ def _spent_by_the_first_scan():
     step = Int("Step")
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(system.sys.first_scan, step == 0):
+        with rung(system.sys.first_scan, step == 0):
             out(target)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(10, step)
     return prog, step, target
 
@@ -44,9 +44,9 @@ def _stuck():
     go = Bool("Go", external=True)
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             latch(target)
-        with Rung():
+        with rung():
             reset(target)
     return prog, target
 
@@ -81,7 +81,7 @@ def test_a_plan_that_needs_no_restart_does_not_mention_one() -> None:
     go = Bool("Go", external=True)
     target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             latch(target)
 
     plan = _scanned(prog).how(target, max_scans=2000)
@@ -185,9 +185,9 @@ def _trips_on_a_restart():
     running = Bool("Running")
     target = Bool("Target")
     with Program(strict=False) as tripped:
-        with Rung():
+        with rung():
             out(running)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             out(target)
     return tripped, target
 

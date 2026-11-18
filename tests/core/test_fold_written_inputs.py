@@ -20,7 +20,6 @@ from pyrung import (
     Dint,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -32,6 +31,7 @@ from pyrung import (
     off_delay,
     on_delay,
     out,
+    rung,
     subroutine,
     time_drum,
     time_event_drum,
@@ -60,7 +60,7 @@ def _program(body: Body) -> Callable[[], Program]:
         with Program(strict=False) as prog:
             body()
             # Counts the scans since the hit: a latch alone hides a late landing.
-            with Rung(Hit):
+            with rung(Hit):
                 math(Int("Since") + 1, Int("Since"))
         return prog
 
@@ -120,50 +120,50 @@ def _kernel_scans(
 
 
 def _hit_when_done() -> None:
-    with Rung(T.Done):
+    with rung(T.Done):
         latch(Hit)
 
 
 def _around(reader: Body, before: int = 200, after: int = 5000) -> Body:
     def body() -> None:
-        with Rung():
+        with rung():
             copy(before, P)
         reader()
-        with Rung():
+        with rung():
             copy(after, P)
 
     return body
 
 
 def _timer_reader() -> None:
-    with Rung():
+    with rung():
         on_delay(T, P)
     _hit_when_done()
 
 
 def _off_delay_reader() -> None:
-    with Rung(Mode):
+    with rung(Mode):
         off_delay(T, P)
-    with Rung(~T.Done):
+    with rung(~T.Done):
         latch(Hit)
 
 
 def _comparison_reader() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 30_000)
-    with Rung(T.Acc >= P):
+    with rung(T.Acc >= P):
         latch(Hit)
 
 
 def _inverted_comparison_reader() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 30_000)
-    with Rung(P <= T.Acc):
+    with rung(P <= T.Acc):
         latch(Hit)
 
 
 def _time_drum(preset: Any = P) -> None:
-    with Rung(Bool("En")):
+    with rung(Bool("En")):
         time_drum(
             outputs=[O1, O2],
             pattern=[[1, 0], [0, 1]],
@@ -173,12 +173,12 @@ def _time_drum(preset: Any = P) -> None:
             accumulator=DAcc,
             completion_flag=Flag,
         ).reset(Bool("R"))
-    with Rung(O2):
+    with rung(O2):
         math(Int("N") + 1, Int("N"))
 
 
 def _time_event_drum() -> None:
-    with Rung(Bool("En")):
+    with rung(Bool("En")):
         time_event_drum(
             outputs=[O1, O2],
             pattern=[[1, 0], [0, 1]],
@@ -189,7 +189,7 @@ def _time_event_drum() -> None:
             accumulator=DAcc,
             completion_flag=Flag,
         ).reset(Bool("R"))
-    with Rung(O2):
+    with rung(O2):
         math(Int("N") + 1, Int("N"))
 
 
@@ -215,32 +215,32 @@ class TestWrittenAroundItsReader:
         """The second write goes through a pointer the graph resolves to a bank."""
 
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, Bank[2])
-            with Rung():
+            with rung():
                 on_delay(T, Bank[2])
             _hit_when_done()
-            with Rung():
+            with rung():
                 copy(5000, Bank[Ptr])
 
         _assert_exact(body, patch={"Ptr": 2})
 
     def test_a_comparison_through_a_pointer(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, Bank[2])
             _comparison_on(Bank[Ptr])
-            with Rung():
+            with rung():
                 copy(5000, Bank[2])
 
         _assert_exact(body, patch={"Ptr": 2})
 
     def test_pointer_written_around_a_comparison(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(1, Ptr)
             _comparison_on(Bank[Ptr])
-            with Rung():
+            with rung():
                 copy(2, Ptr)
 
         _assert_exact(body, patch={"Bank1": 200, "Bank2": 5000})
@@ -249,12 +249,12 @@ class TestWrittenAroundItsReader:
         big = Block("Big", TagType.INT, 1, 2000)
 
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, big[5])
-            with Rung():
+            with rung():
                 on_delay(T, big[5])
             _hit_when_done()
-            with Rung():
+            with rung():
                 copy(5000, big[Ptr])
 
         _assert_exact(body, patch={"Ptr": 5})
@@ -262,16 +262,16 @@ class TestWrittenAroundItsReader:
     def test_writes_inside_a_subroutine(self) -> None:
         @subroutine("Around")
         def around() -> None:
-            with Rung():
+            with rung():
                 copy(200, P)
-            with Rung():
+            with rung():
                 on_delay(T, P)
             _hit_when_done()
-            with Rung():
+            with rung():
                 copy(5000, P)
 
         def body() -> None:
-            with Rung():
+            with rung():
                 call(around)
 
         _assert_exact(body)
@@ -279,15 +279,15 @@ class TestWrittenAroundItsReader:
     def test_a_call_each_side_of_the_reader(self) -> None:
         @subroutine("WriteP")
         def write() -> None:
-            with Rung():
+            with rung():
                 copy(Int("V"), P)
 
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, Int("V"))
                 call(write)
             _timer_reader()
-            with Rung():
+            with rung():
                 copy(5000, Int("V"))
                 call(write)
 
@@ -299,7 +299,7 @@ class TestWrittenAroundItsReader:
             _timer_reader()
 
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, P)
                 call(reader)
                 copy(5000, P)
@@ -308,7 +308,7 @@ class TestWrittenAroundItsReader:
 
     def test_within_one_rung(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, P)
                 on_delay(T, P)
                 copy(5000, P)
@@ -318,9 +318,9 @@ class TestWrittenAroundItsReader:
 
     def test_branch_reads_between_the_trunk_writes(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 on_delay(T, 30_000)
-            with Rung():
+            with rung():
                 copy(200, P)
                 with branch(T.Acc >= P):
                     latch(Hit)
@@ -333,13 +333,13 @@ class TestWrittenAroundItsReader:
 
         @subroutine("Compare")
         def compare() -> None:
-            with Rung(T.Acc >= P):
+            with rung(T.Acc >= P):
                 latch(Hit)
 
         def body() -> None:
-            with Rung():
+            with rung():
                 on_delay(T, 30_000)
-            with Rung():
+            with rung():
                 with forloop(2) as loop:
                     call(compare)
                     math(loop.idx * 4800 + 200, P)
@@ -349,17 +349,17 @@ class TestWrittenAroundItsReader:
     def test_a_call_inside_a_for_body(self) -> None:
         @subroutine("ReadThenWrite")
         def read_then_write() -> None:
-            with Rung(T.Acc >= P):
+            with rung(T.Acc >= P):
                 latch(Hit)
-            with Rung():
+            with rung():
                 copy(5000, P)
 
         def body() -> None:
-            with Rung():
+            with rung():
                 on_delay(T, 30_000)
-            with Rung():
+            with rung():
                 copy(200, P)
-            with Rung():
+            with rung():
                 with forloop(2):
                     call(read_then_write)
 
@@ -370,7 +370,7 @@ class TestWrittenAroundItsReader:
 
     def test_a_force_hides_a_comparison_operand_too(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, P)
             _comparison_reader()
 
@@ -403,10 +403,10 @@ class TestReplaySeek:
 
     def test_a_write_that_only_starts_midway(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(self.BEFORE, P)
             _comparison_reader()
-            with Rung(Mode):
+            with rung(Mode):
                 copy(self.AFTER, P)
 
         def run(scans: int) -> PLC:
@@ -422,7 +422,7 @@ class TestReplaySeek:
 
     def test_one_write_above(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(self.BEFORE, P)
             _comparison_reader()
 
@@ -431,15 +431,15 @@ class TestReplaySeek:
 
 
 def _comparison_on(operand: Any) -> None:
-    with Rung():
+    with rung():
         on_delay(T, 30_000)
-    with Rung(T.Acc >= operand):
+    with rung(T.Acc >= operand):
         latch(Hit)
 
 
 def _written_above_only(value: int) -> Body:
     def body() -> None:
-        with Rung():
+        with rung():
             copy(value, P)
         _timer_reader()
 
@@ -461,7 +461,7 @@ class TestAnInputWrittenOnceStaysInTheLoop:
 
     def test_constant_preset(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 on_delay(T, 15_000)
             _hit_when_done()
 
@@ -473,14 +473,14 @@ class TestAnInputWrittenOnceStaysInTheLoop:
     def test_written_below(self) -> None:
         def body() -> None:
             _timer_reader()
-            with Rung():
+            with rung():
                 copy(15_000, P)
 
         self._in_the_loop(body)
 
     def test_written_in_the_same_rung(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(15_000, P)
                 on_delay(T, P)
             _hit_when_done()
@@ -489,21 +489,21 @@ class TestAnInputWrittenOnceStaysInTheLoop:
 
     def test_threshold_written_above(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(15_000, P)
-            with Rung():
+            with rung():
                 on_delay(T, 30_000)
-            with Rung(T.Acc >= P):
+            with rung(T.Acc >= P):
                 latch(Hit)
 
         self._in_the_loop(body)
 
     def test_writers_on_both_sides_with_one_idle(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(15_000, P)
             _timer_reader()
-            with Rung(Mode):
+            with rung(Mode):
                 copy(5000, P)
 
         assert _kernel_scans(body, self.SCANS, dt=self.DT, patch={"P": 15_000}) < self.FEW
@@ -524,7 +524,7 @@ class TestHoldAboveTheProgram:
     def _held(advance: Callable[[PLC], None]) -> PLC:
         def body() -> None:
             _comparison_on(P)
-            with Rung():
+            with rung():
                 copy(5000, P)
 
         plc = PLC(_program(body)(), dt=0.01)
@@ -555,12 +555,12 @@ class TestHoldAboveTheProgram:
 class TestAWriterThatWakes:
     def test_a_writer_waking_inside_the_run(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(200, P)
             _timer_reader()
-            with Rung(Mode):
+            with rung(Mode):
                 copy(5000, P)
-            with Rung(T.Acc >= 100):
+            with rung(T.Acc >= 100):
                 out(Bool("Late"))
 
         for start in (False, True):
@@ -568,10 +568,10 @@ class TestAWriterThatWakes:
 
     def test_a_guarded_write_that_stays_the_same_value(self) -> None:
         def body() -> None:
-            with Rung(T.Acc >= 300):
+            with rung(T.Acc >= 300):
                 copy(5000, P)
             _timer_reader()
-            with Rung(T.Acc < 500):
+            with rung(T.Acc < 500):
                 copy(5000, P)
 
         _assert_exact(body, patch={"P": 5000})
@@ -579,9 +579,9 @@ class TestAWriterThatWakes:
 
 def _rebuilt_on_the_clock(reader: Body, on: int, off: int) -> Body:
     def body() -> None:
-        with Rung(system.sys.clock_1s):
+        with rung(system.sys.clock_1s):
             copy(on, P)
-        with Rung(~system.sys.clock_1s):
+        with rung(~system.sys.clock_1s):
             copy(off, P)
         reader()
 
@@ -605,14 +605,14 @@ class TestRebuiltOnTheClock:
     @pytest.mark.parametrize("shape", ["ticks", "copied"])
     def test_a_real_time_clock_field_in_the_input(self, shape: str) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 if shape == "ticks":
                     math(system.rtc.second * 500 + 3000, P)
                 else:
                     copy(system.rtc.second, P)
-            with Rung():
+            with rung():
                 on_delay(T, 30_000)
-            with Rung(T.Acc >= P * (1 if shape == "ticks" else 500)):
+            with rung(T.Acc >= P * (1 if shape == "ticks" else 500)):
                 latch(Hit)
 
         def run(jit: bool) -> PLC:
@@ -642,12 +642,12 @@ class TestAClockWakesAWriter:
     @staticmethod
     def _body(reader: Body, gate: Any, chained: bool = False) -> Body:
         def body() -> None:
-            with Rung(gate):
+            with rung(gate):
                 out(Flag)
-            with Rung(Flag if chained else gate):
+            with rung(Flag if chained else gate):
                 copy(9000, P)
             reader()
-            with Rung():
+            with rung():
                 copy(30_000, P)
 
         return body
@@ -667,12 +667,12 @@ class TestAClockWakesAWriter:
 
     def test_a_real_time_clock_copy_behind_the_writer(self) -> None:
         def body() -> None:
-            with Rung():
+            with rung():
                 copy(system.rtc.second, Int("Sec"))
-            with Rung(Int("Sec") == 5):
+            with rung(Int("Sec") == 5):
                 copy(3000, P)
             _comparison_reader()
-            with Rung():
+            with rung():
                 copy(30_000, P)
 
         def run(jit: bool) -> PLC:

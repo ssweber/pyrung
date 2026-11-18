@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import PLC, Bool, Int, Program, Rung, call, copy, subroutine
+from pyrung import PLC, Bool, Int, Program, call, copy, rung, subroutine
 from pyrung.core.analysis.pilot import orientation_reading as orientation
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -135,14 +135,14 @@ def test_prior_scan_setup_is_retained_when_the_selected_producer_reaches_target(
 
     with Program(strict=False) as logic:
         with subroutine("RequirementKeyConsumer"):
-            with Rung(consume):
+            with rung(consume):
                 copy(1, step, oneshot=True)
-            with Rung():
+            with rung():
                 copy(0, channel)
 
-        with Rung(produce):
+        with rung(produce):
             copy(1, channel, oneshot=True)
-        with Rung(channel == 1):
+        with rung(channel == 1):
             call("RequirementKeyConsumer")
 
     events = tuple(pilot_events(PLC(logic), step == 1, max_scans=10))

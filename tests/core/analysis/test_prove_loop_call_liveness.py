@@ -38,7 +38,6 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     branch,
     break_loop,
     call,
@@ -49,6 +48,7 @@ from pyrung.core import (
     out,
     reset,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -128,24 +128,24 @@ def _concrete_reaches(
 
 def _coil_work() -> None:
     with subroutine("work"):
-        with Rung(Btn):
+        with rung(Btn):
             out(Y2)
 
 
 def _copy_work() -> None:
     with subroutine("work"):
-        with Rung():
+        with rung():
             copy(Btn, Y2)
 
 
 def _read_y2() -> None:
-    with Rung(Y2):
+    with rung(Y2):
         out(Y3)
 
 
 def _loop_rung_guard():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             with forloop(1):
                 call("work")
         _read_y2()
@@ -155,7 +155,7 @@ def _loop_rung_guard():
 
 def _loop_tag_count():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(DQ):
                 call("work")
         _read_y2()
@@ -165,7 +165,7 @@ def _loop_tag_count():
 
 def _nested_loop():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             with forloop(1):
                 with forloop(1):
                     call("work")
@@ -176,7 +176,7 @@ def _nested_loop():
 
 def _nested_loop_tag_count():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
                 with forloop(DQ):
                     call("work")
@@ -187,7 +187,7 @@ def _nested_loop_tag_count():
 
 def _branch_loop():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with branch(G):
                 with forloop(1):
                     call("work")
@@ -198,11 +198,11 @@ def _branch_loop():
 
 def _loop_in_subroutine():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("outer")
         _read_y2()
         with subroutine("outer"):
-            with Rung(G):
+            with rung(G):
                 with forloop(1):
                     call("work")
         _coil_work()
@@ -211,11 +211,11 @@ def _loop_in_subroutine():
 
 def _guarded_outer_loop():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("outer")
         _read_y2()
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 with forloop(1):
                     call("work")
         _coil_work()
@@ -224,11 +224,11 @@ def _guarded_outer_loop():
 
 def _guarded_outer_copy():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("outer")
         _read_y2()
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 call("work")
         _copy_work()
     return logic, {"Btn": _BOOL, "G": _BOOL}
@@ -237,7 +237,7 @@ def _guarded_outer_copy():
 def _always_called_loop():
     # Called on every scan: Y2 follows Btn, so Y3 never shows without it.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
                 call("work")
         _read_y2()
@@ -250,7 +250,7 @@ def _zero_count_loop():
     # and work is never called. An integer constant always runs (forloop()
     # rejects one outside 1..2 ** 31 - 1).
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(65536.0):
                 call("work")
         _read_y2()
@@ -261,13 +261,13 @@ def _zero_count_loop():
 def _return_in_outer():
     # A return_early() ahead of the call in the calling subroutine skips it.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("outer")
         _read_y2()
         with subroutine("outer"):
-            with Rung(R):
+            with rung(R):
                 return_early()
-            with Rung():
+            with rung():
                 call("work")
         _coil_work()
     return logic, {"Btn": _BOOL, "R": _BOOL}
@@ -275,13 +275,13 @@ def _return_in_outer():
 
 def _return_in_outer_loop():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("outer")
         _read_y2()
         with subroutine("outer"):
-            with Rung(R):
+            with rung(R):
                 return_early()
-            with Rung():
+            with rung():
                 with forloop(1):
                     call("work")
         _coil_work()
@@ -291,7 +291,7 @@ def _return_in_outer_loop():
 def _oneshot_loop():
     # A oneshot loop runs on its rung's rising edge only.
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             with forloop(1, oneshot=True):
                 call("work")
         _read_y2()
@@ -301,9 +301,9 @@ def _oneshot_loop():
 
 def _indirect_count():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(DQ, LDS[1])
-        with Rung():
+        with rung():
             with forloop(LDS[P]):
                 call("work")
         _read_y2()
@@ -314,9 +314,9 @@ def _indirect_count():
 def _indirect_count_pointer_only():
     # LDS[1] = 1 and LDS[2] = 0: only the pointer decides the call.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(1, LDS[1])
-        with Rung():
+        with rung():
             with forloop(LDS[P]):
                 call("work")
         _read_y2()
@@ -326,9 +326,9 @@ def _indirect_count_pointer_only():
 
 def _indirect_expr_count():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(1, LDS[1])
-        with Rung():
+        with rung():
             with forloop(LDS[P - 0]):
                 call("work")
         _read_y2()
@@ -338,9 +338,9 @@ def _indirect_expr_count():
 
 def _indirect_call_guard():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(1, LDS[1])
-        with Rung(LDS[P] != 0):
+        with rung(LDS[P] != 0):
             call("work")
         _read_y2()
         _coil_work()
@@ -350,18 +350,18 @@ def _indirect_call_guard():
 def _indirect_contact():
     # No call at all: the pointer reaches liveness only through the atom.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(1, LDS[2])
-        with Rung(LDS[P] != 0, ~Btn):
+        with rung(LDS[P] != 0, ~Btn):
             out(Y3)
     return logic, {"Btn": _BOOL, "P": (1, 2)}
 
 
 def _internal_count():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(DQ, N)
-        with Rung():
+        with rung():
             with forloop(N):
                 call("work")
         _read_y2()
@@ -372,7 +372,7 @@ def _internal_count():
 def _loop_dint_count():
     # A Dint count declared 0..1: count != 0 decides the call, as for an Int.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(DDQ):
                 call("work")
         _read_y2()
@@ -383,9 +383,9 @@ def _loop_dint_count():
 def _internal_dint_count():
     # ND's only producer copies DQ (0..1) into it; undeclared, its count is inexact.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(DQ, ND)
-        with Rung():
+        with rung():
             with forloop(ND):
                 call("work")
         _read_y2()
@@ -395,9 +395,9 @@ def _internal_dint_count():
 
 def _two_sites():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("work")
-        with Rung(R):
+        with rung(R):
             with forloop(1):
                 call("work")
         _read_y2()
@@ -407,11 +407,11 @@ def _two_sites():
 
 def _branch_in_outer():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("outer")
         _read_y2()
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 with branch(G):
                     call("work")
         _coil_work()
@@ -420,14 +420,14 @@ def _branch_in_outer():
 
 def _three_levels():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("a")
         _read_y2()
         with subroutine("a"):
-            with Rung():
+            with rung():
                 call("b")
         with subroutine("b"):
-            with Rung():
+            with rung():
                 with forloop(1):
                     call("work")
         _coil_work()
@@ -436,9 +436,9 @@ def _three_levels():
 
 def _break_before_call():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
-                with Rung(R):
+                with rung(R):
                     break_loop()
                 call("work")
         _read_y2()
@@ -448,9 +448,9 @@ def _break_before_call():
 
 def _continue_before_call():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
-                with Rung(R):
+                with rung(R):
                     continue_loop()
                 call("work")
         _read_y2()
@@ -460,9 +460,9 @@ def _continue_before_call():
 
 def _body_rung_call():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
-                with Rung(G):
+                with rung(G):
                     call("work")
         _read_y2()
         _coil_work()
@@ -559,16 +559,16 @@ Wide = Dint("Wide", external=True)
 
 def _out_z_work() -> None:
     with subroutine("work"):
-        with Rung():
+        with rung():
             out(Z)
 
 
 def _idx_body_rung_call():
     # Iteration 0 always runs, so work runs on every scan.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(2) as loop:
-                with Rung(loop.idx == 0):
+                with rung(loop.idx == 0):
                     call("work")
         _out_z_work()
     return logic
@@ -594,11 +594,11 @@ def test_undecided_loop_calls_are_inexact(shape_name: str) -> None:
 
 def test_inexact_entry_reaches_nested_callees() -> None:
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             with forloop(1, oneshot=True):
                 call("outer")
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 call("work")
         _out_z_work()
     assert _inexact_entry_subroutines(logic) == {"outer", "work"}
@@ -614,7 +614,7 @@ def test_exact_loop_call_guard() -> None:
 
 def _plain_guarded_call():
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("work")
         _coil_work()
     return logic
@@ -622,7 +622,7 @@ def _plain_guarded_call():
 
 def test_wide_count_is_necessary_but_not_exact() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(Wide):
                 call("work")
         _out_z_work()
@@ -644,9 +644,9 @@ def _dint_count_loop(count: Any, *producers: Any) -> Program:
     """
     with Program(strict=False) as logic:
         for i, source in enumerate(producers):
-            with Rung(Sel == i):
+            with rung(Sel == i):
                 copy(source, count)
-        with Rung():
+        with rung():
             with forloop(count):
                 call("work")
         _out_z_work()
@@ -739,7 +739,7 @@ def test_stuck_bits_body_rung_call_is_not_reported() -> None:
 
 def test_stuck_bits_count_tag_domain_covers_the_call() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(C):
                 call("work")
         _out_z_work()
@@ -750,17 +750,17 @@ def test_stuck_bits_count_tag_domain_covers_the_call() -> None:
 def test_duplicate_out_body_rung_calls_are_not_exclusive() -> None:
     # Both iterations run on every scan: b's out() overwrites a's.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(2) as loop:
-                with Rung(loop.idx == 0):
+                with rung(loop.idx == 0):
                     call("a")
-                with Rung(loop.idx == 1):
+                with rung(loop.idx == 1):
                     call("b")
         with subroutine("a"):
-            with Rung(A1):
+            with rung(A1):
                 out(Y2)
         with subroutine("b"):
-            with Rung(B1):
+            with rung(B1):
                 out(Y2)
     findings = validate_conflicting_outputs(logic).findings
     assert [f.target_name for f in findings] == ["Y2"]
@@ -774,27 +774,27 @@ S = Bool("S", external=True)
 
 def _a_b_out_y2(*, a_resets_m: bool = False) -> None:
     with subroutine("a"):
-        with Rung(A1):
+        with rung(A1):
             out(Y2)
         if a_resets_m:
-            with Rung():
+            with rung():
                 reset(M)
     with subroutine("b"):
-        with Rung(B1):
+        with rung(B1):
             out(Y2)
 
 
 def _split_on_m(*, a_resets_m: bool = False) -> Program:
     with Program(strict=False) as logic:
-        with Rung(S):
+        with rung(S):
             latch(M)
-        with Rung(~S):
+        with rung(~S):
             reset(M)
-        with Rung():
+        with rung():
             with forloop(1):
-                with Rung(M):
+                with rung(M):
                     call("a")
-                with Rung(~M):
+                with rung(~M):
                     call("b")
         _a_b_out_y2(a_resets_m=a_resets_m)
     return logic
@@ -802,13 +802,13 @@ def _split_on_m(*, a_resets_m: bool = False) -> Program:
 
 def _plain_split_on_m() -> Program:
     with Program(strict=False) as logic:
-        with Rung(S):
+        with rung(S):
             latch(M)
-        with Rung(~S):
+        with rung(~S):
             reset(M)
-        with Rung(M):
+        with rung(M):
             call("a")
-        with Rung(~M):
+        with rung(~M):
             call("b")
         _a_b_out_y2()
     return logic
@@ -862,10 +862,10 @@ def test_invariant_body_contact_call_is_exact() -> None:
 def test_body_contact_written_earlier_in_the_rung_is_kept_but_inexact() -> None:
     # The body rung reads M after the copy, not with the rung's own contacts.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(G, M)
             with forloop(1):
-                with Rung(M):
+                with rung(M):
                     call("work")
         _out_z_work()
     (entry,) = _build_caller_map(logic)["work"]
@@ -878,10 +878,10 @@ DSB = Block("DSB", TagType.INT, 1, 3)
 
 def test_body_contact_on_an_element_the_body_writes_indirectly_is_no_condition() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(2) as loop:
                 copy(1, DSB[loop.idx + 1])
-                with Rung(DSB[1] == 0):
+                with rung(DSB[1] == 0):
                     call("work")
         _out_z_work()
     (entry,) = _build_caller_map(logic)["work"]
@@ -891,10 +891,10 @@ def test_body_contact_on_an_element_the_body_writes_indirectly_is_no_condition()
 
 def test_indirect_body_contact_on_a_block_the_body_writes_is_no_condition() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
                 copy(1, DSB[2])
-                with Rung(DSB[P] == 0):
+                with rung(DSB[P] == 0):
                     call("work")
         _out_z_work()
     (entry,) = _build_caller_map(logic)["work"]
@@ -904,10 +904,10 @@ def test_indirect_body_contact_on_a_block_the_body_writes_is_no_condition() -> N
 
 def test_body_contact_on_an_unwritten_element_is_kept() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(1):
                 copy(1, DSB[2])
-                with Rung(DSB[1] == 0):
+                with rung(DSB[1] == 0):
                     call("work")
         _out_z_work()
     (entry,) = _build_caller_map(logic)["work"]
@@ -927,20 +927,20 @@ def _indirect_write_split(contact: Any) -> Program:
     # Iteration 0 runs a (contact on); copy(1, CBX[PX]) can turn it off, so
     # iteration 1 runs b.  Both out(YX).
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(0, CBX[2])
-        with Rung():
+        with rung():
             with forloop(2):
-                with Rung(~contact):
+                with rung(~contact):
                     call("a")
-                with Rung(contact):
+                with rung(contact):
                     call("b")
                 copy(1, CBX[PX])
         with subroutine("a"):
-            with Rung(A1):
+            with rung(A1):
                 out(YX)
         with subroutine("b"):
-            with Rung(A1):
+            with rung(A1):
                 out(YX)
                 out(ZX)
     return logic

@@ -52,7 +52,7 @@ Three more cases ask what an edge contact does without power on its left:
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, branch, copy, fall, latch, math, out, reset, rise, system
+from pyrung.core import Or, branch, copy, fall, latch, math, out, reset, rise, rung, system
 from tests.conformance.memory import c
 from tests.conformance.scans import WINDOW, count_scans, done, edges, firings, scans_for, trace
 
@@ -61,7 +61,7 @@ SCANS = scans_for()
 
 def prove_out_follows_rung(slot):
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         out(c[1501])
     trace(slot, c[1501])
     done(slot)
@@ -70,7 +70,7 @@ def prove_out_follows_rung(slot):
 def prove_out_oneshot_fires_one_scan(slot):
     # The rung goes true on scan 3 and stays true.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(c[1511], oneshot=True)
     trace(slot, c[1511])
     done(slot)
@@ -79,7 +79,7 @@ def prove_out_oneshot_fires_one_scan(slot):
 def prove_out_oneshot_refires(slot):
     # The rung is true on scans 2..4, false on scan 5 only, true from scan 6.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch != 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch != 5):
         out(c[1521], oneshot=True)
     trace(slot, c[1521])
     done(slot)
@@ -88,7 +88,7 @@ def prove_out_oneshot_refires(slot):
 def prove_rise_fall_fire_one_scan(slot):
     # C1531 is on for scans 3..5, written above the edge contacts.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         out(c[1531])
     edges(rise(c[1531]), slot, slot.Result1, slot.Result2)
     edges(fall(c[1531]), slot, slot.Result3, slot.Result4)
@@ -101,14 +101,14 @@ def prove_edge_sees_previous_scan_end(slot):
     # it and the rung that sets it.  Each ends every scan as it began it.  Two
     # contacts of each kind, side by side, read the same bit at the same place.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         latch(c[1541])
         reset(c[1542])
     firings(rise(c[1541]), slot, slot.Result1)
     firings(rise(c[1541]), slot, slot.Result2)
     firings(fall(c[1542]), slot, slot.Result3)
     firings(fall(c[1542]), slot, slot.Result4)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         reset(c[1541])
         latch(c[1542])
     done(slot)
@@ -119,7 +119,7 @@ def prove_edge_before_its_writer(slot):
     count_scans(slot)
     firings(rise(c[1551]), slot, slot.Result1)
     firings(fall(c[1551]), slot, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         out(c[1551])
     firings(rise(c[1551]), slot, slot.Result3)
     firings(fall(c[1551]), slot, slot.Result4)
@@ -129,9 +129,9 @@ def prove_edge_before_its_writer(slot):
 def prove_latch_reset_sticky(slot):
     # The latch rung is true on scan 3 only, the reset rung on scan 6 only.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         latch(c[1561])
-    with Rung(slot.Cmd != 0, slot.Scratch == 6):
+    with rung(slot.Cmd != 0, slot.Scratch == 6):
         reset(c[1561])
     trace(slot, c[1561])
     done(slot)
@@ -139,9 +139,9 @@ def prove_latch_reset_sticky(slot):
 
 def _gated_bit(slot, bit, gate):
     """Turn *bit* on for scans 3..6 and *gate* on for scans 5 and 8 only, from one rung."""
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
         out(bit)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
         out(gate)
 
 
@@ -151,9 +151,9 @@ def prove_edge_behind_open_contact(slot):
     bit, gate = c[1571], c[1572]
     count_scans(slot)
     _gated_bit(slot, bit, gate)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, gate, rise(bit)):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, gate, rise(bit)):
         math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, gate, fall(bit)):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, gate, fall(bit)):
         math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
     firings(rise(bit), slot, slot.Result3)
     firings(fall(bit), slot, slot.Result4)
@@ -166,7 +166,7 @@ def prove_edge_in_false_rung_branch(slot):
     bit, gate = c[1581], c[1582]
     count_scans(slot)
     _gated_bit(slot, bit, gate)
-    with Rung(gate, slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(gate, slot.Cmd != 0, slot.Scratch <= WINDOW):
         with branch(rise(bit)):
             math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
         with branch(fall(bit)):
@@ -179,15 +179,15 @@ def prove_edge_on_first_scan(slot):
     # rise contact; C1592 latches if that contact ever passes power.  The
     # reset leaves both alone, and C1591 never falls, so only the first scan
     # can latch C1592.
-    with Rung():
+    with rung():
         out(c[1591])
-    with Rung(rise(c[1591])):
+    with rung(rise(c[1591])):
         latch(c[1592])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[1592]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[1592]):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, system.sys.first_scan):
+    with rung(slot.Cmd != 0, slot.Fired == 0, system.sys.first_scan):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 

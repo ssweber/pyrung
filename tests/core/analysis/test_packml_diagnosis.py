@@ -10,9 +10,9 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     copy,
     latch,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -29,9 +29,9 @@ class TestExternalWrittenClassification:
         enable = Bool("Enable", external=True)
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(0, val)
-            with Rung(enable):
+            with rung(enable):
                 copy(1, val)
 
         result = _classify_dimensions(logic)
@@ -48,13 +48,13 @@ class TestExternalWrittenClassification:
         output = Bool("Output")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(0, cmd)
-            with Rung(btn_a):
+            with rung(btn_a):
                 copy(1, cmd)
-            with Rung(btn_b):
+            with rung(btn_b):
                 copy(2, cmd)
-            with Rung(cmd == 1):
+            with rung(cmd == 1):
                 latch(output)
 
         result = _classify_dimensions(logic)

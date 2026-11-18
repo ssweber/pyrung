@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import PLC, Int, Program, Rung, copy, math
+from pyrung import PLC, Int, Program, copy, math, rung
 from pyrung.core.executor import ConditionViewCapture
 
 _ALL_CACHES = {
@@ -106,9 +106,9 @@ def test_stop_to_run_drops_the_replay_slabs_of_the_old_recording() -> None:
 def test_a_seek_after_a_restart_answers_from_the_new_run() -> None:
     step, mode, seen = Int("Step"), Int("Mode"), Int("Seen")
     with Program() as program:
-        with Rung():
+        with rung():
             math(step + 1, step)
-        with Rung():
+        with rung():
             copy(mode, seen)
     # Use a small recent-state cache and a far checkpoint, so that a seek reaches for a slab.
     plc = PLC(program, cache=20, history_budget=1_048_576, checkpoint_interval=5000)

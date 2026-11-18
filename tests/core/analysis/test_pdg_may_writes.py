@@ -19,10 +19,10 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     call,
     copy,
+    rung,
     subroutine,
     to_text,
 )
@@ -59,13 +59,13 @@ def test_the_graph_records_which_writes_a_rung_may_not_make() -> None:
     regs = Block("RecReg", TagType.INT, 1, 4)
     msg = Block("RecMsg", TagType.CHAR, 1, 10)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(5, regs[_two_way_pointer("RecPtr")])
-        with Rung():
+        with rung():
             copy(5, regs[Int("RecOne", choices={3: "only"})])
-        with Rung():
+        with rung():
             copy(Int("RecSource"), msg[1], convert=to_text())
-        with Rung():
+        with rung():
             copy(-12, msg[8], convert=to_text())
     pointer, one_way, text, literal = build_program_graph(logic).rung_nodes[:4]
 
@@ -84,7 +84,7 @@ def test_the_graph_records_which_writes_a_rung_may_not_make() -> None:
 def test_a_write_the_rung_also_makes_for_sure_is_sure() -> None:
     regs = Block("BothReg", TagType.INT, 1, 4)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(5, regs[_two_way_pointer("BothPtr")])
             copy(6, regs[1])
     (node,) = build_program_graph(logic).rung_nodes
@@ -104,9 +104,9 @@ def test_a_pointer_write_is_not_a_write_before_read() -> None:
     """
     regs = Block("WbrReg", TagType.INT, 1, 4)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(5, regs[_two_way_pointer("WbrPtr")])
-        with Rung(regs[1] == 5):
+        with rung(regs[1] == 5):
             copy(1, Int("WbrSeen"))
     graph = build_program_graph(logic)
     assert not graph.unconditional_write_before_read("WbrReg1")
@@ -118,9 +118,9 @@ def test_a_text_through_a_pointer_is_not_a_write_before_read() -> None:
     txt = ClickBlocks().txt
     pointer = Int("TextWbrPtr", choices={990: "near the end", 995: "nearer"})
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Int("TextWbrSource"), txt[pointer], convert=to_text())
-        with Rung(txt[990] == "1"):
+        with rung(txt[990] == "1"):
             copy(1, Int("TextWbrSeen"))
     assert not build_program_graph(logic).unconditional_write_before_read("TXT990")
 
@@ -137,16 +137,16 @@ def _subroutine_reads_a_kept_element(write: Callable[[], object], kept: Any, mar
     the value.
     """
     with Program() as logic:
-        with Rung(Bool("SliceCmd", external=True)):
+        with rung(Bool("SliceCmd", external=True)):
             copy(mark, kept)
-        with Rung():
+        with rung():
             call("Slice")
         with subroutine("Slice"):
-            with Rung():
+            with rung():
                 write()
-            with Rung(kept != mark):
+            with rung(kept != mark):
                 copy(7, Int("SliceX"))
-            with Rung():
+            with rung():
                 copy(Int("SliceX"), Int("SliceShown"))
     return logic
 
@@ -181,11 +181,11 @@ def test_a_copy_through_a_pointer_is_no_functional_dependency() -> None:
     regs = Block("DepReg", TagType.INT, 1, 4)
     source = Int("DepSource")
     with Program() as logic:
-        with Rung(regs[1] == 2):
+        with rung(regs[1] == 2):
             copy(1, Int("DepSeen"))
-        with Rung(Bool("DepLoad", external=True)):
+        with rung(Bool("DepLoad", external=True)):
             copy(Int("DepInput", external=True, min=0, max=3), source)
-        with Rung():
+        with rung():
             copy(source, regs[_two_way_pointer("DepPtr")])
     ctx = _through_funcdep(logic)
     assert (ctx._elided_tags or {}).get("DepReg1") != "functional_dep"
@@ -204,11 +204,11 @@ def test_a_text_whose_first_character_is_overwritten_is_not_a_dead_write() -> No
     """
     txt = ClickBlocks().txt
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Int("DeadSource"), txt[1], convert=to_text())
-        with Rung():
+        with rung():
             copy("A", txt[1])
-        with Rung(txt[1] == "A", txt[3] == "B"):
+        with rung(txt[1] == "A", txt[3] == "B"):
             copy(1, Int("DeadSeen"))
     codes = [finding.code for finding in logic.check().findings]
     assert "TAG_DEAD_WRITE" not in codes

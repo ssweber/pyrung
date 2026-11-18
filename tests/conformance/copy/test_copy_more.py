@@ -44,12 +44,12 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     blockcopy,
     copy,
     fill,
     math,
     pack_text,
+    rung,
     system,
     to_ascii,
     to_text,
@@ -63,7 +63,7 @@ SC44 = system.fault.address_error
 
 
 def _pair(slot, first, second, into):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(first, slot.Scratch, convert=to_ascii)
         math(slot.Scratch * 128, into)
         copy(second, slot.Scratch, convert=to_ascii)
@@ -71,30 +71,30 @@ def _pair(slot, first, second, into):
 
 
 def prove_across_types(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(2.7, slot.ErrorCode)
     finish(slot)
 
 
 def prove_pointer_limits(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(4501, slot.Scratch)
         copy(99, slot.Result1)
         copy(ds[slot.Scratch], slot.Result1)
     flag_bit(slot, SC43, slot.ErrorCode, 1)
     flag_bit(slot, SC44, slot.ErrorCode, 10)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(501, slot.Scratch)
         copy(99, dh[67])
         copy(dh[slot.Scratch], dh[67])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
     flag_bit(slot, SC44, slot.ErrorCode, 10)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(99.0, df[194])
         copy(df[slot.Scratch], df[194])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
     flag_bit(slot, SC44, slot.ErrorCode, 10)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1001, slot.Scratch)
         copy("Z", txt[570])
         copy(txt[slot.Scratch], txt[570])
@@ -102,7 +102,7 @@ def prove_pointer_limits(slot):
     flag_bit(slot, SC44, slot.ErrorCode, 10)
     class_of(slot, dh[67], [0, 99], slot.Result2)
     class_of(slot, df[194], [0.0, 99.0], slot.Result3)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(txt[570], slot.Result4, convert=to_ascii)
     finish(slot)
 
@@ -114,7 +114,7 @@ def init_pointer_limits(slot):
 
 
 def prove_to_text_real(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1.5, df[195])
         copy(1.0e10, df[196])
         copy(df[195], txt[571], convert=to_text())
@@ -136,7 +136,7 @@ def init_to_text_real(slot):
 
 
 def prove_to_text_ints(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(42, dd[59])
         copy(-42, dd[60])
         copy(0x00AB, dh[68])
@@ -163,7 +163,7 @@ def init_to_text_ints(slot):
 
 def _stage(slot, text, first):
     """Stage *text* into TXT starting at *first*, with one Copy per character."""
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         for offset, char in enumerate(text):
             copy(char, txt[first + offset])
 
@@ -174,7 +174,7 @@ def prove_pack_text_forms(slot):
     _stage(slot, "abc", 721)
     _stage(slot, "00ff", 731)
     _stage(slot, "+5", 741)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(99.0, df[197])
         copy(99.0, df[198])
         copy(99.0, df[199])
@@ -184,15 +184,15 @@ def prove_pack_text_forms(slot):
         math(df[197] * 10, slot.Result1)
         pack_text(txt.select(711, 717), df[198])
     flag_bit(slot, SC43, slot.Result2, 10)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         pack_text(txt.select(721, 723), df[199])
-    with Rung(*once(slot), SC43, df[199] == 99.0):
+    with rung(*once(slot), SC43, df[199] == 99.0):
         copy(1, slot.Result3)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         pack_text(txt.select(731, 734), dh[69])
         pack_text(txt.select(741, 742), slot.ErrorCode)
     class_of(slot, df[198], [150.0, 1.0, 99.0], slot.Scratch)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(slot.Result2 + slot.Scratch, slot.Result2)
     class_of(slot, dh[69], [0xFF, 99], slot.Result4)
     finish(slot)
@@ -210,14 +210,14 @@ def init_pack_text_forms(slot):
 
 def prove_block_forms(slot):
     _stage(slot, "1A2", 751)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(99, ds.select(3915, 3917))
         blockcopy(txt.select(751, 753), ds.select(3915, 3917), convert=to_value)
         math(ds[3915] * 10 + ds[3917], slot.Result1)
         copy(2.7, df[200])
         fill(df[200], ds.select(3918, 3919))
     class_of(slot, ds[3916], [0, 99, 17], slot.Result2)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(ds[3918], slot.Result3)
     finish(slot)
 

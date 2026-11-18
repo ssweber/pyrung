@@ -73,16 +73,16 @@ def _repl(
 
 
 BASIC_SCRIPT = (
-    "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
+    "from pyrung.core import Bool, Int, PLC, Program, rung, out, copy\n"
     "\n"
     "button = Bool('Button')\n"
     "light = Bool('Light')\n"
     "counter = Int('Counter')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        out(light)\n"
-    "    with Rung():\n"
+    "    with rung():\n"
     "        copy(0, counter)\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
@@ -110,12 +110,12 @@ def _setup(
 
 
 TIMER_SCRIPT = (
-    "from pyrung.core import PLC, Program, Rung, Timer, on_delay\n"
+    "from pyrung.core import PLC, Program, rung, Timer, on_delay\n"
     "\n"
     "ton = Timer.clone('Ton')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung():\n"
+    "    with rung():\n"
     "        on_delay(ton, preset={preset}, unit='{unit}')\n"
     "\n"
     "runner = PLC(prog, dt=0.1)\n"
@@ -161,15 +161,15 @@ class TestReloadChangingATimersUnit:
 
 def _off_delay_script(off_delay: str) -> str:
     return (
-        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Physical, Program, rung, out\n"
         "\n"
         "en = Bool('En')\n"
         f"fb = Bool('Fb', physical=Physical('S', off_delay='{off_delay}'), link='En')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(en):\n"
+        "    with rung(en):\n"
         "        out(Bool('Echo'))\n"
-        "    with Rung(fb):\n"
+        "    with rung(fb):\n"
         "        out(Bool('Seen'))\n"
         "\n"
         "runner = PLC(prog, dt=0.25)\n"
@@ -206,16 +206,16 @@ def test_a_reload_continues_a_running_off_delay(
 
 def _coil_script(horn: str) -> str:
     return (
-        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Physical, Program, rung, out\n"
         "\n"
         "motor = Bool('Motor')\n"
         "spare = Bool('Spare')\n"
         f"horn = {horn}\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(motor):\n"
+        "    with rung(motor):\n"
         "        out(Bool('Echo'))\n"
-        "    with Rung(spare, horn):\n"
+        "    with rung(spare, horn):\n"
         "        out(Bool('Seen'))\n"
         "\n"
         "runner = PLC(prog, dt=0.01)\n"
@@ -382,16 +382,16 @@ def test_a_bench_link_over_a_declared_coupling_settles_as_the_bench_link(
 
 def _relink_script(enable: str) -> str:
     return (
-        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Physical, Program, rung, out\n"
         "\n"
         "motor = Bool('Motor')\n"
         "pump = Bool('Pump', default=True)\n"
         f"fb = Bool('Fb', physical=Physical('X', toggle=True), link='{enable}')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(motor, pump):\n"
+        "    with rung(motor, pump):\n"
         "        out(Bool('Echo'))\n"
-        "    with Rung(fb):\n"
+        "    with rung(fb):\n"
         "        out(Bool('Seen'))\n"
         "\n"
         "runner = PLC(prog, dt=0.01)\n"
@@ -410,15 +410,15 @@ def test_a_reload_that_links_a_coil_to_another_enable_settles_it(tmp_path: Path)
 
 def _feedback_script(fb: str, physical: str) -> str:
     return (
-        "from pyrung.core import Bool, PLC, Physical, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Physical, Program, rung, out\n"
         "\n"
         "motor = Bool('Motor')\n"
         f"fb = Bool('{fb}', physical=Physical('X', {physical}), link='Motor')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(motor):\n"
+        "    with rung(motor):\n"
         "        out(Bool('Echo'))\n"
-        "    with Rung(fb):\n"
+        "    with rung(fb):\n"
         "        out(Bool('Seen'))\n"
         "\n"
         "runner = PLC(prog, dt=0.01)\n"
@@ -461,7 +461,7 @@ def test_a_reload_back_to_a_coil_settles_it(
 
 
 AMBIENT_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Physical, Program, Real, Rung, out\n"
+    "from pyrung.core import Bool, PLC, Physical, Program, Real, rung, out\n"
     "\n"
     "en = Bool('En')\n"
     "temp = Real(\n"
@@ -471,9 +471,9 @@ AMBIENT_SCRIPT = (
     ")\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(en):\n"
+    "    with rung(en):\n"
     "        out(Bool('Echo'))\n"
-    "    with Rung(temp > 1000.0):\n"
+    "    with rung(temp > 1000.0):\n"
     "        out(Bool('Seen'))\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
@@ -546,7 +546,7 @@ class TestReload:
         old_scan_id = adapter._runner.current_state.scan_id
 
         new_script = (
-            "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
+            "from pyrung.core import Bool, Int, PLC, Program, rung, out, copy\n"
             "\n"
             "button = Bool('Button')\n"
             "light = Bool('Light')\n"
@@ -554,11 +554,11 @@ class TestReload:
             "extra = Bool('Extra')\n"
             "\n"
             "with Program(strict=False) as prog:\n"
-            "    with Rung(button):\n"
+            "    with rung(button):\n"
             "        out(light)\n"
-            "    with Rung():\n"
+            "    with rung():\n"
             "        copy(0, counter)\n"
-            "    with Rung(button):\n"
+            "    with rung(button):\n"
             "        out(extra)\n"
             "\n"
             "runner = PLC(prog, dt=0.010)\n"
@@ -590,7 +590,7 @@ class TestReload:
 
 
 ONESHOT_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, PLC, Program, rung, out\n"
     "\n"
     "button = Bool('Button')\n"
     "pulse = Bool('Pulse')\n"
@@ -598,18 +598,18 @@ ONESHOT_SCRIPT = (
     "\n"
     "with Program(strict=False) as prog:\n"
     "{extra}"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        out(pulse, oneshot=True)\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
-EXTRA_RUNG = "    with Rung(button):\n        out(extra, oneshot=True)\n"
+EXTRA_RUNG = "    with rung(button):\n        out(extra, oneshot=True)\n"
 EDGE_SCRIPT = (
     ONESHOT_SCRIPT.replace("import Bool,", "import Bool, rise,")
-    .replace("with Rung(button):", "with Rung(rise(button)):")
+    .replace("with rung(button):", "with rung(rise(button)):")
     .replace("out(pulse, oneshot=True)", "out(pulse)")
 )
-EDGE_EXTRA_RUNG = "    with Rung(rise(button)):\n        out(extra)\n"
+EDGE_EXTRA_RUNG = "    with rung(rise(button)):\n        out(extra)\n"
 
 
 class TestReloadSiteMemory:
@@ -686,7 +686,7 @@ class TestReloadSiteMemory:
 
 
 OUT_COIL_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, Timer, debounce, timed\n"
+    "from pyrung.core import Bool, PLC, Program, rung, Timer, debounce, timed\n"
     "\n"
     "button = Bool('Button')\n"
     "horn = Bool('Horn')\n"
@@ -694,9 +694,9 @@ OUT_COIL_SCRIPT = (
     "t = Timer.clone('Ot', count=4)\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        timed(horn, t[1], {on})\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        debounce(tank, on=(t[2], {on}), off=(t[3], 20))\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
@@ -749,59 +749,59 @@ class TestReloadRungMemory:
 
 
 COUNTER_SCRIPT = (
-    "from pyrung.core import Bool, Counter, PLC, Program, Rung, count_up\n"
+    "from pyrung.core import Bool, Counter, PLC, Program, rung, count_up\n"
     "\n"
     "part = Bool('Part')\n"
     "ctr = Counter.clone('Parts')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(part):\n"
+    "    with rung(part):\n"
     "        count_up(ctr, preset={preset}).down({down}).reset({reset})\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
 
 FLASHER_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, Timer, flasher\n"
+    "from pyrung.core import Bool, PLC, Program, rung, Timer, flasher\n"
     "\n"
     "button = Bool('Button')\n"
     "beacon = Bool('Beacon')\n"
     "t = Timer.clone('Fl', count=2)\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        flasher(beacon, on=(t[1], {on}), off=(t[2], 50))\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
 
 ONESHOT_COPY_SCRIPT = (
-    "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+    "from pyrung.core import Bool, Int, PLC, Program, rung, copy\n"
     "\n"
     "button = Bool('Button')\n"
     "setpoint = Int('Setpoint')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        copy({value}, setpoint, oneshot=True)\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
 
 TOGGLE_SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, toggle\n"
+    "from pyrung.core import Bool, PLC, Program, rung, toggle\n"
     "\n"
     "button = Bool('Button')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        toggle(Bool('{target}'))\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
 
 DRUM_SCRIPT = (
-    "from pyrung.core import Bool, Dint, Int, PLC, Program, Rung, time_drum\n"
+    "from pyrung.core import Bool, Dint, Int, PLC, Program, rung, time_drum\n"
     "\n"
     "running = Bool('Running')\n"
     "jump = Bool('Jump')\n"
@@ -809,7 +809,7 @@ DRUM_SCRIPT = (
     "long = Int('Long', default=300)\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(running):\n"
+    "    with rung(running):\n"
     "        time_drum(\n"
     "            outputs=[Bool('Fill'), Bool('Drain')],\n"
     "            presets=[{first}, {second}],\n"
@@ -1025,15 +1025,15 @@ class TestReloadTagTypeChange:
         assert adapter._runner.current_state.tags["Light"] is True
 
         changed_script = (
-            "from pyrung.core import Int, PLC, Program, Rung, copy\n"
+            "from pyrung.core import Int, PLC, Program, rung, copy\n"
             "\n"
             "light = Int('Light')\n"
             "counter = Int('Counter')\n"
             "\n"
             "with Program(strict=False) as prog:\n"
-            "    with Rung():\n"
+            "    with rung():\n"
             "        copy(0, light)\n"
-            "    with Rung():\n"
+            "    with rung():\n"
             "        copy(0, counter)\n"
             "\n"
             "runner = PLC(prog, dt=0.010)\n"
@@ -1127,7 +1127,7 @@ class TestAutoReload:
 class TestMemoryPaneLabels:
     def test_site_memory_names_its_contact_and_sorts_by_number(self, tmp_path: Path):
         rungs = "".join(
-            f"    with Rung(rise(button)):\n        out(Bool('Out{n}'))\n" for n in range(11)
+            f"    with rung(rise(button)):\n        out(Bool('Out{n}'))\n" for n in range(11)
         )
         adapter, out, _script_path = _setup(tmp_path, EDGE_SCRIPT.format(extra=rungs))
         _repl(adapter, out, "force Button true", seq=10)
@@ -1147,7 +1147,7 @@ class TestMemoryPaneLabels:
 
 
 RETENTIVE_SCRIPT = (
-    "from pyrung.core import Bool, Int, PLC, Program, Rung, Timer, Counter, on_delay, count_down\n"
+    "from pyrung.core import Bool, Int, PLC, Program, rung, Timer, Counter, on_delay, count_down\n"
     "\n"
     "button = Bool('Button')\n"
     "rst = Bool('Rst')\n"
@@ -1155,9 +1155,9 @@ RETENTIVE_SCRIPT = (
     "ctd = Counter.clone('CTD1')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        on_delay(td, preset=1000)\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        count_down(ctd, preset=100).reset(rst)\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
@@ -1251,7 +1251,7 @@ class TestReloadWhileContinueRuns:
 
 
 CARRY_SCRIPT = (
-    "from pyrung.core import Bool, Int, Physical, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, Int, Physical, PLC, Program, rung, out\n"
     "from pyrung.click import ClickBlocks, TagMap\n"
     "x, y, c, t, ct, sc, ds, *_ = ClickBlocks()\n"
     "\n"
@@ -1260,9 +1260,9 @@ CARRY_SCRIPT = (
     "lamp = Bool('Lamp')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(cmd):\n"
+    "    with rung(cmd):\n"
     "        out(lamp)\n"
-    "    with Rung(a):\n"
+    "    with rung(a):\n"
     "        out(Bool('Sink'))\n"
     "\n"
     "mapping = TagMap({{a: {a_addr}, cmd: {cmd_addr}, lamp: y[1]}})\n"
@@ -1286,7 +1286,7 @@ def _rewrite(script_path: Path, **kwargs: str) -> None:
 
 def _int_a_script() -> str:
     """Return the program where A is an Int, so a force or bench link on it no longer fits."""
-    return _carry_script(a_type="Int", a_addr="ds[1]").replace("Rung(a)", "Rung(a > 0)")
+    return _carry_script(a_type="Int", a_addr="ds[1]").replace("rung(a)", "rung(a > 0)")
 
 
 def _declared_a_script() -> str:
@@ -1932,21 +1932,21 @@ class TestPlannedReload:
 
     def test_a_force_moves_onto_a_tag_whose_old_namesake_had_another_type(self, tmp_path: Path):
         old = (
-            "from pyrung.core import Bool, Int, PLC, Program, Rung, out\n"
+            "from pyrung.core import Bool, Int, PLC, Program, rung, out\n"
             "a = Int('A')\n"
             "b = Bool('B')\n"
             "with Program(strict=False) as prog:\n"
-            "    with Rung(a > 0):\n"
+            "    with rung(a > 0):\n"
             "        out(Bool('Sink'))\n"
-            "    with Rung(b):\n"
+            "    with rung(b):\n"
             "        out(Bool('Sink2'))\n"
             "runner = PLC(prog, dt=0.010)\n"
         )
         new = (
-            "from pyrung.core import Bool, Int, PLC, Program, Rung, out\n"
+            "from pyrung.core import Bool, Int, PLC, Program, rung, out\n"
             "b = Int('B')\n"
             "with Program(strict=False) as prog:\n"
-            "    with Rung(b > 0):\n"
+            "    with rung(b > 0):\n"
             "        out(Bool('Sink'))\n"
             "runner = PLC(prog, dt=0.010)\n"
         )
@@ -1978,19 +1978,19 @@ class TestPlannedReload:
 
 
 TWO_SCRIPT = (
-    "from pyrung.core import Bool, Int, Physical, PLC, Program, Real, Rung, out\n"
+    "from pyrung.core import Bool, Int, Physical, PLC, Program, Real, rung, out\n"
     "a = {a}\n"
     "b = {b}\n"
     "cmd = Bool('Cmd')\n"
     "go = Bool('Go')\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(cmd):\n"
+    "    with rung(cmd):\n"
     "        out(Bool('Lamp'))\n"
-    "    with Rung(go):\n"
+    "    with rung(go):\n"
     "        out(Bool('Lamp2'))\n"
-    "    with Rung({a_read}):\n"
+    "    with rung({a_read}):\n"
     "        out(Bool('Sink'))\n"
-    "    with Rung(b):\n"
+    "    with rung(b):\n"
     "        out(Bool('Sink2'))\n"
     "runner = PLC(prog, dt=0.010)\n"
 )
@@ -2007,8 +2007,8 @@ def _timed(name: str, enable: str = "Cmd", ms: int = 100) -> str:
 
 def _three(a: str = "Bool('A')") -> str:
     """Return the two-feedback program with a third feedback, C."""
-    rung_c = "    with Rung(Bool('C')):\n        out(Bool('Sink3'))\n"
-    return _two(a=a).replace("    with Rung(b):\n", rung_c + "    with Rung(b):\n")
+    rung_c = "    with rung(Bool('C')):\n        out(Bool('Sink3'))\n"
+    return _two(a=a).replace("    with rung(b):\n", rung_c + "    with rung(b):\n")
 
 
 def _counts(adapter: DAPAdapter, *fbs: str) -> tuple[int, ...]:

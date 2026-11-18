@@ -15,7 +15,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     Timer,
     Word,
     count_down,
@@ -24,6 +23,7 @@ from pyrung.core import (
     flasher,
     off_delay,
     on_delay,
+    rung,
     timed,
 )
 
@@ -37,7 +37,7 @@ C = Counter.clone("PresetC")
 
 def _build(preset, kind):
     with Program(strict=False):
-        with Rung(Run):
+        with rung(Run):
             if kind == "on_delay":
                 on_delay(T, preset=preset)
             elif kind == "off_delay":

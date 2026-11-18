@@ -22,12 +22,12 @@ from pyrung.core import (
     OutputBlock,
     OutputTag,
     Program,
-    Rung,
     SystemState,
     Tag,
     TagType,
     copy,
     out,
+    rung,
     udt,
 )
 from pyrung.core.memory_block import IndirectBlockRange
@@ -885,7 +885,7 @@ class TestIndirectInstructions:
         Result = Dint("Result")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(DD[Index], Result)
 
         state = SystemState().with_tags({"Index": 100, "DD100": 42})
@@ -900,7 +900,7 @@ class TestIndirectInstructions:
         Value = Dint("Value")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(Value, DD[Index])
 
         state = SystemState().with_tags({"Index": 100, "Value": 42})
@@ -915,7 +915,7 @@ class TestIndirectInstructions:
         Dst = Int("Dst")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(DD[Src], DD[Dst])
 
         state = SystemState().with_tags({"Src": 100, "Dst": 200, "DD100": 42})
@@ -929,7 +929,7 @@ class TestIndirectInstructions:
         Index = Int("Index")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(999, DD[Index])
 
         state = SystemState().with_tags({"Index": 50})
@@ -1032,13 +1032,13 @@ class TestIntegration:
     """Integration tests for complete workflows."""
 
     def test_indirect_condition_in_rung(self):
-        """Rung(DD[Index] > 100) evaluates indirect condition."""
+        """rung(DD[Index] > 100) evaluates indirect condition."""
         DD = Block("DD", TagType.DINT, 1, 1000)
         Index = Int("Index")
         Flag = Bool("Flag")
 
         with Program() as logic:
-            with Rung(DD[Index] > 100):
+            with rung(DD[Index] > 100):
                 out(Flag)
 
         # Condition true
@@ -1058,7 +1058,7 @@ class TestIntegration:
         Result = Dint("Result")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(DD[Index], Result)
 
         # First scan: Index=100
@@ -1078,7 +1078,7 @@ class TestIntegration:
         Sum = Int("Sum")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(DS[Index], Sum)
 
         state = SystemState().with_tags({"Index": 10, "DS10": 100})

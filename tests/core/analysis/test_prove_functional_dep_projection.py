@@ -6,11 +6,11 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     copy,
     math,
     out,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.prove.passes import (
@@ -39,9 +39,9 @@ def test_simple_constant_offset_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 7):
+        with rung(y > 7):
             out(seen)
-        with Rung():
+        with rung():
             math(x + 5, y)
             copy(0, x)
 
@@ -61,9 +61,9 @@ def test_zero_offset_copy_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 1):
+        with rung(y > 1):
             out(seen)
-        with Rung():
+        with rung():
             copy(x, y)
             copy(0, x)
 
@@ -83,12 +83,12 @@ def test_mixed_writers_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 5):
+        with rung(y > 5):
             out(seen)
-        with Rung():
+        with rung():
             math(x + 5, y)
             copy(0, x)
-        with Rung(cond):
+        with rung(cond):
             copy(0, y)
 
     ctx = _run_through_funcdep(logic)
@@ -104,13 +104,13 @@ def test_different_offsets_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 5):
+        with rung(y > 5):
             out(seen)
-        with Rung(cond):
+        with rung(cond):
             math(x + 5, y)
-        with Rung(~cond):
+        with rung(~cond):
             math(x + 3, y)
-        with Rung():
+        with rung():
             copy(0, x)
 
     ctx = _run_through_funcdep(logic)
@@ -125,9 +125,9 @@ def test_self_reference_not_projected_as_funcdep() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(x > 5):
+        with rung(x > 5):
             out(seen)
-        with Rung():
+        with rung():
             math(x + 1, x)
 
     ctx = _run_through_funcdep(logic)
@@ -142,12 +142,12 @@ def test_co_writing_violation_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 7):
+        with rung(y > 7):
             out(seen)
-        with Rung():
+        with rung():
             math(x + 5, y)
             copy(0, x)
-        with Rung(cond):
+        with rung(cond):
             copy(1, x)
 
     ctx = _run_through_funcdep(logic)
@@ -171,18 +171,18 @@ def test_sequential_unconditional_same_sub_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 30):
+        with rung(y > 30):
             out(seen)
-        with Rung(x > 20):
+        with rung(x > 20):
             out(seen)
-        with Rung(trigger):
+        with rung(trigger):
             copy(2, src)
-        with Rung():
+        with rung():
             call("my_sub")
         with subroutine("my_sub"):
-            with Rung():
+            with rung():
                 math(src * 10, x)
-            with Rung():
+            with rung():
                 math(x + 5, y)
 
     ctx = _run_through_funcdep(logic)
@@ -201,16 +201,16 @@ def test_return_early_between_source_and_dep_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 7):
+        with rung(y > 7):
             out(seen)
-        with Rung():
+        with rung():
             call("my_sub")
         with subroutine("my_sub"):
-            with Rung():
+            with rung():
                 copy(3, x)
-            with Rung(cond):
+            with rung(cond):
                 return_early()
-            with Rung():
+            with rung():
                 math(x + 5, y)
 
     ctx = _run_through_funcdep(logic)
@@ -225,14 +225,14 @@ def test_cross_scope_not_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 7):
+        with rung(y > 7):
             out(seen)
-        with Rung():
+        with rung():
             call("my_sub")
-        with Rung():
+        with rung():
             math(x + 5, y)
         with subroutine("my_sub"):
-            with Rung():
+            with rung():
                 copy(3, x)
 
     ctx = _run_through_funcdep(logic)
@@ -251,18 +251,18 @@ def _historian_with_loop(count: object, *, oneshot: bool = False) -> Program:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(y > 30):
+        with rung(y > 30):
             out(seen)
-        with Rung(x > 20):
+        with rung(x > 20):
             out(seen)
-        with Rung(trigger):
+        with rung(trigger):
             copy(2, src)
-        with Rung():
+        with rung():
             call("my_sub")
         with subroutine("my_sub"):
-            with Rung():
+            with rung():
                 math(src * 10, x)
-            with Rung():
+            with rung():
                 with forloop(count, oneshot=oneshot):
                     math(x + 5, y)
     return logic

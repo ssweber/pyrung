@@ -12,7 +12,6 @@ from pyrung.core import (
     Int,
     OutputBlock,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -23,6 +22,7 @@ from pyrung.core import (
     on_delay,
     out,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis import TagRole, TagVersion, build_program_graph, collect_program_tags
@@ -35,9 +35,9 @@ def test_build_program_graph_extracts_simple_roles() -> None:
     conveyor = Bool("Conveyor")
 
     with Program() as prog:
-        with Rung(start_button):
+        with rung(start_button):
             latch(run_mode)
-        with Rung(run_mode):
+        with rung(run_mode):
             out(conveyor)
 
     graph = build_program_graph(prog)
@@ -63,9 +63,9 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
     result = Int("Result")
 
     with Program() as prog:
-        with Rung(enable):
+        with rung(enable):
             on_delay(pdg_timer, preset=preset, unit="Ts").reset(reset)
-        with Rung(enable):
+        with rung(enable):
             math(scale + 1, result)
 
     graph = build_program_graph(prog)
@@ -95,7 +95,7 @@ def test_indirect_ref_unbounded_pointer_expands_full_block() -> None:
     result = Int("Result")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(ds[index], result)
             copy(1, ds[index])
 
@@ -114,7 +114,7 @@ def test_indirect_ref_bounded_pointer_expands_to_range() -> None:
     result = Int("Result")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(ds[index], result)
             copy(1, ds[index])
 
@@ -133,7 +133,7 @@ def test_indirect_ref_choices_pointer_expands_to_choices() -> None:
     index = Int("Index", choices={10: "A", 20: "B", 30: "C"})
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(1, ds[index])
 
     graph = build_program_graph(prog)
@@ -150,9 +150,9 @@ def test_def_use_chain_tracks_write_then_next_rung_read() -> None:
     output = Bool("Output")
 
     with Program() as prog:
-        with Rung(request):
+        with rung(request):
             latch(active)
-        with Rung(active):
+        with rung(active):
             out(output)
 
     graph = build_program_graph(prog)
@@ -167,9 +167,9 @@ def test_def_use_chain_tracks_chained_writes() -> None:
     step = Int("Step")
 
     with Program() as prog:
-        with Rung(step == 0):
+        with rung(step == 0):
             copy(1, step)
-        with Rung(step == 1):
+        with rung(step == 1):
             copy(2, step)
 
     graph = build_program_graph(prog)
@@ -187,9 +187,9 @@ def test_entry_only_reads_share_one_entry_version() -> None:
     light_b = Bool("LightB")
 
     with Program() as prog:
-        with Rung(sensor):
+        with rung(sensor):
             out(light_a)
-        with Rung(~sensor):
+        with rung(~sensor):
             out(light_b)
 
     graph = build_program_graph(prog)
@@ -204,7 +204,7 @@ def test_execution_items_preserve_instruction_branch_interleaving() -> None:
     capture = Int("Capture")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(1, source)
             with branch():
                 copy(source, capture)
@@ -225,7 +225,7 @@ def test_branch_local_conditions_read_after_the_rows_above() -> None:
     light = Bool("Light")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             latch(gate)
             with branch(gate):
                 out(light)
@@ -244,7 +244,7 @@ def test_nested_branch_conditions_read_after_the_rows_above() -> None:
     light = Bool("Light")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             latch(gate)
             with branch():
                 latch(middle)
@@ -283,7 +283,7 @@ def test_isolated_role_prefers_same_rung_read_write_cycles() -> None:
     dest = Int("Dest")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(1, temp)
             math(temp + 1, dest)
 
@@ -297,7 +297,7 @@ def test_graph_tracks_physical_io_types() -> None:
     y = OutputBlock("Y", TagType.BOOL, 1, 1)
 
     with Program() as prog:
-        with Rung(x[1]):
+        with rung(x[1]):
             out(y[1])
 
     graph = build_program_graph(prog)
@@ -312,12 +312,12 @@ def test_def_use_chains_inline_subroutines_at_call_site() -> None:
     result = Bool("Result")
 
     with Program() as prog:
-        with Rung(trigger):
+        with rung(trigger):
             call("Worker")
-        with Rung(flag):
+        with rung(flag):
             out(result)
         with subroutine("Worker"):
-            with Rung():
+            with rung():
                 latch(flag)
 
     graph = build_program_graph(prog)
@@ -357,7 +357,7 @@ def test_build_program_graph_caches_on_program() -> None:
     light = Bool("Light")
 
     with Program() as prog:
-        with Rung(start_button):
+        with rung(start_button):
             out(light)
 
     graph_a = build_program_graph(prog)
@@ -371,7 +371,7 @@ def test_a_later_change_to_a_pointers_bounds_rebuilds_the_cached_graph() -> None
     values = Block("GcValues", TagType.INT, 1, 10)
     pointers = Block("GcPointers", TagType.INT, 1, 10)
     with Program(strict=False) as prog:
-        with Rung(Bool("GcGo")):
+        with rung(Bool("GcGo")):
             copy(values[pointers[1]], pointers[2])
     assert "GcValues3" not in prog.dataview().upstream("GcPointers2").tags
 
@@ -389,14 +389,14 @@ def test_collect_program_tags_matches_graph_extraction() -> None:
     branch_result = Int("BranchResult")
 
     with Program() as prog:
-        with Rung(enable):
+        with rung(enable):
             math(source + values[1], result)
             copy(values[pointer], result)
             with branch():
                 copy(values.select(6, 8), values.select(9, 11))
             call("worker")
         with subroutine("worker"):
-            with Rung(result > 0):
+            with rung(result > 0):
                 copy(result, branch_result)
 
     collected = {tag.name: tag for tag in collect_program_tags(prog)}
@@ -411,7 +411,7 @@ def test_collect_program_tags_reuses_cached_graph_tags() -> None:
     light = Bool("Light")
 
     with Program() as prog:
-        with Rung(start_button):
+        with rung(start_button):
             out(light)
 
     graph = build_program_graph(prog)
@@ -431,10 +431,10 @@ def test_pointer_tag_scan_does_not_walk_program_backrefs() -> None:
             return object.__getattribute__(self, name)
 
     with Program() as prog:
-        with Rung():
+        with rung():
             call("worker")
         with subroutine("worker"):
-            with Rung():
+            with rung():
                 copy(ds[index], result)
 
     prog._poison = _Poison()
@@ -453,13 +453,13 @@ def test_affine_index_maps_pointer_range_to_addresses() -> None:
     a, b, c = Int("A"), Int("B"), Int("C")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(ds[ptr + 2], a)
-        with Rung():
+        with rung():
             copy(ds[9 - ptr], b)
-        with Rung():
+        with rung():
             copy(ds[ptr * 2], c)
-        with Rung():
+        with rung():
             copy(1, ds[ptr + other])
 
     graph = build_program_graph(prog)
@@ -485,9 +485,9 @@ def test_affine_index_maps_pointer_range_to_addresses() -> None:
 def test_walker_uses_declared_instruction_fields_without_unknowns() -> None:
     with Program() as prog:
         with subroutine("worker"):
-            with Rung():
+            with rung():
                 return_early()
-        with Rung():
+        with rung():
             call("worker")
 
     facts = walk_program(prog)

@@ -3,7 +3,7 @@
 Each ``variants()`` entry is a label and a body that adds one or more instructions inside a
 rung.  The tool builds each body three ways, so every emitter meets each enable form:
 
-    rung     under ``Rung(Enable)``, with no fault flag referenced (fault bodies are ``pass``)
+    rung     under ``rung(Enable)``, with no fault flag referenced (fault bodies are ``pass``)
     faults   the same, plus a rung reading the four fault flags the emitters set
     for      inside a ``forloop`` body, where the enable is the literal ``True``
 
@@ -30,7 +30,6 @@ from pyrung import (
     Or,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -62,6 +61,7 @@ from pyrung import (
     rise,
     run_enabled_function,
     run_function,
+    rung,
     search,
     shift,
     subroutine,
@@ -765,7 +765,7 @@ def _fault_rung() -> None:
         system.fault.division_error,
         system.fault.math_operation_error,
     )
-    with Rung(Or(*faults)):
+    with rung(Or(*faults)):
         out(Bool("SawFault"))
 
 
@@ -773,7 +773,7 @@ def build_variant(body: Body, flavor: str) -> Program:
     """Build a program that holds *body* in the given *flavor* (``rung``, ``faults`` or ``for``)."""
     _current_blocks.clear()
     with Program(strict=False) as program:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if flavor == "for":
                 with forloop(3):
                     body()
@@ -793,27 +793,27 @@ FLAVORS = ("rung", "faults", "for")
 def _conditions() -> Program:
     ints = Block("Ints", TagType.INT, 1, 8)
     with Program(strict=False) as program:
-        with Rung(Bool("A"), ~Bool("B"), Int("Truthy")):
+        with rung(Bool("A"), ~Bool("B"), Int("Truthy")):
             out(Bool("Y1"))
-        with Rung(Or(Bool("A"), rise(Bool("B")), fall(Bool("C")))):
+        with rung(Or(Bool("A"), rise(Bool("B")), fall(Bool("C")))):
             out(Bool("Y2"))
         for i, op in enumerate(("==", "!=", "<", "<=", ">", ">=")):
-            with Rung(_compare(Int("X"), op, Int("Y"))):
+            with rung(_compare(Int("X"), op, Int("Y"))):
                 out(Bool(f"Cmp{i}"))
-            with Rung(_compare(ints[Int("Ptr")], op, 3)):
+            with rung(_compare(ints[Int("Ptr")], op, 3)):
                 out(Bool(f"Ind{i}"))
-            with Rung(_compare(Int("X") + 1, op, Int("Y") * 2)):
+            with rung(_compare(Int("X") + 1, op, Int("Y") * 2)):
                 out(Bool(f"Expr{i}"))
-        with Rung(ints[Int("Ptr") + 1] > Int("Y")):
+        with rung(ints[Int("Ptr") + 1] > Int("Y")):
             out(Bool("IndExpr"))
-        with Rung(Real("R") > 1.5, Dint("D") <= Int("X")):
+        with rung(Real("R") > 1.5, Dint("D") <= Int("X")):
             out(Bool("Mixed"))
     return program
 
 
 def _branches() -> Program:
     with Program(strict=False) as program:
-        with Rung(Bool("Start")):
+        with rung(Bool("Start")):
             out(Bool("Main"))
             with branch(Bool("B1"), rise(Bool("E1"))):
                 out(Bool("Y1"))
@@ -821,27 +821,27 @@ def _branches() -> Program:
                     latch(Bool("Y2"))
             with branch(fall(Bool("E2"))):
                 on_delay_(20)
-        with Rung(Bool("Run")):
+        with rung(Bool("Run")):
             on_delay_(20).reset(rise(Bool("Clear")))
-        with Rung(Bool("Count")):
+        with rung(Bool("Count")):
             count_up(Counter.clone("C"), 3).down(fall(Bool("Down"))).reset(Bool("Clear"))
-        with Rung(rise(Bool("Start")), Bool("Main")):
+        with rung(rise(Bool("Start")), Bool("Main")):
             copy(1, Int("Seen"))
     return program
 
 
 def _subroutines() -> Program:
     with Program(strict=False) as program:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             call("Sub")
-        with Rung():
+        with rung():
             call("Sub")
         with subroutine("Sub"):
-            with Rung(Bool("Leave")):
+            with rung(Bool("Leave")):
                 return_early()
-            with Rung(Bool("A")):
+            with rung(Bool("A")):
                 out(Bool("Y"))
-            with Rung():
+            with rung():
                 return_early()
     return program
 
@@ -849,25 +849,25 @@ def _subroutines() -> Program:
 def _loops() -> Program:
     total = Int("Total")
     with Program(strict=False) as program:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             with forloop(Int("Count")):
                 math(total + 1, total)
-                with Rung(Bool("Stop")):
+                with rung(Bool("Stop")):
                     break_loop()
-                with Rung(Bool("Skip")):
+                with rung(Bool("Skip")):
                     continue_loop()
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             with forloop(Dint("Big")):
                 math(total + 1, total)
-                with Rung(Bool("Skip")):
+                with rung(Bool("Skip")):
                     continue_loop()
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             with forloop(Real("RealCount")):
                 math(total + 1, total)
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             with forloop(70000):
                 math(total + 1, total)
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             with forloop(Int("Count"), oneshot=True):
                 copy(1, Int("Once"))
         _fault_rung()
@@ -876,10 +876,10 @@ def _loops() -> Program:
 
 def _loop_return() -> Program:
     with Program(strict=False) as program:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             call("Sub")
         with subroutine("Sub"):
-            with Rung(Bool("A")):
+            with rung(Bool("A")):
                 with forloop(3):
                     return_early()
     return program

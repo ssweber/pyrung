@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, out
+from pyrung.core import PLC, Bool, Program, out, rung
 
 
 def _runner_with_single_rung() -> PLC:
     light = Bool("Light")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             out(light)
     return PLC(logic)
 

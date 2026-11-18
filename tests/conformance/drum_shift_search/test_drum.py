@@ -159,13 +159,13 @@ from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     And,
     Or,
-    Rung,
     copy,
     event_drum,
     latch,
     math,
     out,
     reset,
+    rung,
     time_drum,
     time_event_drum,
 )
@@ -182,25 +182,25 @@ def entered(slot: Any, step: int, into: Any) -> None:
 
     Call this below the drum's rung.
     """
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, slot.Result1 == step, into == 0):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, slot.Result1 == step, into == 0):
         copy(slot.Scratch, into)
 
 
 def at_scan(slot: Any, scan: int, value: Any, into: Any) -> None:
     """Copy *value* into *into* when scan *scan* reaches this rung."""
-    with Rung(slot.Cmd != 0, slot.Scratch == scan):
+    with rung(slot.Cmd != 0, slot.Scratch == scan):
         copy(value, into)
 
 
 def first_on_from(slot: Any, bit: Any, scan: int, into: Any) -> None:
     """Record in *into* the first scan from *scan* on that *bit* is on (0 if none)."""
-    with Rung(slot.Cmd != 0, slot.Scratch >= scan, slot.Scratch <= WINDOW, bit, into == 0):
+    with rung(slot.Cmd != 0, slot.Scratch >= scan, slot.Scratch <= WINDOW, bit, into == 0):
         copy(slot.Scratch, into)
 
 
 def last_on(slot: Any, bit: Any, into: Any, count: Any = None) -> None:
     """Record in *into* the last scan *bit* is on, and in *count* how many scans it is on."""
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, bit):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, bit):
         copy(slot.Scratch, into)
         if count is not None:
             math(count + 1, count)
@@ -208,7 +208,7 @@ def last_on(slot: Any, bit: Any, into: Any, count: Any = None) -> None:
 
 def prove_te_acc_counts_while_waiting(slot):
     # Step 1 is up after 300 ms but its event (C1903) never comes.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         time_event_drum(
             outputs=[c[1901], c[1902]],
             presets=[300, None],
@@ -219,10 +219,10 @@ def prove_te_acc_counts_while_waiting(slot):
             accumulator=td[401],
             completion_flag=c[1905],
         ).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0, slot.Result1 == 1, td[401] >= 500):
+    with rung(slot.Cmd != 0, slot.Result1 == 1, td[401] >= 500):
         copy(1, slot.Result2, oneshot=True)
     # Fired waits until the Acc reads 500 ms or the step moves without its event.
-    with Rung(slot.Cmd != 0, slot.Fired == 0, Or(td[401] >= 500, slot.Result1 != 1)):
+    with rung(slot.Cmd != 0, slot.Fired == 0, Or(td[401] >= 500, slot.Result1 != 1)):
         copy(1, slot.Fired)
     deadline(slot, ClickTimer(402), DEADLINE_MS)
 
@@ -230,9 +230,9 @@ def prove_te_acc_counts_while_waiting(slot):
 def prove_te_level_event_already_on(slot):
     # The event is on before step 1's time is up, and stays on through the
     # event-only step 2.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         latch(c[1913])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         time_event_drum(
             outputs=[c[1911], c[1912]],
             presets=[300, None],
@@ -243,10 +243,10 @@ def prove_te_level_event_already_on(slot):
             accumulator=td[411],
             completion_flag=c[1915],
         ).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0, c[1915]):
+    with rung(slot.Cmd != 0, c[1915]):
         copy(1, slot.Result2)
     # Fired waits until the drum completes or step 1's Acc reads 500 ms.
-    with Rung(slot.Cmd != 0, slot.Fired == 0, Or(c[1915], td[411] >= 500)):
+    with rung(slot.Cmd != 0, slot.Fired == 0, Or(c[1915], td[411] >= 500)):
         copy(1, slot.Fired)
     deadline(slot, ClickTimer(412), DEADLINE_MS)
 
@@ -255,11 +255,11 @@ def prove_events_are_edges(slot):
     # C1923, the event of steps 2 and 3, is on from scan 2 except scan 6.  A
     # jog on scan 4 enters step 2 with it already on.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch != 6):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch != 6):
         out(c[1923])
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         out(c[1924])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[1921]],
             events=[c[1922], c[1923], c[1923]],
@@ -276,9 +276,9 @@ def prove_events_are_edges(slot):
 def prove_jump_jog_edge_triggered(slot):
     # Jog (C1933) is on for scans 2..4 and 7; jump to step 3 (C1934) from scan 5 on.
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(3, slot.Result4)
-    with Rung(
+    with rung(
         slot.Cmd != 0,
         slot.Scratch >= 2,
         slot.Scratch <= 7,
@@ -286,9 +286,9 @@ def prove_jump_jog_edge_triggered(slot):
         slot.Scratch != 6,
     ):
         out(c[1933])
-    with Rung(slot.Cmd != 0, slot.Scratch >= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 5):
         out(c[1934])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[1931]],
             events=[c[1932], c[1932], c[1932], c[1932]],
@@ -305,19 +305,19 @@ def prove_jump_jog_keep_completion(slot):
     # Events on scans 2, 3 and 4 complete the drum; jump to step 1 on scan 6,
     # jog on scan 7.
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(c[1942])
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         out(c[1943])
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         out(c[1944])
-    with Rung(slot.Cmd != 0, slot.Scratch == 6):
+    with rung(slot.Cmd != 0, slot.Scratch == 6):
         out(c[1946])
-    with Rung(slot.Cmd != 0, slot.Scratch == 7):
+    with rung(slot.Cmd != 0, slot.Scratch == 7):
         out(c[1947])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[1941]],
             events=[c[1942], c[1943], c[1944]],
@@ -333,11 +333,11 @@ def prove_reset_no_stale_outputs(slot):
     # An event on scan 2 takes the drum to step 2 of 3 (not the last); reset
     # (C1956, also on while Cmd == 0) on scans 5 and 6.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(c[1953])
-    with Rung(Or(slot.Cmd == 0, slot.Scratch == 5, slot.Scratch == 6)):
+    with rung(Or(slot.Cmd == 0, slot.Scratch == 5, slot.Scratch == 6)):
         out(c[1956])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[1951], c[1952]],
             events=[c[1953], c[1954], c[1954]],
@@ -355,13 +355,13 @@ def prove_reset_jump_jog_order(slot):
     # Jog alone on scan 2; reset (also on while Cmd == 0) and jump to step 3
     # on scan 3; reset and jog on scan 5; jump and jog on scan 7.
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(3, slot.Result4)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 7)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 7)):
         out(c[1965])
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 5, slot.Scratch == 7)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 5, slot.Scratch == 7)):
         out(c[1966])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[1961]],
             events=[c[1962], c[1962], c[1962], c[1962]],
@@ -381,11 +381,11 @@ def prove_paused_drum_jogs_and_resets(slot):
     # scans 3..5; jog (C836) is on again for scans 4..6 and reset (also on
     # while Cmd == 0) on scan 5.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         out(c[835])
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch >= 4), slot.Scratch <= 6):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch >= 4), slot.Scratch <= 6):
         out(c[836])
-    with Rung(slot.Cmd != 0, ~c[835]):
+    with rung(slot.Cmd != 0, ~c[835]):
         event_drum(
             outputs=[c[831], c[832]],
             events=[c[833], c[833], c[833]],
@@ -403,17 +403,17 @@ def prove_completion_turns_outputs_off(slot):
     # Events on scans 2 and 3 complete the 2-step drum; jump to step 1 (C806)
     # on scan 6, jog (C807) on scan 8.
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(c[803])
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         out(c[804])
-    with Rung(slot.Cmd != 0, slot.Scratch == 6):
+    with rung(slot.Cmd != 0, slot.Scratch == 6):
         out(c[806])
-    with Rung(slot.Cmd != 0, slot.Scratch == 8):
+    with rung(slot.Cmd != 0, slot.Scratch == 8):
         out(c[807])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[801], c[802]],
             events=[c[803], c[804]],
@@ -421,7 +421,7 @@ def prove_completion_turns_outputs_off(slot):
             current_step=slot.Result1,
             completion_flag=c[805],
         ).reset(slot.Cmd == 0).jump(c[806], step=slot.Result4).jog(c[807])
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, c[802]):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, c[802]):
         math(slot.Result2 + 1, slot.Result2)
     first_on_from(slot, c[801], 3, slot.Result3)
     first_on_from(slot, c[802], 7, slot.ErrorCode)
@@ -432,13 +432,13 @@ def prove_paused_drum_jumps(slot):
     # The drum's rung is false (C814) on scans 3..5; a jump (C815) to step 3
     # (ErrorCode) on scan 4.  Nothing drives the event, C813.
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(3, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 5):
         out(c[814])
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         out(c[815])
-    with Rung(slot.Cmd != 0, ~c[814]):
+    with rung(slot.Cmd != 0, ~c[814]):
         event_drum(
             outputs=[c[811], c[812]],
             events=[c[813], c[813], c[813]],
@@ -456,9 +456,9 @@ def prove_reset_swallows_held_jog(slot):
     # Jog (C826) on scans 4..6; reset (also on while Cmd == 0) on scan 4.
     # Nothing drives the event, C823.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= 6):
+    with rung(slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= 6):
         out(c[826])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[821]],
             events=[c[823], c[823], c[823]],
@@ -474,13 +474,13 @@ def prove_invalid_step_corrects_to_1(slot):
     # Jog on scan 2 takes the drum to step 2.  Its rung is false (C1985) on
     # scans 3..4, and step 5 of 3 is written into its step register on scan 3.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 4):
         out(c[1985])
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(c[1986])
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(5, slot.Result1)
-    with Rung(slot.Cmd != 0, ~c[1985]):
+    with rung(slot.Cmd != 0, ~c[1985]):
         event_drum(
             outputs=[c[1981], c[1982]],
             events=[c[1983], c[1983], c[1983]],
@@ -500,15 +500,15 @@ def prove_time_acc_clears_on_every_transition(slot):
     # 205 ms, and a reset (C1995, latched; the reset input is it or
     # Cmd == 0) from step 4.  Below the drum, each transition's scan records
     # TD491.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(3, slot.Scratch)
-    with Rung(slot.Cmd != 0, slot.Result1 == 1, td[491] >= 100):
+    with rung(slot.Cmd != 0, slot.Result1 == 1, td[491] >= 100):
         out(c[1993])
-    with Rung(slot.Cmd != 0, slot.Result1 == 2, td[491] >= 100):
+    with rung(slot.Cmd != 0, slot.Result1 == 2, td[491] >= 100):
         out(c[1994])
-    with Rung(slot.Cmd != 0, slot.Result1 == 4, td[491] >= 100):
+    with rung(slot.Cmd != 0, slot.Result1 == 4, td[491] >= 100):
         latch(c[1995])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         time_drum(
             outputs=[c[1991]],
             presets=[20000, 20000, 205, 20000],
@@ -518,17 +518,17 @@ def prove_time_acc_clears_on_every_transition(slot):
             accumulator=td[491],
             completion_flag=c[1992],
         ).reset(Or(slot.Cmd == 0, c[1995])).jump(c[1994], step=slot.Scratch).jog(c[1993])
-    with Rung(slot.Cmd != 0, c[1993], slot.Result1 == 2):
+    with rung(slot.Cmd != 0, c[1993], slot.Result1 == 2):
         copy(td[491], slot.Result2)
-    with Rung(slot.Cmd != 0, c[1994], slot.Result1 == 3):
+    with rung(slot.Cmd != 0, c[1994], slot.Result1 == 3):
         copy(td[491], slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Result1 == 4, ~c[1996]):
+    with rung(slot.Cmd != 0, slot.Result1 == 4, ~c[1996]):
         copy(td[491], slot.Result4)
         latch(c[1996])
-    with Rung(slot.Cmd != 0, c[1995], ~c[1997]):
+    with rung(slot.Cmd != 0, c[1995], ~c[1997]):
         copy(td[491], slot.ErrorCode)
         latch(c[1997])
-    with Rung(slot.Cmd != 0, c[1997]):
+    with rung(slot.Cmd != 0, c[1997]):
         copy(1, slot.Fired)
 
 
@@ -550,12 +550,12 @@ def _pins_read_before_step_fix(slot, outputs, events, flag, jog_bit, *, jog=True
     # without *jog*).  The rail and tee cases are this ladder, on their own
     # bits; only the CLICK drawing of the pins differs.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(5, slot.Result1)
     if jog:
-        with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        with rung(slot.Cmd != 0, slot.Scratch == 3):
             out(jog_bit)
-    with Rung(slot.Result1 != 1):
+    with rung(slot.Result1 != 1):
         event_drum(
             outputs=outputs,
             events=events,
@@ -584,9 +584,9 @@ def prove_correction_without_jog(slot):
 def prove_jog_on_last_step(slot):
     # Jog (C850) on scans 2 and 4; nothing drives the event, C849.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
         out(c[850])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[c[847], c[848]],
             events=[c[849], c[849]],

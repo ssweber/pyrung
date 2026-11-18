@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 from pyrsistent import pvector
 
-from pyrung import PLC, Bool, Program, Rung, latch, rise
+from pyrung import PLC, Bool, Program, latch, rise, rung
 from pyrung.core.analysis.pilot.drive_setup import prepare_drive, prepare_target_context
 from pyrung.core.analysis.pilot.guidance import survey_current_inputs
 from pyrung.core.analysis.pilot.navigation_contracts import NavigationConstraints, OrientationWorld
@@ -17,7 +17,7 @@ def _world(*, spent_edge=False, limit=100):
     A, B = Bool("SurveyA", external=True), Bool("SurveyB", external=True)
     Done = Bool("SurveyDone")
     with Program() as program:
-        with Rung(rise(A), rise(B)):
+        with rung(rise(A), rise(B)):
             latch(Done)
     plc = PLC(program)
     if spent_edge:

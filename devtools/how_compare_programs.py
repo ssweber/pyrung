@@ -66,7 +66,6 @@ from pyrung import (  # noqa: E402
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     call,
@@ -145,9 +144,9 @@ def _mid_program(on_s):
     T = Timer.clone("Tm")
     Lost = Bool("Lost")
     with Program(strict=False) as p:
-        with Rung(En):
+        with rung(En):
             on_delay(T, on_s, "s")
-        with Rung(T.Done):
+        with rung(T.Done):
             latch(Lost)
     return p, En, Lost
 
@@ -157,9 +156,9 @@ def _bench_program(on):
     Fb = Bool("Fb", physical=Physical("S", on_delay=on), link="En")
     Lost = Bool("Lost")
     with Program(strict=False) as p:
-        with Rung(En):
+        with rung(En):
             out(Bool("Seen"))
-        with Rung(Fb):
+        with rung(Fb):
             latch(Lost)
     return p, En, Lost
 
@@ -169,9 +168,9 @@ def _alarm_program(on):
     Fb = Bool("Fb", physical=Physical("S", on_delay=on), link="En")
     Alarm = Bool("Alarm")
     with Program(strict=False) as p:
-        with Rung(En):
+        with rung(En):
             out(Bool("Seen"))
-        with Rung(En, ~Fb):
+        with rung(En, ~Fb):
             latch(Alarm)
     return p, En, Alarm
 
@@ -270,11 +269,11 @@ def bench_dip(dip_scans, dt=0.1):
         Fb = Bool("Fb", physical=Physical("S", on_delay="200ms", off_delay="200ms"), link="En")
         Armed, Alarm = Bool("Armed"), Bool("Alarm")
         with Program(strict=False) as p:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Seen"))
-            with Rung(Fb):
+            with rung(Fb):
                 latch(Armed)
-            with Rung(Armed, ~Fb):
+            with rung(Armed, ~Fb):
                 latch(Alarm)
         plc = PLC(p, dt=dt)
         h = Harness(plc)
@@ -352,11 +351,11 @@ def _two_ways():
     fast, slow = Bool("Fast", external=True), Bool("Slow", external=True)
     danger, level, target = Bool("Danger"), Int("Level"), Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(fast):
+        with rung(fast):
             out(danger)
-        with Rung(fast):
+        with rung(fast):
             copy(5, level)
-        with Rung(Or(fast, slow)):
+        with rung(Or(fast, slow)):
             out(target)
     return prog, dict(target=target, danger=danger, level=level)
 
@@ -373,21 +372,21 @@ def _dwell(limit=0):
     state = Int("HoldState", default=6)
     lim = Int("HoldLimit", default=limit)
     with Program(strict=False) as prog:
-        with Rung(state == 6, sensor):
+        with rung(state == 6, sensor):
             on_delay(stable_on, 30, "ms")
-        with Rung(state == 6, ~sensor):
+        with rung(state == 6, ~sensor):
             on_delay(stable_off, 30, "ms")
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(on_wd, 70, "ms").reset(stable_off.Done)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(off_wd, 70, "ms").reset(stable_on.Done)
-        with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+        with rung(state == 6, Or(on_wd.Done, off_wd.Done)):
             copy(8, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(run, 250, "ms")
-        with Rung(state == 6, run.Done):
+        with rung(state == 6, run.Done):
             copy(7, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             copy(lim, lim)
     return prog, dict(state=state, sensor=sensor, target=state == 7)
 
@@ -400,25 +399,25 @@ def _armed(release_needed):
     state = Int("St", default=6)
     gate = ready if release_needed else armed_
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(5, lim)
-        with Rung(start):
+        with rung(start):
             latch(armed_)
-        with Rung(armed_, ~start):
+        with rung(armed_, ~start):
             latch(ready)
-        with Rung(gate, state == 6, sensor):
+        with rung(gate, state == 6, sensor):
             on_delay(stable_on, 30, "ms")
-        with Rung(gate, state == 6, ~sensor):
+        with rung(gate, state == 6, ~sensor):
             on_delay(stable_off, 30, "ms")
-        with Rung(gate, state == 6):
+        with rung(gate, state == 6):
             on_delay(on_wd, 70, "ms").reset(stable_off.Done)
-        with Rung(gate, state == 6):
+        with rung(gate, state == 6):
             on_delay(off_wd, 70, "ms").reset(stable_on.Done)
-        with Rung(gate, state == 6, Or(on_wd.Done, off_wd.Done)):
+        with rung(gate, state == 6, Or(on_wd.Done, off_wd.Done)):
             copy(8, state)
-        with Rung(gate, state == 6):
+        with rung(gate, state == 6):
             on_delay(run, 250, "ms")
-        with Rung(gate, state == 6, run.Done):
+        with rung(gate, state == 6, run.Done):
             copy(7, state)
     return prog, dict(start=start, sensor=sensor, state=state, target=state == 7)
 
@@ -428,17 +427,17 @@ def _timer_hold(lo=None, hi=None):
     speed, run = Int("Speed", external=True), Timer.clone("Rn")
     lim, target = Int("Lim", default=100), Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(speed > 3):
+        with rung(speed > 3):
             on_delay(run, 1000, "ms")
-        with Rung(run.Done):
+        with rung(run.Done):
             out(target)
-        with Rung():
+        with rung():
             copy(lim, lim)
         if lo is not None:
-            with Rung(run.Acc >= lo):
+            with rung(run.Acc >= lo):
                 copy(1, lim)
             if hi is not None:
-                with Rung(run.Acc >= hi):
+                with rung(run.Acc >= hi):
                     copy(100, lim)
     return prog, dict(speed=speed, lim=lim, target=target, run=run)
 
@@ -452,15 +451,15 @@ def _two_routes(minutes):
     danger, target = Bool("Danger"), Bool("Target")
     t1, t2 = Timer.clone("LwT1"), Timer.clone("LwT2")
     with Program(strict=False) as prog:
-        with Rung(fast):
+        with rung(fast):
             on_delay(t1, minutes, "min")
-        with Rung(t1.Done):
+        with rung(t1.Done):
             out(danger)
-        with Rung(slow):
+        with rung(slow):
             on_delay(t2, minutes * 2, "min")
-        with Rung(danger):
+        with rung(danger):
             latch(target)
-        with Rung(t2.Done):
+        with rung(t2.Done):
             latch(target)
     return prog, dict(target=target, danger=danger, t1=t1)
 
@@ -468,9 +467,9 @@ def _two_routes(minutes):
 def _hold_timer(preset, unit):
     go, lamp, t1 = Bool("LwGo"), Bool("LwLamp"), Timer.clone("LwT1")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             on_delay(t1, preset=preset, unit=unit)
-        with Rung(t1.Done):
+        with rung(t1.Done):
             latch(lamp)
     return prog, dict(target=lamp, timer=t1)
 
@@ -478,9 +477,9 @@ def _hold_timer(preset, unit):
 def _free_timer(preset, unit):
     lamp, t1 = Bool("LwLamp"), Timer.clone("LwT1")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(t1, preset=preset, unit=unit)
-        with Rung(t1.Done):
+        with rung(t1.Done):
             out(lamp)
     return prog, dict(target=lamp, timer=t1)
 
@@ -489,11 +488,11 @@ def _chain(first, second, unit):
     go, lamp = Bool("LwGo"), Bool("LwLamp")
     t1, t2 = Timer.clone("LwT1"), Timer.clone("LwT2")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             on_delay(t1, preset=first, unit=unit)
-        with Rung(t1.Done):
+        with rung(t1.Done):
             on_delay(t2, preset=second, unit=unit)
-        with Rung(t2.Done):
+        with rung(t2.Done):
             latch(lamp)
     return prog, dict(target=lamp, timer=t1)
 
@@ -502,11 +501,11 @@ def _soak(seconds):
     start, run, done = Bool("LwStart", external=True), Bool("LwRun"), Bool("LwDone")
     t1 = Timer.clone("LwSoak")
     with Program(strict=False) as prog:
-        with Rung(start):
+        with rung(start):
             latch(run)
-        with Rung(run):
+        with rung(run):
             on_delay(t1, seconds, "s")
-        with Rung(t1.Done):
+        with rung(t1.Done):
             out(done)
     return prog, dict(target=done, timer=t1)
 
@@ -519,11 +518,11 @@ def _off_wait(minutes):
         Bool("LwSeen"),
     )
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             off_delay(t1, minutes, "min")
-        with Rung(t1.Done):
+        with rung(t1.Done):
             latch(seen)
-        with Rung(seen, ~t1.Done):
+        with rung(seen, ~t1.Done):
             latch(idle)
     return prog, dict(target=idle, timer=t1)
 
@@ -541,11 +540,11 @@ def _harness_delay(on, off=None):
         Timer.clone("LwT1"),
     )
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             out(enable)
-        with Rung(fb):
+        with rung(fb):
             latch(hit)
-        with Rung(go):
+        with rung(go):
             on_delay(t1, 500, "s")
     return prog, dict(target=hit, timer=t1)
 
@@ -560,11 +559,11 @@ def _pulse(on_s, off_s):
         Timer.clone("LwT1"),
     )
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             out(enable)
-        with Rung(fb):
+        with rung(fb):
             latch(hit)
-        with Rung(go):
+        with rung(go):
             on_delay(t1, 40, "s")
     return prog, dict(target=hit, timer=t1)
 
@@ -576,7 +575,7 @@ def _drum(first, second, unit="s", steps=2):
     pattern = [[1 if i == j else 0 for j in range(steps)] for i in range(steps)]
     presets = [first, second] + [second] * (steps - 2)
     with Program(strict=False) as prog:
-        with Rung(start):
+        with rung(start):
             time_drum(
                 outputs=outs,
                 presets=presets,
@@ -1029,19 +1028,19 @@ def _dwell_scaled(scale):
         )
         state = Int("HoldState", default=6)
         with Program(strict=False) as prog:
-            with Rung(state == 6, sensor):
+            with rung(state == 6, sensor):
                 on_delay(stable_on, 30 * scale, "ms")
-            with Rung(state == 6, ~sensor):
+            with rung(state == 6, ~sensor):
                 on_delay(stable_off, 30 * scale, "ms")
-            with Rung(state == 6):
+            with rung(state == 6):
                 on_delay(on_wd, 70 * scale, "ms").reset(stable_off.Done)
-            with Rung(state == 6):
+            with rung(state == 6):
                 on_delay(off_wd, 70 * scale, "ms").reset(stable_on.Done)
-            with Rung(state == 6, Or(on_wd.Done, off_wd.Done)):
+            with rung(state == 6, Or(on_wd.Done, off_wd.Done)):
                 copy(8, state)
-            with Rung(state == 6):
+            with rung(state == 6):
                 on_delay(run, 250 * scale, "ms")
-            with Rung(state == 6, run.Done):
+            with rung(state == 6, run.Done):
                 copy(7, state)
         return prog, dict(state=state, target=state == 7)
 
@@ -1059,11 +1058,11 @@ def _soak_then(unit_value, unit):
         prep = Timer.clone("LwPrep")
         run = Timer.clone("HoldRun")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 on_delay(prep, unit_value, unit)
-            with Rung(prep.Done, state == 6):
+            with rung(prep.Done, state == 6):
                 on_delay(run, 250, "ms")
-            with Rung(prep.Done, state == 6, run.Done, sensor):
+            with rung(prep.Done, state == 6, run.Done, sensor):
                 copy(7, state)
         return prog, dict(state=state, target=state == 7, sensor=sensor)
 
@@ -1132,7 +1131,7 @@ def _drum_zero_step(tagged, target):
         outs = [Bool(f"LzO{i + 1}") for i in range(3)]
         middle = Int("LzPreset", default=0) if tagged else 0
         with Program(strict=False) as prog:
-            with Rung(start):
+            with rung(start):
                 time_drum(
                     outputs=outs,
                     presets=[2, middle, 2],
@@ -1161,7 +1160,7 @@ for _tagged, _label in ((False, "constant"), (True, "tag")):
 def _goal_true_latch():
     go, lamp = Bool("Go", external=True), Bool("Lamp")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             latch(lamp)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Go": True})
@@ -1172,9 +1171,9 @@ def _goal_true_latch():
 def _goal_true_timer():
     lamp, t1 = Bool("LwLamp"), Timer.clone("LwT1")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(t1, 200, "ms")
-        with Rung(t1.Done):
+        with rung(t1.Done):
             out(lamp)
     plc = PLC(prog, dt=0.01)
     plc.run(40)
@@ -1184,7 +1183,7 @@ def _goal_true_timer():
 def _goal_true_condition():
     step, go = Int("Step"), Bool("Go", external=True)
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(3, step)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Go": True})
@@ -1307,15 +1306,15 @@ def _held_wait(first, second, unit, scans):
         en, lamp = Bool("En"), Bool("Lamp")
         t1, t2 = Timer.clone("Tw1"), Timer.clone("Tw2")
         with Program(strict=False) as prog:
-            with Rung(en):
+            with rung(en):
                 on_delay(t1, first, unit)
             if second is None:
-                with Rung(t1.Done):
+                with rung(t1.Done):
                     latch(lamp)
             else:
-                with Rung(t1.Done):
+                with rung(t1.Done):
                     on_delay(t2, second, unit)
-                with Rung(t2.Done):
+                with rung(t2.Done):
                     latch(lamp)
         plc = PLC(prog, dt=0.01)
         plc.patch({"En": True})
@@ -1335,9 +1334,9 @@ def _proof_watchdog():
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
     hit, watch = Bool("Hit"), Timer.clone("Watch")
     with Program(strict=False) as prog:
-        with Rung(enable, ~feedback):
+        with rung(enable, ~feedback):
             on_delay(watch, 3000)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
@@ -1363,7 +1362,7 @@ def _pulse_other_contact(*, held):
     )
     hit = Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(enable, feedback):
+        with rung(enable, feedback):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
@@ -1386,13 +1385,13 @@ def _enable_moved_mid_scan():
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
     watch = Timer.clone("W")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             reset(enable)
-        with Rung(~enable, feedback):
+        with rung(~enable, feedback):
             on_delay(watch, 3000)
-        with Rung(go):
+        with rung(go):
             latch(enable)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
@@ -1412,13 +1411,13 @@ def _second_route_over_the_cap():
     bits, index = Block("C", TagType.BOOL, 1, 2000), Int("Idx", default=1)
     watch = Timer.clone("W")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(1, bits[index * 2 - 1])
-        with Rung(enable, ~feedback):
+        with rung(enable, ~feedback):
             on_delay(watch, 3000)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(bits[1])
-        with Rung(bits[1]):
+        with rung(bits[1]):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
@@ -1432,15 +1431,15 @@ def _opaque_avoid_mid_coast(avoid_of):
         plain, index = Int("A"), Int("Idx", external=True, default=1)
         run, hit = Bool("Run", external=True), Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung(run):
+            with rung(run):
                 on_delay(timer, 2000)
-            with Rung(timer.Acc >= 500, timer.Acc < 600):
+            with rung(timer.Acc >= 500, timer.Acc < 600):
                 copy(9, bank[1])
                 copy(9, plain)
-            with Rung(timer.Acc >= 600):
+            with rung(timer.Acc >= 600):
                 copy(0, bank[1])
                 copy(0, plain)
-            with Rung(timer.Done):
+            with rung(timer.Done):
                 latch(hit)
         return dict(
             plc=PLC(prog, dt=0.01),
@@ -1455,9 +1454,9 @@ def _opaque_avoid_mid_coast(avoid_of):
 def _and_with_a_contact_off():
     go, again, x, y = Bool("Go", external=True), Bool("Ag", external=True), Bool("X"), Bool("Y")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             latch(x)
-        with Rung(again):
+        with rung(again):
             latch(y)
     return dict(
         plc=PLC(prog, dt=0.01),
@@ -1471,7 +1470,7 @@ def _joint_on_a_slot(write_of):
         go, done = Bool("Go", external=True), Bool("X")
         bank, index = Block("B", TagType.INT, 1, 5), Int("Idx", external=True, default=2)
         with Program(strict=False) as prog:
-            with Rung(go):
+            with rung(go):
                 write_of(bank, index)
                 latch(done)
         return dict(
@@ -1521,11 +1520,11 @@ def _rescue_oscillator():
     """A count the program runs for itself: only waiting reaches it."""
     osc, count, hit = Bool("Osc"), Int("Count"), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(~osc):
+        with rung(~osc):
             out(osc)
-        with Rung(osc):
+        with rung(osc):
             math(count + 1, count)
-        with Rung(count == 40):
+        with rung(count == 40):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -1536,13 +1535,13 @@ def _rescue_wait_on_a_bit():
     """Go is blocked until the free-running timer first finishes and drops Block."""
     timer, block, hit, go = Timer.clone("T"), Bool("Block"), Bool("Hit"), Bool("Go")
     with Program(strict=False) as prog:
-        with Rung(~timer.Done):
+        with rung(~timer.Done):
             out(block)
-        with Rung():
+        with rung():
             on_delay(timer, 1, "s")
-        with Rung(block):
+        with rung(block):
             reset(hit)
-        with Rung(go, ~block):
+        with rung(go, ~block):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -1558,13 +1557,13 @@ def _rescue_at_the_rung():
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
     watch = Timer.clone("W")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             reset(enable)
-        with Rung(~enable, feedback):
+        with rung(~enable, feedback):
             on_delay(watch, 3000)
-        with Rung(go):
+        with rung(go):
             latch(enable)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(hit)
     plc = PLC(prog, dt=0.01)
     Harness(plc).install()
@@ -1625,22 +1624,22 @@ def _forloop_call(kind, target, avoid_alarm):
         btn, clr = Bool("Btn", external=True), Bool("Clr", external=True)
         y, alarm, lamp = Bool("Y"), Bool("Alarm"), Bool("Lamp")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 with forloop(count):
                     if kind.endswith("contact"):
                         # The control's body rung reads Y, which an iteration of work latches.
-                        with Rung(~y):
+                        with rung(~y):
                             call("work")
                     else:
                         call("work")
-            with Rung(y):
+            with rung(y):
                 out(lamp)
-            with Rung(clr):
+            with rung(clr):
                 reset(y)
             with subroutine("work"):
-                with Rung(btn):
+                with rung(btn):
                     latch(y)
-                with Rung(~btn):
+                with rung(~btn):
                     out(alarm)
         plc = PLC(prog, dt=0.01)
         plc.step()
@@ -1671,19 +1670,19 @@ def _forloop_producer_envelope(make_count):
         run, alarm, done = Bool("Run"), Bool("Alarm"), Bool("Done")
         timer = Timer.clone("Tr")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 with forloop(count):
                     call("faults")
-            with Rung(start, ~alarm):
+            with rung(start, ~alarm):
                 latch(run)
-            with Rung(alarm):
+            with rung(alarm):
                 reset(run)
-            with Rung(run):
+            with rung(run):
                 on_delay(timer, 500)
-            with Rung(timer.Done):
+            with rung(timer.Done):
                 latch(done)
             with subroutine("faults"):
-                with Rung(run, ~door):
+                with rung(run, ~door):
                     latch(alarm)
         plc = PLC(prog, dt=0.01)
         plc.step()
@@ -1717,9 +1716,9 @@ def _copied_system_tag(source, at_least, rtc=None):
         go = Bool("Go", external=True)
         copied, hit = Int("Copied"), Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(source, copied)
-            with Rung(go, copied >= at_least):
+            with rung(go, copied >= at_least):
                 latch(hit)
         plc = PLC(prog, dt=0.01)
         if rtc is not None:
@@ -1756,9 +1755,9 @@ def _negative_preset_counter(literal, *, stage):
         preset = Int("Preset", default=-5)
         ctr = Counter.clone("NegCtr")
         with Program(strict=False) as prog:
-            with Rung(stage_in):
+            with rung(stage_in):
                 copy(-10, ctr.Acc)
-            with Rung(pulse):
+            with rung(pulse):
                 count_up(ctr, -5 if literal else preset).reset(rst)
         plc = PLC(prog, dt=0.01)
         if stage:
@@ -1779,7 +1778,7 @@ def _negative_preset_on_delay(literal):
         preset = Int("Preset", default=-5)
         timer = Timer.clone("NegTon")
         with Program(strict=False) as prog:
-            with Rung(run):
+            with rung(run):
                 on_delay(timer, -5 if literal else preset, "s")
         plc = PLC(prog, dt=0.01)
         plc.step()
@@ -1810,11 +1809,11 @@ def _accs_staged():
     load, pulse = Bool("Load", external=True), Bool("Pulse", external=True)
     count, hit = Counter.clone("Cnt"), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(load):
+        with rung(load):
             copy(6, count.Acc)
-        with Rung(pulse):
+        with rung(pulse):
             count_up(count, 3).reset(Bool("Clear", external=True))
-        with Rung(count.Acc == 7):
+        with rung(count.Acc == 7):
             latch(hit)
     return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
 
@@ -1826,12 +1825,12 @@ def _accs_pair(offset):
         a, b = Counter.clone("CntA"), Counter.clone("CntB")
         hit = Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung(Bool("PulseA", external=True)):
+            with rung(Bool("PulseA", external=True)):
                 count_up(a, 3).reset(Bool("ClearA", external=True))
-            with Rung(Bool("PulseB", external=True)):
+            with rung(Bool("PulseB", external=True)):
                 count_up(b, 3).reset(Bool("ClearB", external=True))
             ahead = a.Acc > b.Acc if offset is None else a.Acc == b.Acc + offset
-            with Rung(ahead, b.Acc >= 2):
+            with rung(ahead, b.Acc >= 2):
                 latch(hit)
         return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
 
@@ -1845,11 +1844,11 @@ def _accs_written_above_an_input():
     """
     level, limit, hit = Int("Level"), Int("Limit", external=True, min=0, max=9), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(Bool("Fill", external=True)):
+        with rung(Bool("Fill", external=True)):
             copy(10, level)
-        with Rung(Bool("Drain", external=True)):
+        with rung(Bool("Drain", external=True)):
             copy(0, level)
-        with Rung(level > limit, limit >= 5):
+        with rung(level > limit, limit >= 5):
             latch(hit)
     return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
 
@@ -1858,9 +1857,9 @@ def _accs_level_and_hmi():
     """Compare Level with 10 and with an HMI value that has no bounds, so Level has no domain."""
     level, hit = Int("Level", external=True), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(level == Int("HmiLevel", external=True)):
+        with rung(level == Int("HmiLevel", external=True)):
             out(Bool("AtHmi"))
-        with Rung(level > 10):
+        with rung(level > 10):
             latch(hit)
     return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
 
@@ -1883,9 +1882,9 @@ def _accs_level_above_a_set_point():
         Bool("Hit"),
     )
     with Program(strict=False) as prog:
-        with Rung(Bool("SetSp", external=True)):
+        with rung(Bool("SetSp", external=True)):
             copy(1, setpoint)
-        with Rung(level == setpoint + 2):
+        with rung(level == setpoint + 2):
             latch(hit)
     return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
 
@@ -1906,7 +1905,7 @@ def _off_delay_never_armed():
     """
     go, timer = Bool("Go", external=True), Timer.clone("Tof")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             off_delay(timer, 3, "s")
     target = timer.Acc >= 2
     return dict(plc=PLC(prog, dt=0.01), targets=(target,), goal=_auto_goal(target))
@@ -1924,11 +1923,11 @@ def _counter_held_in_reset():
     )
     hold, count = Bool("Hold"), Counter.clone("HeldCtr")
     with Program(strict=False) as prog:
-        with Rung(arm):
+        with rung(arm):
             latch(hold)
-        with Rung(release):
+        with rung(release):
             reset(hold)
-        with Rung(pulse):
+        with rung(pulse):
             count_up(count, 2).reset(hold)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Arm": True})

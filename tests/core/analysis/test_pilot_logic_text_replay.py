@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 import pyrung
-from pyrung import PLC, And, Bool, Int, Program, Rung, copy, math
+from pyrung import PLC, And, Bool, Int, Program, copy, math, rung
 from pyrung.core import CompiledPLC
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -80,12 +80,12 @@ Flag = Bool("Flag")
 def _program() -> Program:
     """Sts counts 0..5 and starts over, so each guard below comes and goes."""
     with Program(strict=False) as prog:
-        with Rung(Sts < 5):
+        with rung(Sts < 5):
             math(Sts + 1, Sts)
-        with Rung(Sts >= 5):
+        with rung(Sts >= 5):
             copy(0, Sts)
         # The held tags are the program's own.
-        with Rung(RS, A, B, C, W, Gate, Light, Flag, Speed == 9, Level == 9):
+        with rung(RS, A, B, C, W, Gate, Light, Flag, Speed == 9, Level == 9):
             copy(1, Int("Seen"))
     return prog
 
@@ -240,7 +240,7 @@ Other = Bool("Other")
 def _read_program() -> Program:
     """A program that reads every tag the merge cases drive, and writes none of them."""
     with Program(strict=False) as prog:
-        with Rung(A, B, W, Other, Speed == 9, Level == 9, Real1 > 1000, Real2 > 1000, Pick == 9):
+        with rung(A, B, W, Other, Speed == 9, Level == 9, Real1 > 1000, Real2 > 1000, Pick == 9):
             copy(1, Int("Seen"))
     return prog
 

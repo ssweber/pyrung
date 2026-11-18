@@ -24,7 +24,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     Tag,
     TagType,
     Timer,
@@ -50,6 +49,7 @@ from pyrung.core import (
     reset,
     run_enabled_function,
     run_function,
+    rung,
     search,
     shift,
     subroutine,
@@ -137,7 +137,7 @@ def _counter(prefix: str, **fields: Tag) -> SimpleNamespace:
 
 def _coil(dsl: Callable[[Tag], Any]) -> Callable[[Any], None]:
     def build(w: Any) -> None:
-        with Rung(_en("Coil")):
+        with rung(_en("Coil")):
             dsl(w)
 
     return build
@@ -148,7 +148,7 @@ def _debounce_like(dsl: Callable[..., Any], field: str) -> Callable[[Any], None]
         target = w if field == "target" else Bool("Deb_Target")
         on = _timer("DebOn", **({"Acc": w} if field == "on_acc" else {}))
         off = _timer("DebOff", **({"Acc": w} if field == "off_acc" else {}))
-        with Rung(_en("Deb")):
+        with rung(_en("Deb")):
             dsl(target, on=(on, 10), off=(off, 10))
 
     return build
@@ -158,7 +158,7 @@ def _timed(field: str) -> Callable[[Any], None]:
     def build(w: Any) -> None:
         target = w if field == "target" else Bool("Timed_Target")
         timer = _timer("Timed", **({"Acc": w} if field == "timer_acc" else {}))
-        with Rung(_en("Timed")):
+        with rung(_en("Timed")):
             timed(target, timer, 10)
 
     return build
@@ -170,7 +170,7 @@ _COUNTER_FIELDS = {"done_bit": "Done", "accumulator": "Acc", "cu_bit": "CU", "cd
 
 def _timer_case(dsl: Callable[..., Any], field: str) -> Callable[[Any], None]:
     def build(w: Any) -> None:
-        with Rung(_en("Timer")):
+        with rung(_en("Timer")):
             dsl(_timer("Tmr", **{_TIMER_FIELDS[field]: w}), 10)
 
     return build
@@ -178,7 +178,7 @@ def _timer_case(dsl: Callable[..., Any], field: str) -> Callable[[Any], None]:
 
 def _counter_case(dsl: Callable[..., Any], field: str) -> Callable[[Any], None]:
     def build(w: Any) -> None:
-        with Rung(_en("Counter")):
+        with rung(_en("Counter")):
             dsl(_counter("Ctr", **{_COUNTER_FIELDS[field]: w}), 5).reset(Bool("Ctr_Reset"))
 
     return build
@@ -194,7 +194,7 @@ def _drum(kind: str, field: str) -> Callable[[Any], None]:
         }
         tags[field] = [w, Bool("Drum_Out2")] if field == "outputs" else w
         pattern = [[1, 0], [0, 1]]
-        with Rung(_en("Drum")):
+        with rung(_en("Drum")):
             if kind == "event":
                 del tags["accumulator"]
                 builder = event_drum(
@@ -216,7 +216,7 @@ def _search(field: str) -> Callable[[Any], None]:
         data = Block("SearchData", TagType.INT, 1, 4)
         result = w if field == "result" else Int("Search_Result")
         found = w if field == "found" else Bool("Search_Found")
-        with Rung(_en("Search")):
+        with rung(_en("Search")):
             search(data.select(1, 4) == 3, result=result, found=found)
 
     return build
@@ -242,7 +242,7 @@ def _modbus(kind: str, field: str) -> Callable[[Any], None]:
         }
         busy = "sending" if kind == "send" else "receiving"
         status[busy] = Bool("Mb_Busy")
-        with Rung(_en("Modbus")):
+        with rung(_en("Modbus")):
             if kind == "send":
                 status[field] = w
                 send(target=_PEER, remote_start="DS1", source=Int("Mb_Source"), **status)
@@ -257,19 +257,19 @@ def _modbus(kind: str, field: str) -> Callable[[Any], None]:
 
 def _rung(dsl: Callable[[Any], Any]) -> Callable[[Any], None]:
     def build(w: Any) -> None:
-        with Rung(_en("Data")):
+        with rung(_en("Data")):
             dsl(w)
 
     return build
 
 
 def _shift(w: Any) -> None:
-    with Rung(_en("Shift")):
+    with rung(_en("Shift")):
         shift(w.select(1, 2)).clock(Bool("Shift_Clock")).reset(Bool("Shift_Reset"))
 
 
 def _math_in_a_loop(w: Any) -> None:
-    with Rung(_en("Loop")):
+    with rung(_en("Loop")):
         with forloop(2):
             math(Int("Loop_A") + 1, w)
 
@@ -469,7 +469,7 @@ def test_two_writes_to_a_final_tag_are_reported(case: Case) -> None:
     if case.status:
         program = _program(case.build, w)
         with program:
-            with Rung(Bool("Status_Out_En")):
+            with rung(Bool("Status_Out_En")):
                 out(w)
     else:
         program = _program(case.build, w, times=2)
@@ -486,9 +486,9 @@ ReuseState = Int("ReuseState")
 
 
 def _timer_and_counter() -> None:
-    with Rung(Bool("Reuse_Run")):
+    with rung(Bool("Reuse_Run")):
         on_delay(ReuseT, 100)
-    with Rung(Bool("Reuse_Up")):
+    with rung(Bool("Reuse_Up")):
         count_up(ReuseC, 5).reset(Bool("Reuse_Reset"))
 
 
@@ -498,9 +498,9 @@ def _findings(program: Program) -> list[tuple[str, str]]:
 
 def test_a_timer_and_counter_in_subroutines_that_exclude_each_other_pass() -> None:
     with Program() as program:
-        with Rung(ReuseState == 1):
+        with rung(ReuseState == 1):
             call("reuse_a")
-        with Rung(ReuseState == 2):
+        with rung(ReuseState == 2):
             call("reuse_b")
         with subroutine("reuse_a"):
             _timer_and_counter()
@@ -526,7 +526,7 @@ def test_a_timer_and_counter_used_twice_in_main_conflict_on_done_and_acc_only() 
 def test_an_out_to_a_status_bit_beside_its_timer_or_counter_is_a_second_writer() -> None:
     with Program() as program:
         _timer_and_counter()
-        with Rung(Bool("Reuse_Manual")):
+        with rung(Bool("Reuse_Manual")):
             out(ReuseT.EN)
             out(ReuseC.CU)
 

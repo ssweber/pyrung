@@ -895,7 +895,7 @@ def _counter_phase_blockers(
     phase_env = _at(snapshot)
     for demand in holds:
         # The overlay sets only what the phase traces. If the phase energizes a coil that
-        # carries the reset (``Rung(Start, M): out(Rc)``), the reset still reads off on the
+        # carries the reset (``rung(Start, M): out(Rc)``), the reset still reads off on the
         # overlay. When everything that breaks the hold is already met, the hold
         # breaks as the phase lands.
         breaking = _trace(phase_env, ConditionDemand(demand.condition, not demand.value))

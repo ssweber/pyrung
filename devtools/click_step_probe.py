@@ -39,7 +39,6 @@ from pyrung.click.ladder.steps import (
 from pyrung.core import (
     Or,
     Program,
-    Rung,
     Tag,
     blockcopy,
     branch,
@@ -64,6 +63,7 @@ from pyrung.core import (
     reset,
     return_early,
     rise,
+    rung,
     search,
     shift,
     subroutine,
@@ -125,62 +125,62 @@ def probe(label: str):
 
 @probe("X1 -> OUT Y1 (baseline rung)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
 
 
 @probe("X1 -> OUT Y2 (same again: is it linear?)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[2])
 
 
 @probe("no contact -> OUT Y3 (always-on rail)")
 def _():
-    with Rung():
+    with rung():
         out(y[3])
 
 
 @probe("X1,X2 -> OUT (2 contacts in series)")
 def _():
-    with Rung(x[1], x[2]):
+    with rung(x[1], x[2]):
         out(y[4])
 
 
 @probe("X1,X2,X3,X4 -> OUT (4 in series)")
 def _():
-    with Rung(x[1], x[2], x[3], x[4]):
+    with rung(x[1], x[2], x[3], x[4]):
         out(y[5])
 
 
 @probe("~X1 -> OUT (NC contact)")
 def _():
-    with Rung(~x[1]):
+    with rung(~x[1]):
         out(y[6])
 
 
 @probe("X1 OR X2 -> OUT (2 in parallel)")
 def _():
-    with Rung(Or(x[1], x[2])):
+    with rung(Or(x[1], x[2])):
         out(y[7])
 
 
 @probe("X1 OR X2 OR X3 -> OUT (3 in parallel)")
 def _():
-    with Rung(Or(x[1], x[2], x[3])):
+    with rung(Or(x[1], x[2], x[3])):
         out(y[8])
 
 
 @probe("X1 -> OUT, OUT (2 coils on one rung)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[1])
         out(c[2])
 
 
 @probe("X1 -> OUT, OUT, OUT, OUT (4 coils)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[3])
         out(c[4])
         out(c[5])
@@ -189,7 +189,7 @@ def _():
 
 @probe("X1 -> branch(X2) OUT (branch with its own contact)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[7])
         with branch(x[2]):
             out(c[8])
@@ -198,14 +198,14 @@ def _():
 @probe("X1 -> OUT C9, short comment on the rung")
 def _():
     comment("Step probe.")
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[9])
 
 
 @probe("X1 -> OUT C10, ~400-char comment on the rung")
 def _():
     comment("Step probe, long comment. " * 16)
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[10])
 
 
@@ -214,49 +214,49 @@ def _():
 
 @probe("rise(X1) -> OUT (edge contact)")
 def _():
-    with Rung(rise(x[1])):
+    with rung(rise(x[1])):
         out(c[11])
 
 
 @probe("fall(X1) -> OUT (edge contact)")
 def _():
-    with Rung(fall(x[1])):
+    with rung(fall(x[1])):
         out(c[12])
 
 
 @probe("immediate(X1) -> OUT (immediate contact)")
 def _():
-    with Rung(immediate(x[1])):
+    with rung(immediate(x[1])):
         out(c[13])
 
 
 @probe("DS1 == 5 -> OUT (compare, constant)")
 def _():
-    with Rung(ds[1] == 5):
+    with rung(ds[1] == 5):
         out(c[14])
 
 
 @probe("DS1 == DS2 -> OUT (compare, register)")
 def _():
-    with Rung(ds[1] == ds[2]):
+    with rung(ds[1] == ds[2]):
         out(c[15])
 
 
 @probe("DS1 > 5 -> OUT (compare >)")
 def _():
-    with Rung(ds[1] > 5):
+    with rung(ds[1] > 5):
         out(c[16])
 
 
 @probe("DD1 > 100000 -> OUT (compare, DINT constant)")
 def _():
-    with Rung(dd[1] > 100000):
+    with rung(dd[1] > 100000):
         out(c[17])
 
 
 @probe("DF1 > 1.5 -> OUT (compare, REAL)")
 def _():
-    with Rung(df[1] > 1.5):
+    with rung(df[1] > 1.5):
         out(c[18])
 
 
@@ -265,37 +265,37 @@ def _():
 
 @probe("X1 -> SET C21")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         latch(c[21])
 
 
 @probe("X1 -> RST C21")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         reset(c[21])
 
 
 @probe("X1 -> OUT immediate(Y9)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(immediate(y[9]))
 
 
 @probe("X1 -> RST C31..C40 (range)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         reset(c.select(31, 40))
 
 
 @probe("X1 -> toggle C22 (Out, Toggle)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         toggle(c[22])
 
 
 @probe("X1 -> flasher C23 (Out, Flasher, T11/T12)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         flasher(c[23], on=(ClickTimer(11), 500), off=(ClickTimer(12), 500))
 
 
@@ -304,43 +304,43 @@ def _():
 
 @probe("X1 -> TON T1 1000 ms")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         on_delay(ClickTimer(1), 1000)
 
 
 @probe("X1 -> TON T2, preset DS3 (register)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         on_delay(ClickTimer(2), ds[3])
 
 
 @probe("X1 -> TOF T3 1000 ms")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         off_delay(ClickTimer(3), 1000)
 
 
 @probe("X1 -> RTO T4 1000 ms, reset X2 (retentive)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         on_delay(ClickTimer(4), 1000).reset(x[2])
 
 
 @probe("X1 -> CTU CT1 10, reset X2")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         count_up(ClickCounter(1), 10).reset(x[2])
 
 
 @probe("X1 -> CTD CT2 10, reset X2")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         count_down(ClickCounter(2), 10).reset(x[2])
 
 
 @probe("X1 -> CTUD CT3 10, down X3, reset X2")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         count_up(ClickCounter(3), 10).down(x[3]).reset(x[2])
 
 
@@ -349,68 +349,68 @@ def _():
 
 @probe("X1 -> copy 5 -> DS10")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(5, ds[10])
 
 
 @probe("X1 -> copy DS11 -> DS12")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(ds[11], ds[12])
 
 
 @probe("X1 -> copy 5 -> DS13, oneshot")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(5, ds[13], oneshot=True)
 
 
 @probe("X1 -> copy 1.5 -> DF10")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(1.5, df[10])
 
 
 @probe("X1 -> copy 5 -> DS14, then copy 6 -> DS15 (2 copies)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(5, ds[14])
         copy(6, ds[15])
 
 
 @probe("X1 -> blockcopy DS101..DS110 -> DS111..DS120")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         blockcopy(ds.select(101, 110), ds.select(111, 120))
 
 
 @probe("X1 -> fill 0 -> DS121..DS130")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         fill(0, ds.select(121, 130))
 
 
 @probe("X1 -> pack_bits C101..C116 -> DS20")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         pack_bits(c.select(101, 116), ds[20])
 
 
 @probe("X1 -> unpack_to_bits DS21 -> C121..C136")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         unpack_to_bits(ds[21], c.select(121, 136))
 
 
 @probe("X1 -> pack_words DH1..DH2 -> DD10")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         pack_words(dh.select(1, 2), dd[10])
 
 
 @probe("X1 -> unpack_to_words DD11 -> DH3..DH4")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         unpack_to_words(dd[11], dh.select(3, 4))
 
 
@@ -419,37 +419,37 @@ def _():
 
 @probe("X1 -> calc DS30 + DS31 -> DS32")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         math(ds[30] + ds[31], ds[32])
 
 
 @probe("X1 -> calc (DS33*DS34 + DS35) / DS36 -> DS37 (longer formula)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         math((ds[33] * ds[34] + ds[35]) / ds[36], ds[37])
 
 
 @probe("X1 -> calc DF1 * DF2 -> DF3 (REAL)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         math(df[1] * df[2], df[3])
 
 
 @probe("X1 -> calc DF1 * DF2 -> DF4, oneshot")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         math(df[1] * df[2], df[4], oneshot=True)
 
 
 @probe("rise(X1) -> calc DF1*1.8 + 32.0 -> DF5 (community '10 steps' case)")
 def _():
-    with Rung(rise(x[1])):
+    with rung(rise(x[1])):
         math(df[1] * 1.8 + 32.0, df[5])
 
 
 @probe("X1 -> calc DH5 AND DH6 -> DH7 (hex math)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         math(dh[5] & dh[6], dh[7])
 
 
@@ -458,19 +458,19 @@ def _():
 
 @probe("X1 -> search DS201..DS210 == 7 -> DS40, found C41")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         search(ds.select(201, 210) == 7, result=ds[40], found=c[41])
 
 
 @probe("X1 -> shift C201..C208, clock X2, reset X3")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         shift(c.select(201, 208)).clock(x[2]).reset(x[3])
 
 
 @probe("X1 -> event drum, 2 outputs x 3 steps, reset X2")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         event_drum(
             outputs=[c[301], c[302]],
             events=[c[303], c[304], c[305]],
@@ -482,7 +482,7 @@ def _():
 
 @probe("X1 -> time drum, 2 outputs x 3 steps, reset X2")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         time_drum(
             outputs=[c[311], c[312]],
             presets=[100, 100, 100],
@@ -499,22 +499,22 @@ def _():
 
 @probe("X1 -> call Probe_Sub")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         call(probe_sub)
 
 
 @probe("For 3 / body copy / Next (3 rungs: delete all three together)")
 def _():
-    with Rung(x[1]):
+    with rung(x[1]):
         with forloop(3):
             copy(1, ds[60])
 
 
 @subroutine("Probe_Sub")
 def probe_sub():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[401])
-    with Rung(x[2]):
+    with rung(x[2]):
         return_early()
 
 

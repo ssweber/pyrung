@@ -7,7 +7,7 @@ from typing import get_args
 
 import pytest
 
-from pyrung import PLC, Int, Program, Rung, copy
+from pyrung import PLC, Int, Program, copy, rung
 from pyrung.core.analysis.pilot import navigation_contracts, steer
 from pyrung.core.analysis.pilot.execution import MotionKind, PulseHorizon, ScanEntryConfiguration
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -112,7 +112,7 @@ def test_execution_rejects_a_historical_replay_shaped_act(monkeypatch) -> None:
 def test_program_scan_executes_exactly_one_disposable_scan(monkeypatch) -> None:
     staged = Int("ProgramScanStaged")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(98, staged)
 
     source = PLC(program)
@@ -162,7 +162,7 @@ def test_scan_entry_configuration_is_applied_only_to_the_execution_fork(monkeypa
     preset = Int("ConfiguredPreset", external=True)
     result = Int("ConfiguredResult")
     with Program() as program:
-        with Rung(CompareEq(preset, 11)):
+        with rung(CompareEq(preset, 11)):
             copy(81, result)
 
     source = PLC(program)

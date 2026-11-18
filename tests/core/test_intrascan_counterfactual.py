@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, branch, call, copy, subroutine
+from pyrung import PLC, Bool, Int, Program, branch, call, copy, rung, subroutine
 from pyrung.core.context import RungId
 from pyrung.core.executor import ConditionViewCapture
 from pyrung.core.intrascan_counterfactual import (
@@ -19,14 +19,14 @@ def _program(*, calls: int = 1) -> tuple[Program, Bool, Int]:
 
     @subroutine("route_errors")
     def route_errors() -> None:
-        with Rung(~link, step <= 20):
+        with rung(~link, step <= 20):
             copy(98, step)
-        with Rung(link, step == 98):
+        with rung(link, step == 98):
             copy(10, step)
 
     with Program(strict=False) as program:
         for _ in range(calls):
-            with Rung():
+            with rung():
                 call(route_errors)
     return program, link, step
 
@@ -143,7 +143,7 @@ def test_counterfactual_patch_targets_one_exact_sibling_branch_view() -> None:
     step = Int("BranchStep", default=40)
 
     with Program(strict=False) as program:
-        with Rung(link):
+        with rung(link):
             with branch(step == 98):
                 copy(10, step)
             with branch(step <= 20):

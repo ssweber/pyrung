@@ -44,7 +44,7 @@ holds the edge back until the reset drops shifts then and reads 1.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, out, pack_bits, shift
+from pyrung.core import Or, out, pack_bits, rung, shift
 from tests.conformance.memory import c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
@@ -53,13 +53,13 @@ SCANS = scans_for()
 
 def clock_on(slot, bit, *scans):
     """Add a rung that turns *bit* on, driven by the scan number, on exactly the given scans."""
-    with Rung(slot.Cmd != 0, Or(*[slot.Scratch == n for n in scans])):
+    with rung(slot.Cmd != 0, Or(*[slot.Scratch == n for n in scans])):
         out(bit)
 
 
 def pack_at_end(slot, first, last, dest):
     """Pack the register into *dest* once the window is over. The lowest address weighs 1."""
-    with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch > WINDOW):
         pack_bits(c.select(first, last), dest)
 
 
@@ -67,7 +67,7 @@ def prove_forward_range_shifts_up(slot):
     # Clocks on scans 3, 5, 7; data on, off, on (off on scan 5 only).
     count_scans(slot)
     clock_on(slot, c[1009], 3, 5, 7)
-    with Rung(slot.Cmd != 0, slot.Scratch != 5):
+    with rung(slot.Cmd != 0, slot.Scratch != 5):
         shift(c.select(1001, 1008)).clock(c[1009]).reset(slot.Cmd == 0)
     pack_at_end(slot, 1001, 1008, slot.Result1)
     done(slot)
@@ -77,7 +77,7 @@ def prove_reversed_range_shifts_down(slot):
     # The same clocks and data, on a reversed range.
     count_scans(slot)
     clock_on(slot, c[1019], 3, 5, 7)
-    with Rung(slot.Cmd != 0, slot.Scratch != 5):
+    with rung(slot.Cmd != 0, slot.Scratch != 5):
         shift(c.select(1011, 1018).reverse()).clock(c[1019]).reset(slot.Cmd == 0)
     pack_at_end(slot, 1011, 1018, slot.Result1)
     done(slot)
@@ -87,7 +87,7 @@ def prove_clock_is_a_rising_edge(slot):
     # The clock is high on scans 3..5 and 7..8, data always on.
     count_scans(slot)
     clock_on(slot, c[1029], 3, 4, 5, 7, 8)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         shift(c.select(1021, 1028)).clock(c[1029]).reset(slot.Cmd == 0)
     pack_at_end(slot, 1021, 1028, slot.Result1)
     done(slot)
@@ -97,7 +97,7 @@ def prove_data_is_the_rung_at_the_edge(slot):
     # Clocks on scans 3 and 6.  The data rung is off on scans 4 and 6 only.
     count_scans(slot)
     clock_on(slot, c[1049], 3, 6)
-    with Rung(slot.Cmd != 0, slot.Scratch != 4, slot.Scratch != 6):
+    with rung(slot.Cmd != 0, slot.Scratch != 4, slot.Scratch != 6):
         shift(c.select(1041, 1048)).clock(c[1049]).reset(slot.Cmd == 0)
     pack_at_end(slot, 1041, 1048, slot.Result1)
     done(slot)
@@ -109,9 +109,9 @@ def prove_bit_leaves_the_end(slot):
     # scan 8.
     count_scans(slot)
     clock_on(slot, c[1069], 2, 4, 6, 8)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         shift(c.select(1061, 1063)).clock(c[1069]).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0, slot.Scratch == 7):
+    with rung(slot.Cmd != 0, slot.Scratch == 7):
         pack_bits(c.select(1061, 1063), slot.Result2)
     pack_at_end(slot, 1061, 1063, slot.Result1)
     done(slot)
@@ -123,7 +123,7 @@ def prove_reset_beats_clock(slot):
     # reset is true, and stays high through scan 7.
     count_scans(slot)
     clock_on(slot, c[1089], 2, 5, 6, 7)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         shift(c.select(1081, 1088)).clock(c[1089]).reset(Or(slot.Cmd == 0, slot.Scratch == 5))
     pack_at_end(slot, 1081, 1088, slot.Result1)
     done(slot)
@@ -134,7 +134,7 @@ def prove_reset_swallows_the_edge(slot):
     # scan 7.  Reset is true on scans 5 and 6, so it has ended on scan 7.
     count_scans(slot)
     clock_on(slot, c[1109], 5, 6, 7)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         shift(c.select(1101, 1108)).clock(c[1109]).reset(
             Or(slot.Cmd == 0, slot.Scratch == 5, slot.Scratch == 6)
         )

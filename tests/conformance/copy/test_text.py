@@ -84,11 +84,11 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     copy,
     fill,
     pack_text,
     reset,
+    rung,
     system,
     to_ascii,
     to_binary,
@@ -102,7 +102,7 @@ NUL = "\x00"
 
 def _go(slot):
     """Return the rung condition that every case's staging and reading share."""
-    return Rung(slot.Cmd != 0, slot.Fired == 0)
+    return rung(slot.Cmd != 0, slot.Fired == 0)
 
 
 def _seed(first, text):
@@ -121,7 +121,7 @@ def _clear(first, last):
 
 def _fault_flag(slot, dest):
     """Set ``dest`` to 1 if CLICK's out-of-range fault (SC43) is on this scan."""
-    with Rung(slot.Cmd != 0, slot.Fired == 0, system.fault.out_of_range):
+    with rung(slot.Cmd != 0, slot.Fired == 0, system.fault.out_of_range):
         copy(1, dest)
 
 
@@ -256,7 +256,7 @@ def prove_pack_text_word_hex(slot):
         _seed(116, "12G4")
         pack_text(txt.select(116, 119), dh[304])
         copy(dh[304], slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dh[303] == 0xABCD):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dh[303] == 0xABCD):
         copy(1, slot.Result3)
     _fired(slot)
 
@@ -292,11 +292,11 @@ def prove_pack_text_dint(slot):
         _seed(171, "2147483648")
         pack_text(txt.select(171, 180), dd[303])
     _fault_flag(slot, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[301] == -70000):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[301] == -70000):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[302] == 2147483647):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[302] == 2147483647):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[303] == 2147483647):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[303] == 2147483647):
         copy(1, slot.Result3)
     _fired(slot)
 

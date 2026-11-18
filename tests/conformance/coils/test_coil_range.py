@@ -20,13 +20,13 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     copy,
     fill,
     latch,
     math,
     out,
     reset,
+    rung,
     search,
 )
 from tests.conformance.memory import c, dh, ds
@@ -35,42 +35,42 @@ from tests.conformance.scans import count_scans, done, scans_for
 
 def prove_ranges_and_search(slot):
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= 3):
         out(c.select(1623, 1625))
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1623]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, c[1623]):
         math(slot.Result1 + 100, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1625]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, c[1625]):
         math(slot.Result1 + 10, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1626]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, c[1626]):
         math(slot.Result1 + 1, slot.Result1)
     for bit in (1623, 1624, 1625):
-        with Rung(slot.Cmd != 0, slot.Scratch == 4, c[bit]):
+        with rung(slot.Cmd != 0, slot.Scratch == 4, c[bit]):
             math(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         latch(c.select(1627, 1629))
         copy(5, dh[72])
         copy(0xFFFF, dh[73])
         copy(7, dh[74])
         copy(9, dh[75])
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         reset(c.select(1627, 1628))
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1627]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, c[1627]):
         math(slot.Result3 + 100, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1628]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, c[1628]):
         math(slot.Result3 + 10, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, c[1629]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, c[1629]):
         math(slot.Result3 + 1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         search(dh.select(72, 74) > 0x8000, result=slot.Result4, found=c[1630])
     # The table moves after the search's first scan, its rung still true.
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2):
         search(dh.select(75, 76) == 9, result=ds[4322], found=c[1633], oneshot=True)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(0, dh[75])
         copy(9, dh[76])
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, ds[4322] == 75):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, ds[4322] == 75):
         copy(1, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch == 6, ds[4322] == 76):
+    with rung(slot.Cmd != 0, slot.Scratch == 6, ds[4322] == 76):
         copy(2, slot.ErrorCode)
     done(slot)
 

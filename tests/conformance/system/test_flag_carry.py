@@ -34,7 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, copy, math, system
+from pyrung.core import Or, copy, math, rung, system
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import df, ds
 from tests.conformance.scans import count_scans, done, scans_for
@@ -50,19 +50,19 @@ WINDOW = 7
 def prove_math_flags_carry(slot: Any) -> None:
     root, sink, divisor = df[61], df[62], ds[4001]
     # The reads first, above the case's own count: Scratch still holds the scan before.
-    with Rung(slot.Cmd != 0, slot.Scratch == DIVIDE, SC40):
+    with rung(slot.Cmd != 0, slot.Scratch == DIVIDE, SC40):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == ROOT, SC46):
+    with rung(slot.Cmd != 0, slot.Scratch == ROOT, SC46):
         copy(1, slot.Result2)
     count_scans(slot, WINDOW)
-    with Rung(slot.Cmd != 0, slot.Scratch == ROOT - 1):
+    with rung(slot.Cmd != 0, slot.Scratch == ROOT - 1):
         copy(-1.0, root)
         copy(1, divisor)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == DIVIDE, slot.Scratch == ROOT)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == DIVIDE, slot.Scratch == ROOT)):
         math(sqrt(root) + 1 / divisor, sink)
-    with Rung(slot.Cmd != 0, slot.Scratch == DIVIDE, SC40):
+    with rung(slot.Cmd != 0, slot.Scratch == DIVIDE, SC40):
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == ROOT, SC46):
+    with rung(slot.Cmd != 0, slot.Scratch == ROOT, SC46):
         copy(1, slot.Result4)
     done(slot, WINDOW)
 

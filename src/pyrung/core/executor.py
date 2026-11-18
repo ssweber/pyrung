@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 
 ExecutionMode = Literal["natural", "forced_on", "forced_off"]
-# ``loop_body`` is a ``with Rung(...)`` inside a forloop body.  It runs once per
+# ``loop_body`` is a ``with rung(...)`` inside a forloop body.  It runs once per
 # iteration, with a fresh condition view each time and local contacts only.
 ExecutionKind = Literal["rung", "branch", "subroutine", "synthetic", "loop_body"]
 

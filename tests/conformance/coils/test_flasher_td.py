@@ -38,7 +38,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, fill, flasher, on_delay
+from pyrung.core import copy, fill, flasher, on_delay, rung
 from tests.conformance.memory import ClickTimer, c, ds, td
 
 
@@ -50,49 +50,49 @@ def prove_frozen_off_td_at_lowered_preset(slot: Any) -> None:
     def step(n: int) -> tuple[Any, Any]:
         return (slot.Cmd != 0, slot.Scratch == n)
 
-    with Rung(*step(0)):
+    with rung(*step(0)):
         copy(100, on_preset)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 1, slot.Scratch <= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 1, slot.Scratch <= 3):
         copy(5000, on_preset)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 4):
         copy(300, on_preset)
-    with Rung(slot.Cmd != 0, slot.Scratch != 1):
+    with rung(slot.Cmd != 0, slot.Scratch != 1):
         flasher(coil, on=(ClickTimer(42), on_preset), off=(ClickTimer(43), 800))
-    with Rung(*step(1)):
+    with rung(*step(1)):
         on_delay(ClickTimer(41), 5000)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2):
         on_delay(ClickTimer(44), 5000)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 4):
         on_delay(ClickTimer(45), 5000)
-    with Rung(*step(6)):
+    with rung(*step(6)):
         copy(1, slot.Fired)
-    with Rung(*step(5), dropped_for >= 600, coil):
+    with rung(*step(5), dropped_for >= 600, coil):
         copy(1, slot.Result4)
-    with Rung(*step(5), dropped_for >= 600):
+    with rung(*step(5), dropped_for >= 600):
         copy(6, slot.Scratch)
     lowered = (*step(4), dropped_for >= 100)
-    with Rung(*lowered, ~coil):
+    with rung(*lowered, ~coil):
         copy(1, slot.Result2)
-    with Rung(*lowered, coil):
+    with rung(*lowered, coil):
         copy(2, slot.Result2)
-    with Rung(*lowered, off_td > frozen):
+    with rung(*lowered, off_td > frozen):
         copy(1, slot.Result3)
-    with Rung(*lowered, off_td < frozen):
+    with rung(*lowered, off_td < frozen):
         copy(2, slot.Result3)
-    with Rung(*lowered):
+    with rung(*lowered):
         copy(5, slot.Scratch)
-    with Rung(*step(3), restarted_for >= 400):
+    with rung(*step(3), restarted_for >= 400):
         copy(4, slot.Scratch)
     restarted = (*step(2), restarted_for >= 100)
-    with Rung(*restarted, off_td == frozen):
+    with rung(*restarted, off_td == frozen):
         copy(1, slot.Result1)
-    with Rung(*restarted, off_td == 0):
+    with rung(*restarted, off_td == 0):
         copy(2, slot.Result1)
-    with Rung(*restarted):
+    with rung(*restarted):
         copy(3, slot.Scratch)
-    with Rung(*step(1), wait >= 100):
+    with rung(*step(1), wait >= 100):
         copy(2, slot.Scratch)
-    with Rung(*step(0), off_td >= 400):
+    with rung(*step(0), off_td >= 400):
         copy(off_td, frozen)
         copy(1, slot.Scratch)
 

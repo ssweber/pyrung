@@ -31,7 +31,7 @@ class Program:
 
     Used as a context manager to capture rungs:
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
     Also works with PLC:

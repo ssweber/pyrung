@@ -52,7 +52,6 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     blockcopy,
     copy,
     fill,
@@ -61,6 +60,7 @@ from pyrung.core import (
     pack_bits,
     pack_words,
     reset,
+    rung,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -76,7 +76,7 @@ def _go(slot):
 
 
 def _fire(slot):
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(1, slot.Fired)
 
 
@@ -84,15 +84,15 @@ def _fire(slot):
 
 
 def prove_blockcopy_range(slot):
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(11, ds[4001])
         copy(22, ds[4002])
         copy(33, ds[4003])
         copy(44, ds[4004])
         copy(5, ds[4015])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         blockcopy(ds.select(4001, 4004), ds.select(4011, 4014))
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(ds[4011], slot.Result1)
         copy(ds[4012], slot.Result2)
         copy(ds[4014], slot.Result3)
@@ -106,14 +106,14 @@ def init_blockcopy_range(slot):
 
 def prove_blockcopy_overlap(slot):
     # Source 4101..4103 onto 4102..4104.
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(1, ds[4101])
         copy(2, ds[4102])
         copy(3, ds[4103])
         copy(4, ds[4104])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         blockcopy(ds.select(4101, 4103), ds.select(4102, 4104))
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(ds[4101], slot.Result1)
         copy(ds[4102], slot.Result2)
         copy(ds[4103], slot.Result3)
@@ -127,15 +127,15 @@ def init_blockcopy_overlap(slot):
 
 def prove_blockcopy_types(slot):
     # DS -> DD keeps the value; DD -> DS clamps like copy does.
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(-2, ds[4031])
         copy(300, ds[4032])
         copy(70000, dd[203])
         copy(-70000, dd[204])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         blockcopy(ds.select(4031, 4032), dd.select(201, 202))
         blockcopy(dd.select(203, 204), ds.select(4033, 4034))
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(dd[201], slot.Result1)
         copy(dd[202], slot.Result2)
         copy(ds[4033], slot.Result3)
@@ -153,12 +153,12 @@ def init_blockcopy_types(slot):
 
 def prove_fill_constant(slot):
     # Fill 4021..4026; 4027 is the sentinel.
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(1, ds[4027])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         fill(7, ds.select(4021, 4026))
         fill(-3, dd.select(211, 213))
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(ds[4021], slot.Result1)
         copy(ds[4026], slot.Result2)
         copy(ds[4027], slot.Result3)
@@ -173,21 +173,21 @@ def init_fill_constant(slot):
 
 def prove_every_scan(slot):
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(11, ds[4091])
         copy(12, ds[4092])
     # Scan 4, before the instructions run: the scan 3 overwrite is still there.
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         copy(ds[4093], slot.Result4)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         blockcopy(ds.select(4091, 4092), ds.select(4093, 4094))
         fill(7, ds.select(4095, 4096))
         copy(5, ds[4097])
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(99, ds[4093])
         copy(99, ds[4095])
         copy(99, ds[4097])
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         copy(ds[4093], slot.Result1)
         copy(ds[4095], slot.Result2)
         copy(ds[4097], slot.Result3)
@@ -203,16 +203,16 @@ def init_every_scan(slot):
 
 def prove_pack_bits_int(slot):
     # C1201, C1202, C1204 and C1216 are on.
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         latch(c[1201])
         latch(c[1202])
         latch(c[1204])
         latch(c[1216])
         copy(0x7F00, ds[4042])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         pack_bits(c.select(1201, 1208), ds[4042])
         pack_bits(c.select(1201, 1216), ds[4041])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(ds[4042], slot.Result1)
         copy(ds[4041], slot.Result2)
     _fire(slot)
@@ -226,14 +226,14 @@ def init_pack_bits_int(slot):
 
 def prove_pack_bits_real(slot):
     # Bit 21 is C1242 and bit 30 is C1251: 0x40200000 = 2.5.
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         latch(c[1242])
         latch(c[1251])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         pack_bits(c.select(1221, 1252), df[201])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         unpack_to_words(df[201], ds.select(4051, 4052))
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(ds[4051], slot.Result1)
         copy(ds[4052], slot.Result2)
         math(df[201] * 10, slot.Result3)
@@ -249,17 +249,17 @@ def init_pack_bits_real(slot):
 
 def prove_unpack_bits(slot):
     # 0x8005: bits 0, 2 and 15.
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(-32763, ds[4061])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         unpack_to_bits(ds[4061], c.select(1261, 1276))
-    with Rung(*_go(slot), c[1261]):
+    with rung(*_go(slot), c[1261]):
         copy(1, slot.Result1)
-    with Rung(*_go(slot), c[1262]):
+    with rung(*_go(slot), c[1262]):
         copy(1, slot.Result2)
-    with Rung(*_go(slot), c[1263]):
+    with rung(*_go(slot), c[1263]):
         copy(1, slot.Result3)
-    with Rung(*_go(slot), c[1276]):
+    with rung(*_go(slot), c[1276]):
         copy(1, slot.Result4)
     _fire(slot)
 
@@ -274,7 +274,7 @@ def init_unpack_bits(slot):
 
 
 def prove_pack_words(slot):
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(1, ds[4073])
         copy(2, ds[4074])
         copy(-1, ds[4071])
@@ -283,12 +283,12 @@ def prove_pack_words(slot):
         copy(-1, ds[4076])
         copy(0, ds[4077])
         copy(16256, ds[4078])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         pack_words(ds.select(4073, 4074), dd[222])
         pack_words(ds.select(4071, 4072), dd[221])
         pack_words(ds.select(4075, 4076), dd[223])
         pack_words(ds.select(4077, 4078), df[202])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         math(dd[222] - 131072, slot.Result1)
         math(dd[221] - 131072, slot.Result2)
         math(dd[223] + 65537, slot.Result3)
@@ -303,13 +303,13 @@ def init_pack_words(slot):
 
 
 def prove_unpack_words(slot):
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(1000000, dd[231])
         copy(-2, dd[232])
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         unpack_to_words(dd[231], ds.select(4081, 4082))
         unpack_to_words(dd[232], ds.select(4083, 4084))
-    with Rung(*_go(slot)):
+    with rung(*_go(slot)):
         copy(ds[4081], slot.Result1)
         copy(ds[4082], slot.Result2)
         copy(ds[4083], slot.Result3)

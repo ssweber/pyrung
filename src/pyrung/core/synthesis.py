@@ -145,7 +145,7 @@ def bool_feedback_rungs(
 ) -> list[Rung]:
     """Lower a bool coupling to the CLICK debounce coil a delayed device behaves like::
 
-        Rung(enable): debounce(fb_tag, on=(on timer, on_delay), off=(off timer, off_delay))
+        rung(enable): debounce(fb_tag, on=(on timer, on_delay), off=(off timer, off_delay))
 
     ``fb_tag`` turns on once the enable has been on for ``on_delay``.  It turns off once
     the enable has been off for ``off_delay``, so a dip shorter than ``off_delay`` keeps
@@ -187,9 +187,9 @@ def analog_feedback_rungs(
     is stable across scan periods.  The rungs are exactly what a hand-written
     plant-sim ladder would use::
 
-        Rung(enable):            math(fb + up*dt,   fb)   # advance while energized
-        Rung(enable):            latch(armed)             # wake on first energize
-        Rung(armed AND disable): math(fb + down*dt, fb)   # decay once armed, off-enable only
+        rung(enable):            math(fb + up*dt,   fb)   # advance while energized
+        rung(enable):            latch(armed)             # wake on first energize
+        rung(armed AND disable): math(fb + down*dt, fb)   # decay once armed, off-enable only
 
     ``disable`` is the caller-supplied negation of ``enable`` (the harness knows
     whether the enable is a bit or an ``== trigger`` compare, so it builds the
@@ -224,7 +224,7 @@ def analog_approach_rung(
     One guarded ``math()`` plant rung — ``fb += rate*(toward - fb)*dt`` while
     energized, holding on enable fall::
 
-        Rung(enable): math(fb + rate*(toward - fb)*dt, fb)
+        rung(enable): math(fb + rate*(toward - fb)*dt, fb)
 
     ``toward`` is a constant setpoint or a setpoint tag.  There is no decay/arm:
     the plant holds its last value when disabled (a first-order lag has no
@@ -250,7 +250,7 @@ def pulse_feedback_rungs(
 ) -> list[Rung]:
     """Lower a bool pulse-train coupling (``flasher_on``/``flasher_off``) to a flasher::
 
-        Rung(enable): flasher(fb_tag, on=(on timer, on_dwell), off=(off timer, off_dwell))
+        rung(enable): flasher(fb_tag, on=(on timer, on_dwell), off=(off timer, off_dwell))
 
     While enabled, ``fb_tag`` is on for ``on_dwell`` and off for ``off_dwell``, starting
     with the on phase.  It is off while disabled.  As on a CLICK, a dwell of 0 keeps
@@ -285,7 +285,7 @@ def timed_feedback_rungs(
 ) -> list[Rung]:
     """Lower a ``timed`` coupling to a CLICK timed coil::
 
-        Rung(enable): timed(fb_tag, timer, on_ms, maintained=maintained)
+        rung(enable): timed(fb_tag, timer, on_ms, maintained=maintained)
 
     Each rise of the enable turns ``fb_tag`` on for ``on_ms``.  If ``maintained`` is
     set, ``fb_tag`` then follows the enable.  As on a CLICK, the scan of the rise counts
@@ -311,7 +311,7 @@ def timed_feedback_rungs(
 def toggle_feedback_rungs(*, enable: Condition, fb_tag: Tag) -> list[Rung]:
     """Lower a ``toggle`` coupling to a CLICK toggle coil::
 
-        Rung(enable): toggle(fb_tag)
+        rung(enable): toggle(fb_tag)
 
     Each rise of the enable flips ``fb_tag``.  It holds its value between rises.
     """

@@ -16,7 +16,6 @@ from pyrung import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -25,6 +24,7 @@ from pyrung import (
     immediate,
     on_delay,
     run_function,
+    rung,
     to_text,
 )
 from pyrung.click import ClickBlocks
@@ -104,7 +104,7 @@ def test_pdg_retains_dynamic_range_region_and_address_reads() -> None:
     start = Int("WindowStart")
     end = Int("WindowEnd")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             fill(0, block.select(start, end))
 
     instr = logic.rungs[0]._instructions[0]
@@ -120,7 +120,7 @@ def test_pdg_retains_dynamic_range_region_and_address_reads() -> None:
 def test_static_copy_fanout_is_shared_by_pdg_and_writer_lookup() -> None:
     chars = Block("MessageChars", TagType.CHAR, 1, 4)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy("ABC", chars[1])
 
     instr = logic.rungs[0]._instructions[0]
@@ -147,7 +147,7 @@ def test_function_output_mapping_is_shared_by_pdg_and_writer_lookup() -> None:
         return {"first": 1, "second": 2}
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             run_function(values, outs={"first": first, "second": second})
 
     instr = logic.rungs[0]._instructions[0]
@@ -161,7 +161,7 @@ def test_declared_status_fields_are_shared_by_pdg_and_writer_lookup() -> None:
     timer = Timer.clone("WriteSiteTimer")
     enable = Bool("WriteSiteEnable")
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(timer, preset=5)
 
     instr = logic.rungs[0]._instructions[0]
@@ -254,7 +254,7 @@ def test_to_text_writes_only_declared_characters_and_reaches_the_last(
     msg = Block("BoundMsg", TagType.CHAR, 1, 100)
     source = make("BoundSource")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             fill(BLANK_CHAR, msg.select(1, 100))
             copy(source, msg[1], convert=convert)
     (_fill, instr) = logic.rungs[0]._instructions
@@ -283,7 +283,7 @@ def test_to_text_writes_only_declared_characters_and_reaches_the_last(
 def test_to_text_stops_at_the_end_of_the_block() -> None:
     txt = ClickBlocks().txt
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Real("EndSource"), txt[995], convert=to_text())
     (instr,) = logic.rungs[0]._instructions
     names = [getattr(target, "name", None) for target in instruction_write_targets(instr)]
@@ -293,7 +293,7 @@ def test_to_text_stops_at_the_end_of_the_block() -> None:
 def test_to_text_of_a_literal_writes_its_own_text_every_time() -> None:
     msg = Block("LiteralMsg", TagType.CHAR, 1, 20)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(12345, msg[1], convert=to_text())
             copy(-0.25, msg[10], convert=to_text())
     first, second = logic.rungs[0]._instructions
@@ -311,9 +311,9 @@ def test_the_characters_past_the_first_are_writes_the_copy_may_not_make() -> Non
     """
     msg = Block("PartialMsg", TagType.CHAR, 1, 20)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Int("PartialSource"), msg[1], convert=to_text())
-        with Rung(msg[1] == "1", msg[5] == "5"):
+        with rung(msg[1] == "1", msg[5] == "5"):
             copy(1, Int("PartialSeen"))
     (instr,) = logic.rungs[0]._instructions
     assert [target.name for target in instruction_partial_write_targets(instr)] == [
@@ -329,7 +329,7 @@ def test_to_text_of_an_expression_runs_to_the_end_of_the_block() -> None:
     msg = Block("ExprMsg", TagType.CHAR, 1, 30)
     source = Dint("ExprSource")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(source * source, msg[20], convert=to_text())
     (instr,) = logic.rungs[0]._instructions
     assert [target.name for target in instruction_write_targets(instr)] == [
@@ -341,7 +341,7 @@ def test_to_text_through_a_bounded_pointer_follows_the_pointer() -> None:
     txt = ClickBlocks().txt
     pointer = Int("TextPointer", choices={990: "near the end", 995: "nearer"})
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Int("TextPointerSource"), txt[pointer], convert=to_text())
     (instr,) = logic.rungs[0]._instructions
     # Every call returns the same targets, so an analysis that keys a pointer by id finds it again.
@@ -355,7 +355,7 @@ def test_to_text_through_a_bounded_pointer_follows_the_pointer() -> None:
 def test_to_text_through_an_unbounded_pointer_writes_the_whole_bank() -> None:
     txt = ClickBlocks().txt
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Real("BankSource"), txt[Int("BankPointer")], convert=to_text())
     graph = build_program_graph(logic)
     assert graph.rung_nodes[0].writes == {f"TXT{a}" for a in range(1, 1001)}
@@ -365,7 +365,7 @@ def test_a_destination_mapped_after_the_first_call_gets_its_new_bank() -> None:
     message = Char("LaterMsg")
     literal_dest = Char("LaterLiteral")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(Int("LaterSource"), message, convert=to_text())
             copy("ABC", literal_dest)
     text, literal = logic.rungs[0]._instructions
@@ -392,7 +392,7 @@ def test_the_analysis_does_not_keep_a_mapped_bank_alive() -> None:
 
     message = Char("GoneMsg")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy("ABC", message)
     (instr,) = logic.rungs[0]._instructions
     txt = ClickBlocks().txt

@@ -22,7 +22,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -36,6 +35,7 @@ from pyrung import (
     return_early,
     rise,
     run_function,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.graph import PlanStatus
@@ -83,7 +83,7 @@ def _step_to(plc: PLC, tag: Any, inputs: dict[str, Any], scans: int) -> int | No
 
 
 def _two_contacts(enable: Any, feedback: Any, hit: Any) -> None:
-    with Rung(enable, feedback):
+    with rung(enable, feedback):
         latch(hit)
 
 
@@ -112,7 +112,7 @@ class TestLinkProofIsNotClaimedFalsely:
         """Fb stays low through its on-delay, so the instantaneous read is true."""
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="500ms"), build)
@@ -126,9 +126,9 @@ class TestLinkProofIsNotClaimedFalsely:
         Watch = Timer.clone("Watch")
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(Watch, 100)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="1s"), build)
@@ -143,9 +143,9 @@ class TestLinkProofIsNotClaimedFalsely:
         clear = Bool("Clear", external=True)
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(Watch, 300).reset(clear)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="100ms", off_delay="0ms"), build)
@@ -166,11 +166,11 @@ class TestLinkProofIsNotClaimedFalsely:
         manual = Bool("Manual", external=True)
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(Watch, 3000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
-            with Rung(manual):
+            with rung(manual):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="100ms"), build)
@@ -184,9 +184,9 @@ class TestLinkProofIsNotClaimedFalsely:
         Watch = Timer.clone("Watch")
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(Watch, 3000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="100ms"), build)
@@ -216,11 +216,11 @@ class TestLinkProofIsNotClaimedFalsely:
         )
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(go, ~feedback):
+            with rung(go, ~feedback):
                 out(enable)
-            with Rung(Or(And(enable, ~feedback), And(~enable, feedback))):
+            with rung(Or(And(enable, ~feedback), And(~enable, feedback))):
                 on_delay(Watch, 1000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 200) is not None
         assert _link_proof(program, hit) is None
@@ -234,9 +234,9 @@ class TestLinkProofStillProves:
         Watch = Timer.clone("Watch")
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(Watch, 3000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="200ms", off_delay="100ms"), build)
@@ -257,9 +257,9 @@ class TestLinkProofStillProves:
         feedback = Bool("Fb", physical=Physical("Fb", on_delay="200ms"), link="~Enable")
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(~enable, ~feedback):
+            with rung(~enable, ~feedback):
                 on_delay(Watch, 3000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Enable": False}, 600) is None
 
@@ -274,11 +274,11 @@ def _state_machine() -> tuple[Program, Any, Any]:
     home = Bool("Home", external=True)
     flag = Bool("Flag")
     with Program(strict=False) as program:
-        with Rung(stage == 0, rise(enter)):
+        with rung(stage == 0, rise(enter)):
             copy(1, stage)
-        with Rung(stage == 1):
+        with rung(stage == 1):
             latch(flag)
-        with Rung(home):
+        with rung(home):
             reset(flag)
             copy(0, stage)
     return program, flag, stage
@@ -306,19 +306,19 @@ class TestExclusionProof:
         s1, s2, t1, t2 = (Bool(name, external=True) for name in ("S1", "S2", "T1", "T2"))
         m, n, x, y = Bool("M"), Bool("N"), Bool("X"), Bool("Y")
         with Program(strict=False) as program:
-            with Rung(s1):
+            with rung(s1):
                 latch(m)
                 reset(y)
-            with Rung(s2):
+            with rung(s2):
                 latch(m)
-            with Rung(m):
+            with rung(m):
                 latch(x)
-            with Rung(t1):
+            with rung(t1):
                 latch(n)
                 reset(x)
-            with Rung(t2):
+            with rung(t2):
                 latch(n)
-            with Rung(n):
+            with rung(n):
                 latch(y)
         goal = {"X": True, "Y": True}
         assert _both(PLC(program, dt=0.01), [({"S2": True, "T2": True}, 2)], goal)
@@ -332,10 +332,10 @@ class TestExclusionProof:
         again = Bool("Again", external=True)
         x, y = Int("X"), Int("Y")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 copy(1, x)
                 copy(0, y, oneshot=True)
-            with Rung(again):
+            with rung(again):
                 copy(1, y)
                 copy(0, x, oneshot=True)
         goal = {"X": 1, "Y": 1}
@@ -350,10 +350,10 @@ class TestExclusionProof:
         again = Bool("Again", external=True)
         x, y = Bool("X", default=True), Bool("Y", default=True)
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 latch(x)
                 reset(y)
-            with Rung(again):
+            with rung(again):
                 latch(y)
                 reset(x)
 
@@ -367,10 +367,10 @@ class TestExclusionProof:
         ext_x = Bool("ExtX", external=True)
         ext_y = Bool("ExtY", external=True)
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 latch(ext_x)
                 reset(ext_y)
-            with Rung(again):
+            with rung(again):
                 latch(ext_y)
                 reset(ext_x)
         goal = {"ExtX": True, "ExtY": True}
@@ -387,12 +387,12 @@ class TestExclusionProof:
         run = Bool("Run")
         flag = Bool("Flag")
         with Program(strict=False) as program:
-            with Rung(stage == 0, rise(enter)):
+            with rung(stage == 0, rise(enter)):
                 copy(1, stage)
                 latch(run)
-            with Rung(run):
+            with rung(run):
                 latch(flag)
-            with Rung(home):
+            with rung(home):
                 copy(0, stage)
                 reset(flag)
         goal = {"Flag": True, "Stage": 0}
@@ -408,11 +408,11 @@ class TestExclusionProof:
         again = Bool("Again", external=True)
         x, y = Bool("X"), Bool("Y")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 with branch(side):
                     reset(y)
                 latch(x)
-            with Rung(again):
+            with rung(again):
                 reset(x)
                 latch(y)
         goal = {"X": True, "Y": True}
@@ -431,7 +431,7 @@ def test_one_register_still_proves(value: int) -> None:
     stage = Int("Stage")
     go = Bool("Go", external=True)
     with Program(strict=False) as program:
-        with Rung(go):
+        with rung(go):
             copy(value, stage)
     plan = PLC(program, dt=0.01).how(stage == 1, stage == 2, **BOUND)
     assert plan.status is PlanStatus.CANNOT_REACH, plan.reason
@@ -450,11 +450,11 @@ def _watchdog_chain() -> tuple[Program, Any, Any]:
     middle = Bool("M")
     watch = Timer.clone("W")
     with Program(strict=False) as program:
-        with Rung(enable, ~feedback):
+        with rung(enable, ~feedback):
             on_delay(watch, 3000)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(middle)
-        with Rung(middle):
+        with rung(middle):
             latch(hit)
     return program, hit, watch
 
@@ -496,10 +496,10 @@ class TestForcesAndPatchesOfTheSession:
         go, again = Bool("Go", external=True), Bool("Ag", external=True)
         x, y = Bool("X"), Bool("Y")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 latch(x)
                 reset(y)
-            with Rung(again):
+            with rung(again):
                 latch(y)
                 reset(x)
         plc = PLC(program, dt=0.01)
@@ -523,15 +523,15 @@ def test_a_write_after_a_possible_return_is_no_clobber() -> None:
     go, again, skip = (Bool(name, external=True) for name in ("Go", "Ag", "Sw"))
     x, y = Bool("X"), Bool("Y")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call("S")
         with subroutine("S"):
-            with Rung(go):
+            with rung(go):
                 latch(x)
                 with branch(skip):
                     return_early()
                 reset(y)
-            with Rung(again):
+            with rung(again):
                 latch(y)
                 reset(x)
 
@@ -557,11 +557,11 @@ class TestPointerWritesOverTheCap:
         pointer = Int("Idx")
         timer = SimpleNamespace(Done=bits[1], Acc=Int("Acc"))
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(timer, 3000)
-            with Rung(command):
+            with rung(command):
                 copy(1, bits[pointer])
-            with Rung(bits[1]):
+            with rung(bits[1]):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Cmd": True, "Idx": 1}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -574,11 +574,11 @@ class TestPointerWritesOverTheCap:
         pointer = Int("Idx")
         timer = SimpleNamespace(Done=done, Acc=words[1])
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(timer, 3000)
-            with Rung(command):
+            with rung(command):
                 copy(2995, words[pointer])
-            with Rung(done):
+            with rung(done):
                 latch(hit)
         assert (
             _step_to(_harnessed(program), hit, {"Cmd": True, "Idx": 1, "En": True}, 5) is not None
@@ -593,11 +593,11 @@ class TestPointerWritesOverTheCap:
         hit = Bool("Hit")
         feedback = bits[1]
         with Program(strict=False) as program:
-            with Rung(command):
+            with rung(command):
                 copy(0, bits[pointer])
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
 
         def session() -> PLC:
@@ -621,10 +621,10 @@ def test_an_input_block_slot_is_the_outsides_to_set() -> None:
     go, again = Bool("Go", external=True), Bool("Ag", external=True)
     inputs = InputBlock("I", TagType.BOOL, 1, 5)
     with Program(strict=False) as program:
-        with Rung(go):
+        with rung(go):
             latch(inputs[1])
             reset(inputs[2])
-        with Rung(again):
+        with rung(again):
             latch(inputs[2])
             reset(inputs[1])
 
@@ -646,9 +646,9 @@ class TestThePlantsOwnDelay:
         hit = Bool("Hit")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 41, "s")
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program, dt=0.1), hit, {"En": True}, 800) is not None
         assert _proved_on(_harnessed(program, dt=0.1), hit) is None
@@ -659,9 +659,9 @@ class TestThePlantsOwnDelay:
         hit = Bool("Hit")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(~enable, feedback):
+            with rung(~enable, feedback):
                 on_delay(watch, 41, "s")
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
 
         stepped = _harnessed(program, dt=0.1)
@@ -675,9 +675,9 @@ class TestThePlantsOwnDelay:
         hit = Bool("Hit")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 60, "s")
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _proved_on(_harnessed(program, dt=0.1), hit) is not None
 
@@ -704,59 +704,59 @@ def _mid_scan(
     watch = Timer.clone("W")
     with Program(strict=False) as program:
         build(go, enable, feedback, watch, hit)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(hit)
     return program, hit
 
 
 def _cleared_after_the_read(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
-    with Rung(go):
+    with rung(go):
         latch(enable)
-    with Rung(enable, ~feedback):
+    with rung(enable, ~feedback):
         on_delay(watch, 3000)
-    with Rung(go):
+    with rung(go):
         reset(enable)
 
 
 def _cleared_at_the_top(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
-    with Rung():
+    with rung():
         reset(enable)
-    with Rung(~enable, feedback):
+    with rung(~enable, feedback):
         on_delay(watch, 3000)
-    with Rung(go):
+    with rung(go):
         latch(enable)
 
 
 def _clears_itself(_go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
-    with Rung(enable, ~feedback):
+    with rung(enable, ~feedback):
         on_delay(watch, 3000)
-    with Rung(enable):
+    with rung(enable):
         reset(enable)
 
 
 def _latched(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
-    with Rung(go):
+    with rung(go):
         latch(enable)
-    with Rung(enable, ~feedback):
+    with rung(enable, ~feedback):
         on_delay(watch, 3000)
 
 
 def _reset_only(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
-    with Rung(go):
+    with rung(go):
         reset(enable)
-    with Rung(~enable, feedback):
+    with rung(~enable, feedback):
         on_delay(watch, 3000)
 
 
 def _cleared_by_a_subroutine(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
     with subroutine("S"):
-        with Rung():
+        with rung():
             reset(enable)
-    with Rung(go):
+    with rung(go):
         latch(enable)
-    with Rung(enable, ~feedback):
+    with rung(enable, ~feedback):
         on_delay(watch, 3000)
-    with Rung(go):
+    with rung(go):
         call("S")
 
 
@@ -810,13 +810,13 @@ class TestAnEnableThatMovesMidScan:
         hit = Bool("Hit")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 latch(bits[1])
-            with Rung(bits[1], ~feedback):
+            with rung(bits[1], ~feedback):
                 on_delay(watch, 3000)
-            with Rung(go):
+            with rung(go):
                 copy(0, bits[pointer])
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
         assert _harnessed(program).how(hit, max_scans=1000).status is not PlanStatus.CANNOT_REACH
@@ -830,19 +830,19 @@ class TestAnEnableThatMovesMidScan:
         watch = Timer.clone("W")
         with Program(strict=False) as program:
             with subroutine("S"):
-                with Rung(source):
+                with rung(source):
                     out(enable)
-            with Rung():
+            with rung():
                 latch(source)
-            with Rung():
+            with rung():
                 call("S")
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung():
+            with rung():
                 reset(source)
-            with Rung():
+            with rung():
                 call("S")
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {}, 500) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -856,9 +856,9 @@ class TestWiderFormsClaimNothing:
         Watch = Timer.clone("Watch")
 
         def build(enable: Any, feedback: Any, hit: Any) -> None:
-            with Rung(Or(And(enable, ~feedback), And(enable, ~feedback, extra))):
+            with rung(Or(And(enable, ~feedback), And(enable, ~feedback, extra))):
                 on_delay(Watch, 3000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
 
         program, hit = _linked(Physical("Fb", on_delay="200ms"), build)
@@ -870,9 +870,9 @@ class TestWiderFormsClaimNothing:
         hit = Bool("Hit")
         Watch = Timer.clone("Watch")
         with Program(strict=False) as program:
-            with Rung(mode == 3, ~feedback):
+            with rung(mode == 3, ~feedback):
                 on_delay(Watch, 3000)
-            with Rung(Watch.Done):
+            with rung(Watch.Done):
                 latch(hit)
         assert _proved_on(_harnessed(program), hit) is None
 
@@ -891,11 +891,11 @@ class TestAnEnableThatKeepsTheProof:
     def test_one_out_coil(self, coil_first: bool) -> None:
         def build(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
             if coil_first:
-                with Rung(go):
+                with rung(go):
                     out(enable)
             _plain_rung(enable, feedback, watch)
             if not coil_first:
-                with Rung(go):
+                with rung(go):
                     out(enable)
 
         program, hit = _mid_scan(build)
@@ -904,7 +904,7 @@ class TestAnEnableThatKeepsTheProof:
 
     def test_one_out_coil_that_toggles(self) -> None:
         def build(go: Any, enable: Any, feedback: Any, watch: Any, _hit: Any) -> None:
-            with Rung(go, ~enable):
+            with rung(go, ~enable):
                 out(enable)
             _plain_rung(enable, feedback, watch)
 
@@ -914,7 +914,7 @@ class TestAnEnableThatKeepsTheProof:
 
 
 def _plain_rung(enable: Any, feedback: Any, watch: Any) -> None:
-    with Rung(enable, ~feedback):
+    with rung(enable, ~feedback):
         on_delay(watch, 3000)
 
 
@@ -944,11 +944,11 @@ class TestIndexExpressionsOverTheCap:
         bits, index, offset = _big_block()
         timer = SimpleNamespace(Done=bits[1], Acc=Int("Acc"))
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(timer, 3000)
-            with Rung(go):
+            with rung(go):
                 copy(1, bits[index_of(index, offset)])
-            with Rung(bits[1]):
+            with rung(bits[1]):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -960,11 +960,11 @@ class TestIndexExpressionsOverTheCap:
         words, index, offset = _big_block(TagType.INT)
         timer = SimpleNamespace(Done=done, Acc=words[1])
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(timer, 3000)
-            with Rung(go):
+            with rung(go):
                 copy(2995, words[index_of(index, offset)])
-            with Rung(done):
+            with rung(done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True, "En": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -976,13 +976,13 @@ class TestIndexExpressionsOverTheCap:
         feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link=bits[1].name)
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 copy(1, bits[index_of(index, offset)])
-            with Rung(bits[1], ~feedback):
+            with rung(bits[1], ~feedback):
                 on_delay(watch, 3000)
-            with Rung(go):
+            with rung(go):
                 copy(0, bits[index_of(index, offset)])
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -994,11 +994,11 @@ class TestIndexExpressionsOverTheCap:
         feedback = bits[1]
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 copy(0, bits[index_of(index, offset)])
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
 
         def session() -> PLC:
@@ -1025,16 +1025,16 @@ class TestIndexExpressionsOverTheCap:
         bits, index, offset = _big_block()
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 if through_a_function:
                     run_function(lambda: {"v": True}, outs={"v": bits[index_of(index, offset)]})
                 else:
                     copy(1, bits[index_of(index, offset)])
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(bits[1])
-            with Rung(bits[1]):
+            with rung(bits[1]):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1044,13 +1044,13 @@ class TestIndexExpressionsOverTheCap:
         a, b, go = (Bool(name, external=True) for name in ("A", "Bx", "Go"))
         bits, index, offset = _big_block()
         with Program(strict=False) as program:
-            with Rung(a):
+            with rung(a):
                 latch(bits[1])
                 reset(bits[2])
-            with Rung(b):
+            with rung(b):
                 latch(bits[2])
                 reset(bits[1])
-            with Rung(go):
+            with rung(go):
                 copy(1, bits[index_of(index, offset)])
                 copy(1, bits[index_of(index, offset, 1)])
 
@@ -1077,11 +1077,11 @@ def test_a_read_at_an_index_expression_keeps_the_proof() -> None:
     done = bits[1]
     timer = SimpleNamespace(Done=done, Acc=Int("Acc"))
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(bits[index * 2], other)
-        with Rung(enable, ~feedback):
+        with rung(enable, ~feedback):
             on_delay(timer, 3000)
-        with Rung(done):
+        with rung(done):
             latch(hit)
     assert _proved_on(_harnessed(program), hit) is not None
 
@@ -1125,10 +1125,10 @@ class TestOtherWritesInTheTimersRung:
         hit = Bool("Hit")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
                 extra(watch, saved)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"En": True, "Saved": 3000}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1141,14 +1141,14 @@ class TestOtherWritesInTheTimersRung:
         hit = Bool("Hit")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 out(enable)
-            with Rung(switch):
+            with rung(switch):
                 copy(3000, boost)
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
                 copy(boost, watch.Acc)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True, "Sw": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1167,10 +1167,10 @@ class TestOtherWritesInTheTimersRung:
             Acc=small[1] if slot == "Acc" else Int("TA"),
         )
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(timer, 3000)
                 copy(3000 if slot == "Acc" else 1, small[index])
-            with Rung(timer.Done):
+            with rung(timer.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"En": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1181,10 +1181,10 @@ class TestOtherWritesInTheTimersRung:
         hit, other = Bool("Hit"), Int("Other")
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
                 copy(5, other)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _proved_on(_harnessed(program), hit) is not None
 
@@ -1196,7 +1196,7 @@ class TestAWriteTheRungHides:
         enable = Bool("En", external=True)
         feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
         watch = Timer.clone("W")
-        with Rung(enable, ~feedback):
+        with rung(enable, ~feedback):
             on_delay(watch, 3000)
         return watch.Done, Bool("Go", external=True), Bool("Hit")
 
@@ -1205,12 +1205,12 @@ class TestAWriteTheRungHides:
         index = Int("Idx", default=1)
         with Program(strict=False) as program:
             done, go, hit = self._watchdog()
-            with Rung(done):
+            with rung(done):
                 latch(bits[1])
-            with Rung(go):
+            with rung(go):
                 reset(bits[1])
                 copy(1, bits[index])
-            with Rung(bits[1]):
+            with rung(bits[1]):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1219,13 +1219,13 @@ class TestAWriteTheRungHides:
         target = Bool("Y")
         with Program(strict=False) as program:
             done, go, hit = self._watchdog()
-            with Rung(done):
+            with rung(done):
                 latch(target)
-            with Rung(go):
+            with rung(go):
                 reset(target)
                 with forloop(1):
                     latch(target)
-            with Rung(target):
+            with rung(target):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1234,12 +1234,12 @@ class TestAWriteTheRungHides:
         a, b = Bool("A", external=True), Bool("Bx", external=True)
         x, y = Bool("X"), Bool("Y")
         with Program(strict=False) as program:
-            with Rung(a):
+            with rung(a):
                 latch(x)
                 reset(y)
                 with forloop(1):
                     latch(y)
-            with Rung(b):
+            with rung(b):
                 latch(y)
                 reset(x)
         assert _both(PLC(program, dt=0.01), [({"A": True}, 1)], {"X": True, "Y": True})
@@ -1264,13 +1264,13 @@ class TestABranchOfTheCoilsRung:
         feedback = _both_ways_link()
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 out(enable)
                 with branch(enable, ~feedback):
                     on_delay(watch, 3000)
                 with forloop(1):
                     reset(enable)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1280,7 +1280,7 @@ class TestABranchOfTheCoilsRung:
         feedback = _both_ways_link()
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 out(enable)
                 with forloop(1):
                     reset(enable)
@@ -1288,7 +1288,7 @@ class TestABranchOfTheCoilsRung:
                     on_delay(watch, 3000)
                 with forloop(1):
                     latch(enable)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1302,12 +1302,12 @@ class TestABranchOfTheCoilsRung:
         )
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 out(bits[1])
                 with branch(bits[1], ~feedback):
                     on_delay(watch, 3000)
                 copy(0, bits[index])
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1317,11 +1317,11 @@ class TestABranchOfTheCoilsRung:
         feedback = _both_ways_link()
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 out(enable)
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 500) is None
         assert _proved_on(_harnessed(program), hit) is not None
@@ -1351,14 +1351,14 @@ class TestAPointersDeclaredRangeIsOnlyAWarning:
         pointer = Int("P", default=2, **declared)
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 copy(1, pointer)
                 copy(1, bits[pointer])
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(bits[1])
-            with Rung(bits[1]):
+            with rung(bits[1]):
                 latch(hit)
         assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
         assert _proved_on(_harnessed(program), hit) is None
@@ -1372,11 +1372,11 @@ class TestAPointersDeclaredRangeIsOnlyAWarning:
         pointer = Int("P", default=2, min=2, max=3)
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 copy(bits[pointer], other)
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _proved_on(_harnessed(program), hit) is not None
 
@@ -1388,11 +1388,11 @@ class TestAPointersDeclaredRangeIsOnlyAWarning:
         pointer = Int("P", default=2, min=2, max=3)
         watch = Timer.clone("W")
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 copy(1, words[pointer])
-            with Rung(enable, ~feedback):
+            with rung(enable, ~feedback):
                 on_delay(watch, 3000)
-            with Rung(watch.Done):
+            with rung(watch.Done):
                 latch(hit)
         assert _proved_on(_harnessed(program), hit) is not None
 
@@ -1404,13 +1404,13 @@ def test_a_loop_body_at_an_index_expression_over_the_cap() -> None:
     bits, index, offset = _big_block()
     watch = Timer.clone("W")
     with Program(strict=False) as program:
-        with Rung(go), forloop(1):
+        with rung(go), forloop(1):
             copy(1, bits[index + offset])
-        with Rung(enable, ~feedback):
+        with rung(enable, ~feedback):
             on_delay(watch, 3000)
-        with Rung(watch.Done):
+        with rung(watch.Done):
             latch(bits[1])
-        with Rung(bits[1]):
+        with rung(bits[1]):
             latch(hit)
     assert _step_to(_harnessed(program), hit, {"Go": True}, 5) is not None
     assert _proved_on(_harnessed(program), hit) is None
@@ -1451,9 +1451,9 @@ def test_a_pointer_write_reaches_a_tag_the_bank_names(make: Callable[..., Int]) 
     other = Block("Other", TagType.INT, 1, 10)
     tag = make(bank, other)
     with Program(strict=False) as prog:
-        with Rung(Bool("Go", external=True)):
+        with rung(Bool("Go", external=True)):
             copy(Int("Src", external=True), bank[Int("At", external=True)])
-        with Rung(tag > 50):
+        with rung(tag > 50):
             out(Bool("High"))
     facts = ProofFacts(
         snapshot={},

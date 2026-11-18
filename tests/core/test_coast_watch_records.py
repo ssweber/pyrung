@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, math, on_delay, out, system
+from pyrung import Bool, Int, Program, Real, Timer, copy, math, on_delay, out, rung, system
 from pyrung.core import PLC
 from pyrung.core.coast_run import coast_until
 from tests.fold_check import compare_records, seed_records
@@ -25,11 +25,11 @@ def _timer_tick() -> Program:
     Tmr = Timer.clone("WrTmr")
     Q = Int("WrQ")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(Tmr, 30000, "ms")
-        with Rung():
+        with rung():
             math(Tmr.Acc // 1000, Q)
-        with Rung(Q == 7):
+        with rung(Q == 7):
             out(Bool("WrHit"))
     return prog
 
@@ -38,9 +38,9 @@ def _real_tick() -> Program:
     """As :func:`_timer_tick`, a Real: its records are a run nothing can say."""
     Tmr = Timer.clone("WrRealTmr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(Tmr, 30000, "ms")
-        with Rung():
+        with rung():
             math(Tmr.Acc // 1000 * 1.5, Real("WrR"))
     return prog
 
@@ -49,7 +49,7 @@ def _pulse() -> Program:
     """A Bool that flips for one scan in every ten, from a timer that resets itself."""
     Tmr = Timer.clone("WrPulseTmr")
     with Program(strict=False) as prog:
-        with Rung(~Tmr.Done):
+        with rung(~Tmr.Done):
             on_delay(Tmr, 100, "ms")
     return prog
 
@@ -60,14 +60,14 @@ def _clock_mirror(contact: bool) -> Program:
     Sec = Int("WrSec")
     Tmr = Timer.clone("WrClockTmr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
-        with Rung(~T):
+        with rung(~T):
             out(T)
         if contact:
-            with Rung(system.sys.clock_1s):
+            with rung(system.sys.clock_1s):
                 out(Bool("WrBlink"))
-        with Rung():
+        with rung():
             on_delay(Tmr, 20, "s")
     return prog
 
@@ -156,7 +156,7 @@ def test_a_real_that_moves_on_each_scan_says_its_values() -> None:
 
     def build() -> Program:
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(R + 0.5, R)
         return prog
 

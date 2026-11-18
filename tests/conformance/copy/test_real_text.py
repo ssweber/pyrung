@@ -47,7 +47,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, to_ascii
+from pyrung.core import copy, fill, math, rung, to_ascii
 from tests.conformance.memory import df, txt
 from tests.conformance.probe_kit import once
 
@@ -100,14 +100,14 @@ def _longest_span(index: int) -> range:
 
 def _ladder(real: Any, span: range, value: float, window: int) -> Any:
     def ladder(slot: Any) -> None:
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             copy(value, real)
             for start in range(span.start, span.stop, 8):
                 copy("Z" * min(8, span.stop - start), txt[start])
             copy(real, txt[span.start])
         fields = (slot.Result1, slot.Result2, slot.Result3, slot.Result4, slot.ErrorCode)
         first = span.start + WINDOW * window
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             for k, field in enumerate(fields):
                 copy(txt[first + 2 * k], field, convert=to_ascii)
                 copy(txt[first + 2 * k + 1], slot.Scratch, convert=to_ascii)

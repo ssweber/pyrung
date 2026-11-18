@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, math
+from pyrung import PLC, Bool, Int, Program, Real, copy, math, rung
 from pyrung.core import scan_trace
 from pyrung.core.analysis.causal.projected import _values_equal
 from pyrung.core.coast_run import coast_until
@@ -32,7 +32,7 @@ TAGS = ("Source", "Copied", "Scaled")
 
 def _plc() -> PLC:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(Source, Copied)
             math(Source * 1.0, Scaled)
             math(Steps + 1, Steps)
@@ -114,13 +114,13 @@ En = Bool("En", external=True)
 def _same_scan_plc(value: float) -> PLC:
     # Rung 2 copies Mid into Copied, and rung 3 overwrites it in the same scan.
     with Program(strict=False) as program:
-        with Rung(En):
+        with rung(En):
             math(Source * 1.0, Mid)
-        with Rung(En):
+        with rung(En):
             copy(Mid, Copied)
-        with Rung(Mid != 5.0):
+        with rung(Mid != 5.0):
             copy(Mid, Copied)
-        with Rung():
+        with rung():
             math(Steps + 1, Steps)
     plc = PLC(program, dt=0.01)
     plc.patch({"Source": value})
@@ -168,7 +168,7 @@ Right = Real("Right", external=True)
 def _swap_plc() -> PLC:
     # Each scan swaps Left and Right, so two NaNs with other bits trade places.
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(Left, Mid)
             copy(Right, Left)
             copy(Mid, Right)
@@ -205,7 +205,7 @@ Held = Real("Held")
 
 def _copy_plc() -> PLC:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(Written, Held)
             math(Steps + 1, Steps)
     plc = PLC(program, dt=0.01)

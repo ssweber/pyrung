@@ -16,7 +16,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     blockcopy,
     branch,
     call,
@@ -43,6 +42,7 @@ from pyrung.core import (
     rise,
     rro,
     rsh,
+    rung,
     search,
     shift,
     subroutine,
@@ -992,8 +992,8 @@ def _exclusive_resource_key(spec: InstrSpec) -> tuple[str, str] | None:
 
 def _exclusive_owners_are_unique(rungs: list[RungSpec]) -> bool:
     seen: set[tuple[str, str]] = set()
-    for rung in rungs:
-        for instr in rung.instructions:
+    for spec in rungs:
+        for instr in spec.instructions:
             key = _exclusive_resource_key(instr)
             if key is None:
                 continue
@@ -1047,16 +1047,16 @@ def _seed_comparison_rungs(
     for sub in subs:
         all_rungs.extend(sub.rungs)
 
-    for rung in all_rungs:
-        for instr_list in [rung.instructions, *(b.instructions for b in rung.branches)]:
+    for spec in all_rungs:
+        for instr_list in [spec.instructions, *(b.instructions for b in spec.branches)]:
             for instr in instr_list:
                 if instr.kind in _WRITE_DEST_KINDS:
                     dest = instr.args.get("dest")
                     if dest is not None and hasattr(dest, "name"):
                         written_names.add(dest.name)
-        for cond in rung.conditions:
+        for cond in spec.conditions:
             _collect_compared_names(cond, compared_names)
-        for b in rung.branches:
+        for b in spec.branches:
             for cond in b.conditions:
                 _collect_compared_names(cond, compared_names)
 
@@ -1226,12 +1226,12 @@ def build_program(spec: ProgramSpec) -> Program:
     with Program(strict=False) as logic:
         for rs in spec.rungs:
             conds = [build_condition(c) for c in rs.conditions]
-            with Rung(*conds):
+            with rung(*conds):
                 _emit_rung_body(rs)
         for sub in spec.subroutines:
             with subroutine(sub.name):
                 for rs in sub.rungs:
                     conds = [build_condition(c) for c in rs.conditions]
-                    with Rung(*conds):
+                    with rung(*conds):
                         _emit_rung_body(rs)
     return logic

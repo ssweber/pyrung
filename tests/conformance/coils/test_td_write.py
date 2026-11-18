@@ -66,7 +66,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, debounce, flasher, on_delay
+from pyrung.core import copy, debounce, flasher, on_delay, rung
 from tests.conformance.memory import ClickTimer, c, td
 
 
@@ -86,99 +86,99 @@ def _zero(*tds: Any) -> Any:
 
 def _clock(slot: Any, n: int) -> Any:
     """Add a TON of *n* that times from the scan after step 0's write, and return its TD in ms."""
-    with Rung(slot.Cmd != 0, slot.Scratch >= 1):
+    with rung(slot.Cmd != 0, slot.Scratch >= 1):
         on_delay(ClickTimer(n), 5000)
     return td[n]
 
 
 def prove_debounce_on_td_write(slot: Any) -> None:
     coil, on_td = c[261], td[150]
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         debounce(coil, on=(ClickTimer(150), 500), off=(ClickTimer(151), 50))
     clock = _clock(slot, 152)
-    with Rung(*_step(slot, 4)):
+    with rung(*_step(slot, 4)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 3), clock >= 600, on_td >= 1050):
+    with rung(*_step(slot, 3), clock >= 600, on_td >= 1050):
         copy(1, slot.Result3)
-    with Rung(*_step(slot, 3), clock >= 600, on_td == 500):
+    with rung(*_step(slot, 3), clock >= 600, on_td == 500):
         copy(2, slot.Result3)
-    with Rung(*_step(slot, 3), clock >= 600):
+    with rung(*_step(slot, 3), clock >= 600):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2), clock >= 50, on_td > 500):
+    with rung(*_step(slot, 2), clock >= 50, on_td > 500):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 50, on_td == 500):
+    with rung(*_step(slot, 2), clock >= 50, on_td == 500):
         copy(2, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 50):
+    with rung(*_step(slot, 2), clock >= 50):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), coil):
+    with rung(*_step(slot, 1), coil):
         copy(1, slot.Result1)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 1), clock >= 300):
+    with rung(*_step(slot, 1), clock >= 300):
         copy(2, slot.Result1)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), on_td >= 100):
+    with rung(*_step(slot, 0), on_td >= 100):
         copy(500, on_td)
         copy(1, slot.Scratch)
 
 
 def prove_flasher_on_td_write(slot: Any) -> None:
     coil, on_td, off_td = c[262], td[153], td[154]
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(coil, on=(ClickTimer(153), 500), off=(ClickTimer(154), 500))
     clock = _clock(slot, 155)
-    with Rung(*_step(slot, 4)):
+    with rung(*_step(slot, 4)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 3), clock >= 700, coil):
+    with rung(*_step(slot, 3), clock >= 700, coil):
         copy(1, slot.ErrorCode)
-    with Rung(*_step(slot, 3), clock >= 700, ~coil):
+    with rung(*_step(slot, 3), clock >= 700, ~coil):
         copy(2, slot.ErrorCode)
-    with Rung(*_step(slot, 3), clock >= 700):
+    with rung(*_step(slot, 3), clock >= 700):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2), clock >= 50, off_td > 0, off_td < 500):
+    with rung(*_step(slot, 2), clock >= 50, off_td > 0, off_td < 500):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 50, off_td == 0):
+    with rung(*_step(slot, 2), clock >= 50, off_td == 0):
         copy(2, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 50, on_td >= 600, on_td <= 650):
+    with rung(*_step(slot, 2), clock >= 50, on_td >= 600, on_td <= 650):
         copy(1, slot.Result3)
-    with Rung(*_step(slot, 2), clock >= 50, on_td < 500):
+    with rung(*_step(slot, 2), clock >= 50, on_td < 500):
         copy(2, slot.Result3)
-    with Rung(*_step(slot, 2), clock >= 50):
+    with rung(*_step(slot, 2), clock >= 50):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), ~coil):
+    with rung(*_step(slot, 1), ~coil):
         copy(1, slot.Result1)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 1), clock >= 300):
+    with rung(*_step(slot, 1), clock >= 300):
         copy(2, slot.Result1)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), on_td >= 100):
+    with rung(*_step(slot, 0), on_td >= 100):
         copy(600, on_td)
         copy(1, slot.Scratch)
 
 
 def prove_flasher_off_td_write(slot: Any) -> None:
     coil, on_td, off_td = c[263], td[156], td[157]
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(coil, on=(ClickTimer(156), 200), off=(ClickTimer(157), 500))
     clock = _clock(slot, 158)
-    with Rung(*_step(slot, 3)):
+    with rung(*_step(slot, 3)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 2), clock >= 50, off_td >= 600, off_td <= 650):
+    with rung(*_step(slot, 2), clock >= 50, off_td >= 600, off_td <= 650):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 50, off_td < 500):
+    with rung(*_step(slot, 2), clock >= 50, off_td < 500):
         copy(2, slot.Result2)
-    with Rung(*_step(slot, 2), clock >= 50, on_td > 0, on_td < 200):
+    with rung(*_step(slot, 2), clock >= 50, on_td > 0, on_td < 200):
         copy(1, slot.Result3)
-    with Rung(*_step(slot, 2), clock >= 50, on_td >= 200):
+    with rung(*_step(slot, 2), clock >= 50, on_td >= 200):
         copy(2, slot.Result3)
-    with Rung(*_step(slot, 2), clock >= 50):
+    with rung(*_step(slot, 2), clock >= 50):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), coil):
+    with rung(*_step(slot, 1), coil):
         copy(1, slot.Result1)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 1), clock >= 250):
+    with rung(*_step(slot, 1), clock >= 250):
         copy(2, slot.Result1)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), off_td >= 150, ~coil):
+    with rung(*_step(slot, 0), off_td >= 150, ~coil):
         copy(600, off_td)
         copy(1, slot.Scratch)
 

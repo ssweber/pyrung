@@ -166,15 +166,15 @@ with Program(strict=False) as p:
 def test_validation_sees_body_rung_contacts():
     from pyrung.click import ClickBlocks, TagMap
     from pyrung.click.validation import validate_click_program
-    from pyrung.core import Program, Rung, forloop, out
+    from pyrung.core import Program, forloop, out, rung
 
     blocks = ClickBlocks()
     with Program(strict=False) as logic:
-        with Rung(blocks.x[1]):
+        with rung(blocks.x[1]):
             with forloop(2):
-                with Rung(blocks.ds[blocks.ds[1]] == 0):
+                with rung(blocks.ds[blocks.ds[1]] == 0):
                     out(blocks.y[1])
-                with Rung(blocks.ds[blocks.ds[2]] == 0):
+                with rung(blocks.ds[blocks.ds[2]] == 0):
                     out(blocks.y[2])
     report = validate_click_program(logic, TagMap(include_system=False), mode="strict")
     locations = sorted(f.location for f in report.errors if f.code == "CLK_PTR_CONTEXT_ONLY_COPY")

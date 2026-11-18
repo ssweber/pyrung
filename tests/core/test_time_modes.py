@@ -271,15 +271,15 @@ class TestRealtimeClockEdges:
 
     @staticmethod
     def _edge_program():
-        from pyrung.core import Int, Rung, fall, math, rise
+        from pyrung.core import Int, fall, math, rise, rung
         from pyrung.core.system_points import system
 
         rises, falls = Int("Rises"), Int("Falls")
         clock = system.sys.clock_100ms
         with Program() as logic:
-            with Rung(rise(clock)):
+            with rung(rise(clock)):
                 math(rises + 1, rises)
-            with Rung(fall(clock)):
+            with rung(fall(clock)):
                 math(falls + 1, falls)
         return logic
 

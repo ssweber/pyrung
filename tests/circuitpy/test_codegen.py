@@ -33,7 +33,6 @@ from pyrung.core import (
     OutputBlock,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -65,6 +64,7 @@ from pyrung.core import (
     rsh,
     run_enabled_function,
     run_function,
+    rung,
     search,
     shift,
     sin,
@@ -426,7 +426,7 @@ class TestGenerateCircuitPyAPI:
         hw.slot(1, "P1-08SIM")
         blocks = ClickBlocks()
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(5, blocks.ds[3901])
         mapping = TagMap({Bool("Mapped"): blocks.c[1]}, include_system=False)
 
@@ -455,7 +455,7 @@ class TestGenerateCircuitPyAPI:
     def test_allows_zero_slot_codegen_when_board_tags_are_used(self):
         hw = P1AM()
         with Program(strict=False) as prog:
-            with Rung(board.switch):
+            with rung(board.switch):
                 out(board.led)
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "base.rollCall" not in source_code
@@ -468,7 +468,7 @@ class TestGenerateCircuitPyAPI:
         hw.slot(1, "P1-08SIM")
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 run_function(abs)
 
         with pytest.raises(ValueError, match="cannot read the source of"):
@@ -481,7 +481,7 @@ class TestGenerateCircuitPyAPI:
         external = InputBlock("External", TagType.BOOL, 1, 8)[1]
 
         with Program(strict=False) as prog:
-            with Rung(external):
+            with rung(external):
                 out(light)
 
         with pytest.raises(ValueError, match="CPY_IO_BLOCK_UNTRACKED"):
@@ -496,7 +496,7 @@ class TestGenerateCircuitPyAPI:
             return {"result": 1}
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 on_delay(Timer[1], preset=5, unit="Tms")
                 run_function(fn, outs={"result": dest})
 
@@ -508,7 +508,7 @@ class TestDeterministicOutput:
     def test_same_inputs_generate_identical_output(self):
         hw, di, do = _basic_hw()
         with Program(strict=False) as prog:
-            with Rung(di[1]):
+            with rung(di[1]):
                 out(do[1])
 
         s1 = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000).code
@@ -521,7 +521,7 @@ class TestEdgeSiteMemory:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 out(Bool("Light"))
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -537,11 +537,11 @@ class TestEdgeSiteMemory:
         light = Bool("Light")
 
         with Program(strict=False) as prog:
-            with Rung(RisingEdgeCondition(sensor)):
+            with rung(RisingEdgeCondition(sensor)):
                 out(light)
-            with Rung(BitCondition(log_enable)):
+            with rung(BitCondition(log_enable)):
                 out(aux)
-            with Rung(FallingEdgeCondition(log_enable)):
+            with rung(FallingEdgeCondition(log_enable)):
                 out(light)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -565,7 +565,7 @@ class TestEdgeSiteMemory:
         cnt = Counter.clone("Cnt")
         leg = Or(y, rise(z)) if edge else y
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 with forloop(2):
                     latch(y)
                     count_up(cnt, 100).reset(leg)
@@ -598,7 +598,7 @@ class TestConditionAndExpressionCompiler:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(condition):
+            with rung(condition):
                 out(light)
         ctx = _context_for_program(prog, hw)
         compiled = compile_condition(condition, ctx)
@@ -663,15 +663,15 @@ class TestInstructionCoverage:
         idx = Int("Idx")
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 on_delay(Timer[1], preset=5).reset(reset_tag)
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 off_delay(Timer2, preset=5)
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 count_up(Counter[1], preset=2).reset(reset_tag)
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 count_down(Counter2, preset=2).reset(reset_tag)
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 copy(40000, source)
                 math(source + 1, calc_out)
                 blockcopy(ds.select(1, 3), dd.select(1, 3))
@@ -705,12 +705,12 @@ class TestInstructionCoverage:
         reset_tag = Bool("Reset")
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 search(ds.select(1, 10) >= 5, result=result, found=found, continuous=True)
                 search(txt.select(1, 8) == "AB", result=result, found=found)
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 shift(bits.select(1, 8)).clock(clock).reset(reset_tag)
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 pack_bits(bits.select(1, 16), word)
                 pack_words(words.select(1, 2), dword)
                 pack_text(txt.select(1, 8), dword, allow_whitespace=True)
@@ -752,7 +752,7 @@ class TestInstructionCoverage:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable", default=True)):
+            with rung(Bool("Enable", default=True)):
                 time_event_drum(
                     outputs=[Bool("Out1"), Bool("Out2")],
                     presets=[100, None],
@@ -777,7 +777,7 @@ class TestInstructionCoverage:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 off_delay(Timer2, preset=0)
 
         result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
@@ -792,7 +792,7 @@ class TestInstructionCoverage:
         hw.slot(1, "P1-08SIM")
         timers = Timer.clone("OutT", count=5)
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable", default=True)):
+            with rung(Bool("Enable", default=True)):
                 toggle(Bool("Lamp"))
                 debounce(Bool("Valve"), on=(timers[1], 100), off=(timers[2], 50))
                 flasher(Bool("Beacon"), on=(timers[3], 500), off=(timers[4], 500), unit="sec")
@@ -822,7 +822,7 @@ class TestInstructionCoverage:
         out4 = Bool("Out4")
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 event_drum(
                     outputs=[out1, out2],
                     events=[event1, event2],
@@ -830,7 +830,7 @@ class TestInstructionCoverage:
                     current_step=step,
                     completion_flag=done,
                 ).reset(reset_cmd).jump(jump_cmd, step=step).jog(jog_cmd)
-            with Rung(enable):
+            with rung(enable):
                 time_drum(
                     outputs=[out1, out2, out3, out4],
                     presets=[0, 0, 0, 0],
@@ -904,9 +904,9 @@ class TestInstructionCoverage:
         TagMap({cfg: dh_bank.select(201, 203)}, include_system=False)
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(dh_bank[idx + 200], picked)  # indirect, through the bank
-            with Rung(clear):
+            with rung(clear):
                 fill(0, cfg.select(1, 3))  # range, through the block
 
         ctx = CodegenContext.for_kernel(prog)
@@ -932,7 +932,7 @@ class TestInstructionCoverage:
         TagMap({cfg: ds_bank.select(100, 107)}, include_system=False)
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(cfg[idx], a)
                 copy(ds_bank[idx], b)
 
@@ -949,7 +949,7 @@ class TestInstructionCoverage:
         out_flag = Bool("Out")
 
         with Program(strict=False) as prog:
-            with Rung(state == SortState.IDLE):
+            with rung(state == SortState.IDLE):
                 out(out_flag)
 
         compiled = compile_kernel(prog)
@@ -960,7 +960,7 @@ class TestInstructionCoverage:
         out_tag = Int("Out")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(ds[3], out_tag)
                 copy(7, ds[4])
 
@@ -977,7 +977,7 @@ class TestInstructionCoverage:
         out_tag = Int("Out")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(ds[idx], out_tag)
                 copy(9, ds[idx])
 
@@ -1002,10 +1002,10 @@ class TestInstructionCoverage:
         reset_cmd = Bool("Reset")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 fill(3, ds.select(1, 3))
                 search(ds.select(1, 3) >= 3, result=result, found=found)
-            with Rung():
+            with rung():
                 shift(bits.select(1, 3)).clock(clock).reset(reset_cmd)
 
         compiled = compile_kernel(prog, blockless=True)
@@ -1023,10 +1023,10 @@ class TestInstructionCoverage:
         counter = Int("Counter", retentive=True, min=0, max=1)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 with forloop(counter):
                     copy(counter, counter)
-            with Rung(enable):
+            with rung(enable):
                 copy(counter, counter)
 
         compiled = compile_kernel(prog, blockless=True)
@@ -1043,13 +1043,13 @@ class TestInstructionCoverage:
         a, b, d, e = Bool("A"), Bool("B"), Bool("D"), Bool("E")
         c1, c2, c3 = Counter.clone("C1"), Counter.clone("C2"), Counter.clone("C3")
         with Program(strict=False) as prog:
-            with Rung(a):
+            with rung(a):
                 out(b)
-            with Rung(a, e).continued():
+            with rung(a, e).continued():
                 count_up(c1, 3).reset(d)
-            with Rung(a).continued():
+            with rung(a).continued():
                 count_up(c2, 3).reset(b)
-            with Rung(a):
+            with rung(a):
                 with forloop(2):
                     out(d)
                     count_up(c3, 3).reset(d)
@@ -1082,15 +1082,15 @@ class TestInstructionCoverage:
             return {"result": value + (1 if enabled else 0)}
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 run_function(plus_one, ins={"value": source}, outs={"result": dest})
                 run_enabled_function(gated, ins={"value": source}, outs={"result": dest})
                 call("worker")
 
             with subroutine("worker"):
-                with Rung(Bool("Stop")):
+                with rung(Bool("Stop")):
                     return_early()
-                with Rung(Bool("Enable")):
+                with rung(Bool("Enable")):
                     out(Bool("Light"))
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1111,7 +1111,7 @@ class TestInstructionCoverage:
             return {"result": pymath.floor(value / 2)}
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(7, source)
                 run_function(floors_half, ins={"value": source}, outs={"result": dest})
 
@@ -1127,7 +1127,7 @@ class TestInstructionCoverage:
                 return
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 out(Bool("Light"))
 
         prog.rungs[0].add_instruction(UnknownInstruction())
@@ -1142,7 +1142,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         step = Int("Step")
 
         with Program(strict=False) as prog:
-            with Rung(And(Bool("Enable"), system.storage.sd.ready)):
+            with rung(And(Bool("Enable"), system.storage.sd.ready)):
                 copy(5, step)
                 out(board.save_memory_cmd)
                 out(system.storage.sd.eject_cmd)
@@ -1188,7 +1188,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         step = Int("Step")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(1, step)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1208,7 +1208,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         count = Int("Count")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(1, count)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1222,7 +1222,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         count = Int("Count")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(1, count)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1242,7 +1242,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         level = Real("Level")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(1.5, level)
 
         result = generate_circuitpy(prog, hw, target_scan_ms=10.0)
@@ -1266,7 +1266,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         level = Real("Level")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(1.5, level)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1295,7 +1295,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         count = Int("Count")
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(1, count)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1337,7 +1337,7 @@ class TestPersistenceWatchdogAndDiagnostics:
     def test_watchdog_and_scan_diagnostics_emit(self):
         hw, di, do = _basic_hw()
         with Program(strict=False) as prog:
-            with Rung(di[1]):
+            with rung(di[1]):
                 out(do[1])
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000).code
@@ -1364,9 +1364,9 @@ class TestIOMappingAndBranching:
         combo_in, combo_out = hw.slot(5, "P1-16CDR")
 
         with Program(strict=False) as prog:
-            with Rung(di[1]):
+            with rung(di[1]):
                 out(do[1])
-            with Rung(combo_in[1]):
+            with rung(combo_in[1]):
                 out(combo_out[1])
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1385,7 +1385,7 @@ class TestIOMappingAndBranching:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 out(a)
                 with branch(branch_enable):
                     out(b)
@@ -1417,7 +1417,7 @@ class TestIOMappingAndBranching:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 reset(target)
 
         ctx = _context_for_program(prog, hw)
@@ -1430,9 +1430,9 @@ class TestBoardPeripheralsAndRunStop:
     def test_board_peripheral_codegen_emits_wiring_and_neopixel_clamp(self):
         hw = P1AM()
         with Program(strict=False) as prog:
-            with Rung(board.switch):
+            with rung(board.switch):
                 out(board.led)
-            with Rung(Bool("Enable", default=True)):
+            with rung(Bool("Enable", default=True)):
                 copy(999, board.neopixel.r)
                 copy(-3, board.neopixel.g)
                 copy(128, board.neopixel.b)
@@ -1449,7 +1449,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_runstop_emits_mapping_and_mode_tag_support(self):
         hw, di, do = _basic_hw()
         with Program(strict=False) as prog:
-            with Rung(di[1]):
+            with rung(di[1]):
                 out(do[1])
 
         source_code = generate_circuitpy(
@@ -1473,7 +1473,7 @@ class TestBoardPeripheralsAndRunStop:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 out(outputs[1])
 
         result = generate_circuitpy(
@@ -1521,7 +1521,7 @@ class TestBoardPeripheralsAndRunStop:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 out(outputs[1])
 
         result = generate_circuitpy(
@@ -1569,7 +1569,7 @@ class TestBoardPeripheralsAndRunStop:
         cube = Real("Cube")
         neg = Real("Neg", default=-3.0e38)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(big * 10, dest)
                 math(big * -10, low)
                 copy(dint, copied)
@@ -1646,10 +1646,10 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             # Scan 0 builds the operand and sets SC43. Scan 1 starts with SC43 off,
             # so the flag on scan 1 comes from the bitwise op.
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 math(big * 10, inf)
                 math(inf - inf if operand == "nan" else inf + 0, odd)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 math(make(odd), dest)
                 out(after)
 
@@ -1682,10 +1682,10 @@ class TestBoardPeripheralsAndRunStop:
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 math(r * 2, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
@@ -1702,10 +1702,10 @@ class TestBoardPeripheralsAndRunStop:
         r, setup = self._non_finite_real(operand)
         dest = Real("Dest", default=7.0)
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 math(r * 2, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
@@ -1742,10 +1742,10 @@ class TestBoardPeripheralsAndRunStop:
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(r, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=2)
@@ -1778,7 +1778,7 @@ class TestBoardPeripheralsAndRunStop:
         source = source_tag("Source", default=value)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(source, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
@@ -1789,7 +1789,7 @@ class TestBoardPeripheralsAndRunStop:
         """A literal source clamps and sets the flag, as a tag source does."""
         dest = Int("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(literal, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
@@ -1805,14 +1805,14 @@ class TestBoardPeripheralsAndRunStop:
         first, second = Int("First"), Int("Second")
         seen = Bool("Seen")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy(values[0], source[1])
                 copy(values[1], source[2])
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 blockcopy(source.select(1, 2), dest.select(1, 2))
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(seen)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(dest[1], first)
                 copy(dest[2], second)
 
@@ -1828,14 +1828,14 @@ class TestBoardPeripheralsAndRunStop:
         first, second = Dint("First"), Dint("Second")
         seen = Bool("Seen")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy(1.0e10, source[1])
                 copy(-1.0e10, source[2])
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 blockcopy(source.select(1, 2), dest.select(1, 2))
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(seen)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(dest[1], first)
                 copy(dest[2], second)
 
@@ -1849,11 +1849,11 @@ class TestBoardPeripheralsAndRunStop:
         first, second = Int("First"), Int("Second")
         seen = Bool("Seen")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 fill(source, dest.select(1, 2))
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(seen)
-            with Rung():
+            with rung():
                 copy(dest[1], first)
                 copy(dest[2], second)
 
@@ -1870,11 +1870,11 @@ class TestBoardPeripheralsAndRunStop:
         chars = Block("Chars", TagType.CHAR, 1, 5)
         codes = [Int(f"Code{i}") for i in range(1, 6)]
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
                 copy("Z", chars[1])
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(r, chars[1], convert=to_text(exponential=exponential))
                 for i, code in enumerate(codes, start=1):
                     copy(chars[i], code, convert=to_ascii)
@@ -1905,15 +1905,15 @@ class TestBoardPeripheralsAndRunStop:
         code = Int("Code", default=7)
         after = Int("After")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
                 copy(r, reals[1])
                 copy(r, reals[2])
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 store(r, chars, reals)
                 copy(5, after)
-            with Rung(~system.sys.first_scan, chars[1] == "A"):
+            with rung(~system.sys.first_scan, chars[1] == "A"):
                 copy(1, code)
 
         results = _on_every_backend(prog, monkeypatch, (code, *self._FAULTS, after), scans=2)
@@ -1927,10 +1927,10 @@ class TestBoardPeripheralsAndRunStop:
         r, setup = self._non_finite_real(operand)
         ch = Char("Ch", default="A")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(r, ch)
 
         results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS), scans=2)
@@ -1940,7 +1940,7 @@ class TestBoardPeripheralsAndRunStop:
         r = Real("R", default=66.5)
         ch = Char("Ch", default="A")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(r, ch)
 
         results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS), scans=1)
@@ -1956,10 +1956,10 @@ class TestBoardPeripheralsAndRunStop:
         digit = Int("Digit", default=99)
         point = Bool("Point")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(r, chars[1])
                 copy(chars[1], digit)
-            with Rung(chars[3] == "."):
+            with rung(chars[3] == "."):
                 out(point)
 
         watched = (chars[1], digit, point, *self._FAULTS)
@@ -1979,12 +1979,12 @@ class TestBoardPeripheralsAndRunStop:
         int_text = Bool("IntText")
         word_text = Bool("WordText")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(n, chars[1])
                 copy(h, chars[5])
-            with Rung(chars[1] == "-", chars[2] == "4", chars[3] == "2"):
+            with rung(chars[1] == "-", chars[2] == "4", chars[3] == "2"):
                 out(int_text)
-            with Rung(chars[5] == "A", chars[6] == "B"):
+            with rung(chars[5] == "A", chars[6] == "B"):
                 out(word_text)
 
         results = _on_every_backend(prog, monkeypatch, (int_text, word_text), scans=1)
@@ -2000,10 +2000,10 @@ class TestBoardPeripheralsAndRunStop:
         ch = Char("Ch", default="A")
         after = Bool("After")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(r, ch, convert=to_binary)
                 out(after)
 
@@ -2020,10 +2020,10 @@ class TestBoardPeripheralsAndRunStop:
         dest = Dint("Dest", default=7)
         after = Int("After")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 math(randint(0, r) + 5, dest)
                 copy(5, after)
 
@@ -2036,7 +2036,7 @@ class TestBoardPeripheralsAndRunStop:
         low, high = Real("Low", default=3.0), Real("High", default=5.0)
         dest = Int("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(low, high), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=2)
@@ -2054,7 +2054,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = dest_tag("Dest", default=7)
         after = Int("After")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(*bounds) / 2, dest)
                 copy(5, after)
 
@@ -2067,7 +2067,7 @@ class TestBoardPeripheralsAndRunStop:
 
         copied = Int("Copied", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(randint(7, 7), copied)
 
         results = _on_every_backend(prog, monkeypatch, (copied, *self._FAULTS), scans=1)
@@ -2079,7 +2079,7 @@ class TestBoardPeripheralsAndRunStop:
 
         dest = Int("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(70000, 70002), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
@@ -2095,7 +2095,7 @@ class TestBoardPeripheralsAndRunStop:
         roll = randint(70000, 70002)
         narrow, wide = Int("Narrow", default=7), Dint("Wide", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 for dest in (narrow, wide) if narrow_first else (wide, narrow):
                     math(roll, dest)
 
@@ -2119,7 +2119,7 @@ class TestBoardPeripheralsAndRunStop:
         n = Int("N", default=16)
         dest = Int("Dest")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(make(n), make(n) + 1), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
@@ -2133,7 +2133,7 @@ class TestBoardPeripheralsAndRunStop:
         r = Real("R", default=3.5)
         dest = Int("Dest")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(r + 0, 5), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
@@ -2157,7 +2157,7 @@ class TestBoardPeripheralsAndRunStop:
 
         dest = Int("Dest", default=9)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(*bounds), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
@@ -2185,9 +2185,9 @@ class TestBoardPeripheralsAndRunStop:
         d = dest("D", default=-1)
         after = Bool("After")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(make(randint, n), d)
-            with Rung():
+            with rung():
                 out(after)
 
         results = _on_every_backend(
@@ -2202,7 +2202,7 @@ class TestBoardPeripheralsAndRunStop:
         n = Int("N", default=-1)
         d = Dint("D", default=-1)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(randint(0, sqrt(n)), d)
 
         results = _on_every_backend(
@@ -2216,7 +2216,7 @@ class TestBoardPeripheralsAndRunStop:
         lo = Char("Lo", default="3")
         dest = Int("Dest")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(lo, 5), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
@@ -2238,12 +2238,12 @@ class TestBoardPeripheralsAndRunStop:
         copied = Dint("Copied", default=7)
         after = Bool("After")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(randint(0, r + 0), copied)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 math(randint(0, r + 0) + 5, dest)
                 out(after)
 
@@ -2258,7 +2258,7 @@ class TestBoardPeripheralsAndRunStop:
 
         dest = Dint("Dest", default=7)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(randint(70000, 70002), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=3)
@@ -2278,13 +2278,13 @@ class TestBoardPeripheralsAndRunStop:
         hits = Int("Hits")
         after = Bool("After")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 with forloop(r):
                     math(hits + 1, hits)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 out(after)
 
         results = _on_every_backend(
@@ -2296,7 +2296,7 @@ class TestBoardPeripheralsAndRunStop:
         r = Real("R", default=3.0)
         hits = Int("Hits")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 with forloop(r):
                     math(hits + 1, hits)
 
@@ -2314,10 +2314,10 @@ class TestBoardPeripheralsAndRunStop:
         wide_hits = Dint("WideHits")
         narrow_hits = Dint("NarrowHits")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 with forloop(wide):
                     math(wide_hits + 1, wide_hits)
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 with forloop(narrow):
                     math(narrow_hits + 1, narrow_hits)
 
@@ -2338,10 +2338,10 @@ class TestBoardPeripheralsAndRunStop:
         three = Dint("Three", default=3)
         hits = Dint("Hits")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy(-1, longs[1])
             for count in (minus_one, lowest, longs[pointer], three):
-                with Rung(system.sys.first_scan):
+                with rung(system.sys.first_scan):
                     with forloop(count):
                         math(hits + 1, hits)
 
@@ -2359,11 +2359,11 @@ class TestBoardPeripheralsAndRunStop:
         minus_two = Dint("MinusTwo", default=-2)
         whole, signed = Dint("Whole"), Dint("Signed")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 with forloop(70000):
                     math(whole + 1, whole)
             for count in (low, minus_two):
-                with Rung(system.sys.first_scan):
+                with rung(system.sys.first_scan):
                     with forloop(count):
                         math(signed + 1, signed)
 
@@ -2410,15 +2410,15 @@ class TestBoardPeripheralsAndRunStop:
         hits = Int("Hits")
         after = Int("After")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 math(big * 10, r)  # +Inf, with SC43 on scan 0 only
-            with Rung(~system.sys.first_scan, expr == (5 if label == "div_then_add" else 0)):
+            with rung(~system.sys.first_scan, expr == (5 if label == "div_then_add" else 0)):
                 out(hit)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(expr, copied)
                 with forloop(expr):
                     math(hits + 1, hits)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(5, after)
 
         results = _on_every_backend(
@@ -2436,9 +2436,9 @@ class TestBoardPeripheralsAndRunStop:
         dest = Int("Dest", default=7)
         hit = Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung((i / z) == 0):
+            with rung((i / z) == 0):
                 out(hit)
-            with Rung():
+            with rung():
                 math(i / z, dest)
 
         results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
@@ -2449,7 +2449,7 @@ class TestBoardPeripheralsAndRunStop:
         big = Real("Big", default=3.0e38)
         hit = Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung((big * 10) > 1.0e38):
+            with rung((big * 10) > 1.0e38):
                 out(hit)
 
         results = _on_every_backend(prog, monkeypatch, (hit, *self._FAULTS), scans=1)
@@ -2465,12 +2465,12 @@ class TestBoardPeripheralsAndRunStop:
         copied = Dint("Copied", default=7)
         hit = Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 for expr, target in setup:
                     math(expr, target)
-            with Rung(~system.sys.first_scan):
+            with rung(~system.sys.first_scan):
                 copy(randint(0, r), copied)
-            with Rung(~system.sys.first_scan, randint(0, r) == 0):
+            with rung(~system.sys.first_scan, randint(0, r) == 0):
                 out(hit)
 
         results = _on_every_backend(prog, monkeypatch, (copied, hit, *self._FAULTS), scans=2)
@@ -2482,10 +2482,10 @@ class TestBoardPeripheralsAndRunStop:
         z = Int("Z")
         got = Int("Got")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(11, ds[0])
                 copy(22, ds[1])
-            with Rung():
+            with rung():
                 copy(ds[i // z], got)
 
         results = _on_every_backend(prog, monkeypatch, (got, *self._FAULTS), scans=1)
@@ -2516,9 +2516,9 @@ class TestBoardPeripheralsAndRunStop:
         hit = Bool("Hit")
         copied = Real("Copied", default=7.0)
         with Program(strict=False) as prog:
-            with Rung(expr == 0):
+            with rung(expr == 0):
                 out(hit)
-            with Rung():
+            with rung():
                 copy(expr, copied)
 
         results = _on_every_backend(prog, monkeypatch, (hit, copied, *self._FAULTS), scans=1)
@@ -2540,7 +2540,7 @@ class TestBoardPeripheralsAndRunStop:
         bd = Dint("BD", default=2_000_000_000)
         dest = Real("Dest", default=7.0)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(make(e, bd), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
@@ -2596,7 +2596,7 @@ class TestBoardPeripheralsAndRunStop:
         w, r = Word("W", default=0x8001), Real("R", default=-7.5)
         dest = dest_type("Dest", default=99)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(make(n, d, z, w, r), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
@@ -2614,13 +2614,13 @@ class TestBoardPeripheralsAndRunStop:
         copied, indexed = Int("Copied", default=99), Int("Indexed", default=99)
         ds = Block("DS", TagType.INT, 1, 10)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(42, ds[10])
-            with Rung(n % 2 == 1):
+            with rung(n % 2 == 1):
                 out(odd)
-            with Rung(z**z == 1):
+            with rung(z**z == 1):
                 out(zero_power)
-            with Rung():
+            with rung():
                 copy(n % 2, copied)
                 copy(ds[(p - 1) % 10 + 1], indexed)
 
@@ -2638,7 +2638,7 @@ class TestBoardPeripheralsAndRunStop:
         dest = Dint("Dest", default=99)
         assert type(r.default) is float
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(r * r + 1 - r * r, dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
@@ -2664,9 +2664,9 @@ class TestBoardPeripheralsAndRunStop:
             return r * r * r * r * r * r * r * r * r * r / 3
 
         with Program(strict=False) as prog:
-            with Rung(big() > 0):
+            with rung(big() > 0):
                 out(hit)
-            with Rung():
+            with rung():
                 copy(big(), copied)
 
         results = _on_every_backend(prog, monkeypatch, (hit, copied), scans=1)
@@ -2675,7 +2675,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_real_calc_step_is_not_stepped_as_a_double(self):
         r1, r2, r3 = Real("R1"), Real("R2"), Real("R3")
         with Program() as prog:
-            with Rung():
+            with rung():
                 math(r1 + r2 * r1 - r2, r3)
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
@@ -2689,7 +2689,7 @@ class TestBoardPeripheralsAndRunStop:
         source = dest_type("Source", default=floor)
         dest = dest_type("Dest", default=99)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(abs(source), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
@@ -2714,11 +2714,11 @@ class TestBoardPeripheralsAndRunStop:
         copied = Real("Copied", default=7.0)
         dest = Real("Dest", default=7.0)
         with Program(strict=False) as prog:
-            with Rung(make(n, h) == 0):
+            with rung(make(n, h) == 0):
                 out(hit)
-            with Rung():
+            with rung():
                 copy(make(n, h), copied)
-            with Rung():
+            with rung():
                 math(make(n, h), dest)
 
         results = _on_every_backend(prog, monkeypatch, (hit, copied, dest, *self._FAULTS), scans=1)
@@ -2746,9 +2746,9 @@ class TestBoardPeripheralsAndRunStop:
         dest = Word("Dest", default=7)
         hit = Bool("Hit")
         with Program(strict=False) as prog:
-            with Rung(make(w, c) == 0):
+            with rung(make(w, c) == 0):
                 out(hit)
-            with Rung():
+            with rung():
                 math(make(w, c), dest)
 
         results = _on_every_backend(prog, monkeypatch, (hit, dest, *self._FAULTS), scans=1)
@@ -2759,12 +2759,12 @@ class TestBoardPeripheralsAndRunStop:
         hw.slot(1, "P1-08SIM")
         txt = ClickBlocks().txt
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy("ZZ", txt[1])
                 copy("ABC", txt[1])
                 copy(txt[2], txt[8])
                 copy(txt[3], txt[9])
-            with Rung():
+            with rung():
                 copy("XY", txt[10])
 
         result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
@@ -2794,7 +2794,7 @@ class TestBoardPeripheralsAndRunStop:
         x = Real("X", default=-4.0)
         dest = Real("Dest", default=9.0)
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(sqrt(x), dest)
                 out(outputs[1])
 
@@ -2852,7 +2852,7 @@ class TestCopyConverterCodegen:
         ds = Block("DS", TagType.INT, 1, 12)
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 copy(ch[1], ds[1], convert=to_value)
                 blockcopy(ch.select(1, 3), ds.select(1, 3), convert=to_ascii)
 
@@ -2867,7 +2867,7 @@ class TestCopyConverterCodegen:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 fill("", ch.select(1, 12))
                 fill(0, ds.select(1, 12))
                 copy("5", ch[1])
@@ -2933,13 +2933,13 @@ class TestCopyConverterCodegen:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 copy("1", ch[1])
                 copy("A", ch[2])
                 copy("3", ch[3])
                 fill(9, ds.select(1, 3))
                 blockcopy(ch.select(1, 3), ds.select(1, 3), convert=to_value)
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(fault_seen)
 
         ctx = _context_for_program(prog, hw)
@@ -2986,7 +2986,7 @@ class TestCopyConverterCodegen:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 copy(77, ds[1])
                 copy(ch[11], ds[1], convert=to_ascii)
                 fill(55, ds.select(2, 3))
@@ -3034,7 +3034,7 @@ class TestCopyConverterCodegen:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 copy("ZZZZ", ch[1])
                 fill("", ch.select(1, 2))
                 reset(ch[3])
@@ -3096,9 +3096,9 @@ class TestCopyConverterCodegen:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 copy(source_value, target, convert=to_text(suppress_zero=False))
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(fault_seen)
 
         ctx = _context_for_program(prog, hw)
@@ -3136,7 +3136,7 @@ class TestGeneratedSourceSmoke:
     def test_generated_source_compile_and_execute_single_scan(self, monkeypatch):
         hw, di, do = _basic_hw()
         with Program(strict=False) as prog:
-            with Rung(di[1]):
+            with rung(di[1]):
                 out(do[1])
 
         source = generate_circuitpy(
@@ -3212,10 +3212,10 @@ class TestGeneratedSourceSmoke:
         enable = Bool("Enable", default=True)
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 # An empty CHAR slot parses as empty text. It must set the fault, not crash.
                 pack_text(txt.select(1, 1), parsed, allow_whitespace=True)
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(fault_seen)
 
         ctx = _context_for_program(prog, hw)
@@ -3313,19 +3313,19 @@ class TestRuntimeSplit:
         RxExCode = Int("RxExCode")
 
         with Program(strict=False) as prog:
-            with Rung(State == "r"):
+            with rung(State == "r"):
                 on_delay(RedTimer, preset=5000, unit="Tms")
-            with Rung(RedTimer.Done):
+            with rung(RedTimer.Done):
                 copy("g", State)
-            with Rung(State == "g"):
+            with rung(State == "g"):
                 on_delay(GreenTimer, preset=4000, unit="Tms")
-            with Rung(GreenTimer.Done):
+            with rung(GreenTimer.Done):
                 copy("y", State)
-            with Rung(State == "y"):
+            with rung(State == "y"):
                 on_delay(YellowTimer, preset=1500, unit="Tms")
-            with Rung(YellowTimer.Done):
+            with rung(YellowTimer.Done):
                 copy("r", State)
-            with Rung():
+            with rung():
                 receive(
                     target="panel",
                     remote_start=ModbusAddress(0, RegisterType.COIL),
@@ -3387,11 +3387,11 @@ class TestRuntimeSplit:
         State = Char("State", default="r")
 
         with Program(strict=False) as prog:
-            with Rung(State == "r"):
+            with rung(State == "r"):
                 on_delay(Timer4, preset=3000, unit="Tms")
-            with Rung(Timer4.Done):
+            with rung(Timer4.Done):
                 copy("g", State)
-            with Rung(State == "g"):
+            with rung(State == "g"):
                 copy(0, board.neopixel.r)
                 copy(255, board.neopixel.g)
 
@@ -3407,7 +3407,7 @@ class TestRuntimeSplit:
         c = ClickBlocks().c
         flag = Bool("Flag", default=True)
         with Program(strict=False) as prog:
-            with Rung(flag):
+            with rung(flag):
                 out(flag)
 
         hw = P1AM()
@@ -3434,7 +3434,7 @@ class TestRandIntCodegen:
         hw.slot(1, "P1-08SIM")
         lo = Int("Lo")
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 math(randint(lo, 6), Int("Out"))
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -3447,7 +3447,7 @@ class TestRandIntCodegen:
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 math(Int("A") + 1, Int("Out"))
         assert "import random" not in generate_circuitpy(prog, hw, target_scan_ms=10.0).code
 
@@ -3460,7 +3460,7 @@ class TestRangeAggregateCodegen:
         vals = Block("Vals", TagType.INT, 1, 4)
         outs = [Int(f"Out{i}") for i in range(5)]
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 math(vals.select(1, 4).max(), outs[0])
                 math(vals.select(1, 4).min(), outs[1])
                 math(vals.select(1, 4).median(), outs[2])
@@ -3496,7 +3496,7 @@ class TestCharAgainstChar:
         hit = Bool("Hit")
         compare = self._OPS[op]
         with Program(strict=False) as prog:
-            with Rung(compare(a, b)):
+            with rung(compare(a, b)):
                 out(hit)
 
         results = _on_every_backend(prog, monkeypatch, (hit,), scans=1)
@@ -3509,10 +3509,10 @@ class TestCharAgainstChar:
         hit = Bool("Hit")
         compare = self._OPS[op]
         with Program(strict=False) as prog:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy("A", slots[1])
                 copy("B", slots[2])
-            with Rung(~system.sys.first_scan, compare(slots[1], slots[2])):
+            with rung(~system.sys.first_scan, compare(slots[1], slots[2])):
                 out(hit)
 
         results = _on_every_backend(prog, monkeypatch, (hit,), scans=2)

@@ -26,11 +26,11 @@ from pyrung.core import (
     CompiledPLC,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     math,
     out,
+    rung,
 )
 from pyrung.core.condition import (
     CompareEq,
@@ -115,7 +115,7 @@ def _build(s_value: int) -> tuple[Program, dict[str, bool], dict[str, Int]]:
             expected[name] = bool(fn(left_value, right_value))
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for i in range(1, 51):
                 copy(_tbl(i), Tbl[i])
             copy(s_value, S)
@@ -126,7 +126,7 @@ def _build(s_value: int) -> tuple[Program, dict[str, bool], dict[str, Int]]:
             copy(Tbl[Q + 0], Tbl[R + 2])
             copy(Tbl[R + 2], F)
         for condition, coil in coils.values():
-            with Rung(condition):
+            with rung(condition):
                 out(coil)
 
     return prog, expected, {"D": D, "E": E, "F": F}
@@ -233,17 +233,17 @@ def test_original_repro_with_patched_pointer() -> None:
     C = Bool("C")
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for i in range(1, 51):
                 copy(i * 10, Tbl[i])
             copy(370, S)
-        with Rung(Tbl[Q + 0] == S):
+        with rung(Tbl[Q + 0] == S):
             out(A)
-        with Rung(S == Tbl[Q + 0]):
+        with rung(S == Tbl[Q + 0]):
             out(B)
-        with Rung(S == Tbl[Q]):
+        with rung(S == Tbl[Q]):
             out(C)
-        with Rung():
+        with rung():
             copy(Tbl[Q + 0], D)
 
     for runner_cls in (PLC, CompiledPLC):
@@ -299,7 +299,7 @@ def test_click_export_rejects_expression_index_in_comparison() -> None:
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(ds[idx + 1] == 5):
+        with rung(ds[idx + 1] == 5):
             out(Light)
 
     mapping = TagMap({idx: ds[100], Light: y[1]}, include_system=False)
@@ -321,7 +321,7 @@ def test_validate_accepts_eq_with_expression_operand(elem_kind: str, side: str) 
     elem = Tbl[Q] if elem_kind == "ptr" else Tbl[Q + 1]
     cond = S + 1 == elem if side == "expr_left" else elem == S + 1
     with Program() as p:
-        with Rung(cond):
+        with rung(cond):
             out(A)
     p.check()
 

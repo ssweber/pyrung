@@ -9,8 +9,8 @@ from pyrung.core._source import _capture_with_end_line
 
 def test_an_edited_file_gives_the_new_end_line(tmp_path: Path):
     path = tmp_path / "logic.py"
-    path.write_text("with Rung():\n    out(a)\n", encoding="utf-8")
+    path.write_text("with rung():\n    out(a)\n", encoding="utf-8")
     assert _capture_with_end_line(str(path), 1, context_name="Rung") == 2
 
-    path.write_text("with Rung():\n    out(a)\n    out(b)\n", encoding="utf-8")
+    path.write_text("with rung():\n    out(a)\n    out(b)\n", encoding="utf-8")
     assert _capture_with_end_line(str(path), 1, context_name="Rung") == 3

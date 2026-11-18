@@ -54,7 +54,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, debounce, flasher, out
+from pyrung.core import Or, copy, debounce, flasher, out, rung
 from tests.conformance.memory import ClickTimer, c, ds, td
 from tests.conformance.scans import count_scans, done, scans_for, trace
 
@@ -67,15 +67,15 @@ DEB_ON, DEB_OFF = ClickTimer(271), ClickTimer(272)
 
 def prove_off_td_at_fall(slot: Any) -> None:
     count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3)):
         out(DEB_RUNG)
-    with Rung(DEB_RUNG):
+    with rung(DEB_RUNG):
         debounce(DEB, on=(DEB_ON, 0), off=(DEB_OFF, 100))
     for scan, field in ((4, slot.Result1), (5, slot.Result2)):
-        with Rung(slot.Cmd != 0, slot.Scratch == scan):
+        with rung(slot.Cmd != 0, slot.Scratch == scan):
             copy(DEB_OFF.Acc, field)
     # The off TD before the rise depends on how long the reset ran: Result3 says only whether it is 0.
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, DEB_OFF.Acc == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, DEB_OFF.Acc == 0):
         copy(1, slot.Result3)
     done(slot)
 
@@ -115,14 +115,14 @@ def _flash(
 ) -> tuple[Any, Any]:
     """Add a flasher on ``Cmd`` and trace it over the window. Return its on and off TD tags."""
     count_scans(slot, FLASH_WINDOW)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(coil, on=(ClickTimer(on[0]), on[1]), off=(ClickTimer(off[0]), off[1]))
     trace(slot, coil, FLASH_WINDOW)
     return td[on[0]], td[off[0]]
 
 
 def _tds_on(slot: Any, scan: int, on_td: Any, off_td: Any) -> None:
-    with Rung(slot.Cmd != 0, slot.Scratch == scan):
+    with rung(slot.Cmd != 0, slot.Scratch == scan):
         copy(on_td, slot.Result4)
         copy(off_td, slot.ErrorCode)
 
@@ -164,28 +164,28 @@ def prove_lowered_to_zero(slot: Any) -> None:
     a, b = c[673], c[674]
     a_on, a_off, b_on, b_off = (ds[n] for n in LOWER_PRESETS)
     a_on_td, a_off_td, b_on_td, b_off_td = td[277], td[278], td[279], td[280]
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(a, on=(ClickTimer(277), a_on), off=(ClickTimer(278), a_off))
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(b, on=(ClickTimer(279), b_on), off=(ClickTimer(280), b_off))
     # These rungs sit above the rungs that lower the presets, so they start on the scan after.
-    with Rung(slot.Cmd != 0, a_on == 0, a):
+    with rung(slot.Cmd != 0, a_on == 0, a):
         copy(1, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, b_off == 0, b):
+    with rung(slot.Cmd != 0, b_off == 0, b):
         copy(2, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, a_on == 0, Or(a_on_td != slot.Result1, a_off_td != 0)):
+    with rung(slot.Cmd != 0, a_on == 0, Or(a_on_td != slot.Result1, a_off_td != 0)):
         copy(2, slot.Result2)
-    with Rung(slot.Cmd != 0, b_off == 0, Or(b_off_td != slot.Result3, b_on_td < b_on)):
+    with rung(slot.Cmd != 0, b_off == 0, Or(b_off_td != slot.Result3, b_on_td < b_on)):
         copy(2, slot.Result4)
-    with Rung(slot.Cmd != 0, a_on != 0, a_on_td >= A_LOWER_AT):
+    with rung(slot.Cmd != 0, a_on != 0, a_on_td >= A_LOWER_AT):
         copy(a_on_td, slot.Result1)
         copy(1, slot.Result2)
         copy(0, a_on)
-    with Rung(slot.Cmd != 0, b_off != 0, b_off_td >= B_LOWER_AT):
+    with rung(slot.Cmd != 0, b_off != 0, b_off_td >= B_LOWER_AT):
         copy(b_off_td, slot.Result3)
         copy(1, slot.Result4)
         copy(0, b_off)
-    with Rung(slot.Cmd != 0, b_off == 0):
+    with rung(slot.Cmd != 0, b_off == 0):
         copy(1, slot.Fired)
 
 
@@ -201,7 +201,7 @@ def init_lowered_to_zero(slot: Any) -> None:
 def prove_short_first_phase(slot: Any) -> None:
     on_td, _off_td = _flash(slot, c[677], (281, 1), (282, 1000))
     # No init clears T281/T282: stale TDs (164/1000 checked) change nothing, as the rung's rise restarts them.
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(on_td, slot.Result4)
     done(slot, FLASH_WINDOW)
 

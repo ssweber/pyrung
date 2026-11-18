@@ -21,7 +21,6 @@ from pyrung.click.validation import CLK_STEP_LIMIT, validate_click_program
 from pyrung.core import (
     Or,
     Program,
-    Rung,
     branch,
     call,
     comment,
@@ -32,6 +31,7 @@ from pyrung.core import (
     out,
     return_early,
     rise,
+    rung,
     subroutine,
 )
 
@@ -48,33 +48,33 @@ def _steps(body: Callable[[], None]) -> int:
 
 
 def _contact_out():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
 
 
 def _rail_out():
-    with Rung():
+    with rung():
         out(y[1])
 
 
 def _four_series():
-    with Rung(x[1], x[2], x[3], x[4]):
+    with rung(x[1], x[2], x[3], x[4]):
         out(y[1])
 
 
 def _three_parallel():
-    with Rung(Or(x[1], x[2], x[3])):
+    with rung(Or(x[1], x[2], x[3])):
         out(y[1])
 
 
 def _two_coils():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[1])
         out(c[2])
 
 
 def _four_coils():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[1])
         out(c[2])
         out(c[3])
@@ -82,7 +82,7 @@ def _four_coils():
 
 
 def _branch_with_contact():
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[1])
         with branch(x[2]):
             out(c[2])
@@ -90,43 +90,43 @@ def _branch_with_contact():
 
 def _long_comment():
     comment("Step probe, long comment. " * 16)
-    with Rung(x[1]):
+    with rung(x[1]):
         out(c[1])
 
 
 def _compare():
-    with Rung(df[1] > 1.5):
+    with rung(df[1] > 1.5):
         out(c[1])
 
 
 def _copy():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(5, ds[1], oneshot=True)
 
 
 def _two_copies():
-    with Rung(x[1]):
+    with rung(x[1]):
         copy(5, ds[1])
         copy(6, ds[2])
 
 
 def _fill():
-    with Rung(x[1]):
+    with rung(x[1]):
         fill(0, ds.select(1, 10))
 
 
 def _long_formula():
-    with Rung(x[1]):
+    with rung(x[1]):
         math((ds[1] * ds[2] + ds[3]) / ds[4], ds[5])
 
 
 def _rise_real_formula():
-    with Rung(rise(x[1])):
+    with rung(rise(x[1])):
         math(df[1] * 1.8 + 32.0, df[5])
 
 
 def _for_next():
-    with Rung(x[1]):
+    with rung(x[1]):
         with forloop(3):
             copy(1, ds[1])
 
@@ -163,13 +163,13 @@ def test_real_constant_formula_rounds_up():
 def test_subroutine_costs_its_base_and_rungs():
     @subroutine("Sub")
     def sub():
-        with Rung(x[1]):
+        with rung(x[1]):
             out(c[1])
-        with Rung(x[2]):
+        with rung(x[2]):
             return_early()
 
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             call(sub)
 
     with Program(strict=False) as program:
@@ -184,7 +184,7 @@ def test_subroutine_costs_its_base_and_rungs():
 def _rungs_of_copies(n: int) -> Program:
     with Program(strict=False) as program:
         for i in range(n):
-            with Rung(x[1]):
+            with rung(x[1]):
                 copy(i, ds[1 + i % 4000])
     return program
 

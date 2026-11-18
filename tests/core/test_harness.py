@@ -15,11 +15,11 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     copy,
     latch,
     out,
+    rung,
     udt,
 )
 from pyrung.core.analysis.graph import PlanStatus
@@ -85,7 +85,7 @@ def _make_plc(device_udt, dt: float = 0.010):
     """Build a PLC that drives En from a Cmd tag via out()."""
     Cmd = Bool("Cmd")
     with Program() as logic:
-        with Rung(Cmd):
+        with rung(Cmd):
             out(device_udt[1].En)
     plc = PLC(logic, dt=dt)
     return plc, Cmd, device_udt
@@ -417,9 +417,9 @@ def _long_delay_plc(physical: Physical, *, dt: float = 0.25, default: bool = Fal
     Fb = Bool("Fb", physical=physical, link="En")
     Seen = Bool("Seen")
     with Program(strict=False) as logic:
-        with Rung(Cmd):
+        with rung(Cmd):
             out(En)
-        with Rung(Fb):
+        with rung(Fb):
             out(Seen)
     plc = PLC(logic, dt=dt)
     Harness(plc).install()
@@ -555,9 +555,9 @@ class TestDelaysPastTheMillisecondRange:
         En = Bool("En", default=True)
         Fb = Bool("Fb", physical=Physical("Slow", on_delay="60s"), link="En")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Fb):
+            with rung(Fb):
                 out(Bool("Seen"))
         plc = PLC(logic, dt=0.25)
         Harness(plc).install()
@@ -612,9 +612,9 @@ class TestALinkChangedAcrossUnits:
         En = Bool("En", default=default)
         Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Fb):
+            with rung(Fb):
                 out(Bool("Seen"))
         plc = PLC(logic, dt=dt)
         Harness(plc).install()
@@ -725,9 +725,9 @@ class TestALinkChangedAcrossUnits:
         En = Bool("En")
         Fb = Bool("Fb", physical=Physical("F", flasher_on="5s", flasher_off="5s"), link="En")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Fb):
+            with rung(Fb):
                 out(Bool("Seen"))
         plc = PLC(logic, dt=0.25)
         Harness(plc).install()
@@ -920,9 +920,9 @@ class TestALinkChangedAcrossUnits:
         En = Bool("En")
         Fb = Bool("Fb", physical=Physical("S", on_delay="0ms", off_delay=off_delay), link="En")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Fb):
+            with rung(Fb):
                 out(Bool("Seen"))
         return logic, En, Fb
 
@@ -968,9 +968,9 @@ class TestHowAroundALinkChange:
         Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
         Alarm = Bool("Alarm")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(En, ~Fb):
+            with rung(En, ~Fb):
                 latch(Alarm)
         plc = PLC(logic, dt=0.25)
         Harness(plc).install()
@@ -1044,9 +1044,9 @@ class TestHowFromASessionMidCount:
         Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
         Lost = Bool("Lost")
         with Program(strict=False) as program:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Seen"))
-            with Rung(Fb):
+            with rung(Fb):
                 latch(Lost)
         return program, En, Fb, Lost
 
@@ -1174,9 +1174,9 @@ class TestADirectInstallSettles:
         Fb = Bool("Fb", physical=Physical("S", on_delay="5s"), link="En")
         Lost = Bool("Lost")
         with Program(strict=False) as program:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Seen"))
-            with Rung(Fb):
+            with rung(Fb):
                 latch(Lost)
         return program, En, Lost
 
@@ -1238,11 +1238,11 @@ class TestPlantOnASlotOnlyAPointerReaches:
         )
         CopySp = Real("CopySp")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Temp > 1000.0):
+            with rung(Temp > 1000.0):
                 out(Bool("Seen"))
-            with Rung():
+            with rung():
                 copy(Sps[Ptr], CopySp)
         return logic, En
 
@@ -1284,9 +1284,9 @@ class TestPlantOnASlotOnlyAPointerReaches:
         )
         Lamp = Bool("Lamp")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 latch(Lamp)
-            with Rung(Temp > 1000.0):
+            with rung(Temp > 1000.0):
                 out(Bool("Seen"))
         return logic, En, Lamp
 
@@ -1354,9 +1354,9 @@ class TestPlantOnASlotOnlyAPointerReaches:
     def test_a_bench_link_toward_a_setpoint_no_rung_names_runs_and_warns(self):
         En, Temp = Bool("En"), Real("Temp")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Temp > 1000.0):
+            with rung(Temp > 1000.0):
                 out(Bool("Seen"))
         plc = PLC(logic, dt=0.01)
         harness = Harness(plc)
@@ -1398,9 +1398,9 @@ class TestPlantOnASlotOnlyAPointerReaches:
         Temps.slot(4, default=20.0)
         Seen = Real("Seen")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung():
+            with rung():
                 copy(Temps[Ptr], Seen)
         plc = PLC(logic, dt=0.01)
         harness = Harness(plc)
@@ -1424,9 +1424,9 @@ class TestPlantOnASlotOnlyAPointerReaches:
         Bits.slot(2, default=True)
         Seen = Bool("Seen")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Bits[Ptr] == True):  # noqa: E712
+            with rung(Bits[Ptr] == True):  # noqa: E712
                 out(Seen)
         plc = PLC(logic, dt=0.01)
         harness = Harness(plc)
@@ -1875,7 +1875,7 @@ class TestCouplings:
         Cmd = Bool("Cmd")
         Fb = Bool("Fb")
         with Program() as logic:
-            with Rung(Cmd):
+            with rung(Cmd):
                 out(Fb)
         plc = PLC(logic, dt=0.010)
         harness = Harness(plc)

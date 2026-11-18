@@ -53,7 +53,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from pyrung.conformance import Group, TeeSpec, assert_all_passed, case, run
-from pyrung.core import Or, Rung, copy, count_up, latch, out, reset
+from pyrung.core import Or, copy, count_up, latch, out, reset, rung
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -76,14 +76,14 @@ def prove_box_pin_on_continued_wire(slot):
     # Counter CT181 counts on scan 2.
     p, counter = c[451], ClickCounter(181)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         latch(p)
-    with Rung(slot.Scratch == 2, slot.Cmd != 0).continued():
+    with rung(slot.Scratch == 2, slot.Cmd != 0).continued():
         count_up(counter, 100).reset(Or(slot.Cmd == 0, p))
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         reset(p)
         copy(counter.Acc, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(counter.Acc, slot.Result2)
     done(slot)
 
@@ -92,11 +92,11 @@ def prove_box_enable_on_continued_wire(slot):
     # P = C461, latched on scan 2 by the first wire and reset by the next rung.
     p, counter = c[461], ClickCounter(182)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         latch(p)
-    with Rung(p, slot.Cmd != 0).continued():
+    with rung(p, slot.Cmd != 0).continued():
         count_up(counter, 100).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         reset(p)
         copy(counter.Acc, slot.Result1)
     done(slot)
@@ -107,14 +107,14 @@ def prove_box_pin_on_own_rung(slot):
     # box_pin_on_continued_wire, with the counter on a rung of its own.
     p, counter = c[471], ClickCounter(183)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         latch(p)
-    with Rung(slot.Scratch == 2, slot.Cmd != 0):
+    with rung(slot.Scratch == 2, slot.Cmd != 0):
         count_up(counter, 100).reset(Or(slot.Cmd == 0, p))
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         reset(p)
         copy(counter.Acc, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(counter.Acc, slot.Result2)
     done(slot)
 
@@ -125,17 +125,17 @@ def prove_box_tee_without_trunk(slot):
     # both pins have only their own, so CLICK draws the pins from the rail.
     counter = ClickCounter(184)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch == 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch == 3)):
         out(c[481])
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
+    with rung(slot.Cmd != 0, slot.Scratch == 5):
         out(c[482])
-    with Rung(c[481]):
+    with rung(c[481]):
         count_up(counter, 2).down(c[482]).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(counter.Acc, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         copy(counter.Acc, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 4, counter.Done):
+    with rung(slot.Cmd != 0, slot.Scratch == 4, counter.Done):
         copy(1, slot.Result3)
     done(slot)
 

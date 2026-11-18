@@ -15,13 +15,13 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     copy,
     count_down,
     count_up,
     latch,
     out,
     rise,
+    rung,
     udt,
 )
 
@@ -48,7 +48,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(PartSensor):
+            with rung(PartSensor):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -79,7 +79,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=3).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -104,7 +104,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -129,7 +129,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -161,7 +161,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=1).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -177,7 +177,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -197,7 +197,7 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(rise(Enter)):
+            with rung(rise(Enter)):
                 count_up(Counter[1], preset=10).down(rise(Exit)).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -234,9 +234,9 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 latch(ResetBtn)
-            with Rung(Enable).continued():
+            with rung(Enable).continued():
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -254,9 +254,9 @@ class TestCountUpInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 latch(Down)
-            with Rung(Enable).continued():
+            with rung(Enable).continued():
                 count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -280,7 +280,7 @@ class TestCountDownInstruction:
         Reload = Bool("Reload")
 
         with Program() as logic:
-            with Rung(Dispense):
+            with rung(Dispense):
                 count_down(Counter[1], preset=5).reset(Reload)
 
         runner = runner_factory(logic)
@@ -319,7 +319,7 @@ class TestCountDownInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_down(Counter[1], preset=3).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -363,7 +363,7 @@ class TestCountDownInstruction:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_down(Counter[1], preset=10).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -395,7 +395,7 @@ class TestCounterAccumulatorClamp:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=2147483647).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -421,7 +421,7 @@ class TestCounterAccumulatorClamp:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_down(Counter[1], preset=1).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -448,7 +448,7 @@ class TestCounterAccumulatorClamp:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 count_up(Counter[1], preset=2147483647).down(Down).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -474,7 +474,7 @@ class TestCounterAccumulatorClamp:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Up):
+            with rung(Up):
                 count_up(Counter[1], preset=2).down(Down).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -518,19 +518,19 @@ class TestCounterIntegration:
 
         with Program() as logic:
             # Rung 1: Count up when DataTest == 1, reset when DataTest == 2
-            with Rung(DataTest == 1):
+            with rung(DataTest == 1):
                 count_up(Counter[1], preset=10).reset(DataTest == 2)
 
             # Rung 2: When counter acc reaches 1, do operations (mid-scan!)
             # This rung should execute IN THE SAME SCAN as the counter increment
-            with Rung(DataTest == 1, Counter[1].Acc == 1):
+            with rung(DataTest == 1, Counter[1].Acc == 1):
                 copy(Counter[1].Acc, CopiedCounterBeforeEnd)
                 copy(10, Val2MultiplyInPlace)
                 # User note: In physical test, this was math operations (* 10 twice)
                 # We'll just copy values to verify execution
 
             # Rung 3: Change DataTest to 2 (will reset counter next scan)
-            with Rung(DataTest == 1):
+            with rung(DataTest == 1):
                 copy(2, DataTest)
 
         runner = runner_factory(logic)
@@ -582,15 +582,15 @@ class TestCounterIntegration:
 
         with Program() as logic:
             # Rung 1: Count up on each rising edge of Trigger
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
             # Rung 2: Set flag if we see counter == 1
-            with Rung(Counter[1].Acc == 1):
+            with rung(Counter[1].Acc == 1):
                 latch(SawCounterAt1)
 
             # Rung 3: Set flag if we see counter == 2
-            with Rung(Counter[1].Acc == 2):
+            with rung(Counter[1].Acc == 2):
                 latch(SawCounterAt2)
 
         runner = runner_factory(logic)
@@ -632,15 +632,15 @@ class TestCounterIntegration:
 
         with Program() as logic:
             # Count parts
-            with Rung(rise(PartSensor)):
+            with rung(rise(PartSensor)):
                 count_up(Counter[1], preset=100).reset(ResetButton)
 
             # Batch complete output
-            with Rung(Counter[1].Done):
+            with rung(Counter[1].Done):
                 out(BatchComplete)
 
             # Halfway indicator
-            with Rung(Counter[1].Acc >= 50):
+            with rung(Counter[1].Acc >= 50):
                 out(HalfwayLight)
 
         runner = runner_factory(logic)
@@ -685,7 +685,7 @@ class TestCounterIntegration:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 with branch(AutoMode):
                     count_up(Counter[1], preset=5).reset(ResetBtn)
 
@@ -721,7 +721,7 @@ class TestCounterIntegration:
         from pyrung.core.program import branch
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 with branch(Mode):
                     count_down(Counter[1], preset=10).reset(ResetBtn)
 
@@ -763,7 +763,7 @@ class TestDynamicpresets:
         preset = Int("preset")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=preset).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -798,7 +798,7 @@ class TestDynamicpresets:
         preset = Int("preset")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_down(Counter[1], preset=preset).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -839,7 +839,7 @@ class TestDynamicpresets:
         preset = Int("preset")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 count_up(Counter[1], preset=preset).reset(ResetBtn)
 
         runner = runner_factory(logic)
@@ -866,7 +866,7 @@ class TestCounterConditionTypeGuards:
         ResetValue = Int("ResetValue")
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     count_up(Counter[1], preset=5).reset(ResetValue)
 
@@ -876,7 +876,7 @@ class TestCounterConditionTypeGuards:
         Reset = Bool("Reset")
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     count_up(Counter[1], preset=5).down(DownValue).reset(Reset)
 
@@ -885,7 +885,7 @@ class TestCounterConditionTypeGuards:
         ResetValue = Int("ResetValue")
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     count_down(Counter[1], preset=5).reset(ResetValue)
 
@@ -903,7 +903,7 @@ class TestCounterStructuralContract:
             Acc: Dint  # noqa: F821
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 count_up(MyCounter[1], preset=5).reset(Reset)
 
         runner = runner_factory(logic)
@@ -921,7 +921,7 @@ class TestCounterStructuralContract:
             Acc: Int  # noqa: F821
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 count_up(SmallCounter[1], preset=5).reset(Reset)
 
         runner = runner_factory(logic)
@@ -939,7 +939,7 @@ class TestCounterStructuralContract:
             Acc: Dint  # noqa: F821
 
         with Program():
-            with Rung(Sensor):
+            with rung(Sensor):
                 with pytest.raises(TypeError, match="'Done' to be a Bool"):
                     count_up(BadDone[1], preset=5).reset(Reset)
 
@@ -953,7 +953,7 @@ class TestCounterStructuralContract:
             Acc: Real  # noqa: F821
 
         with Program():
-            with Rung(Sensor):
+            with rung(Sensor):
                 with pytest.raises(TypeError, match="'Acc' to be an Int or Dint"):
                     count_up(BadAcc[1], preset=5).reset(Reset)
 
@@ -967,7 +967,7 @@ class TestCounterStatusBits:
         Reset = Bool("Reset")
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 count_up(Counter[1], preset=3).reset(Reset)
 
         runner = runner_factory(logic)
@@ -998,7 +998,7 @@ class TestCounterStatusBits:
         Reset = Bool("Reset")
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 count_down(Counter[1], preset=3).reset(Reset)
 
         runner = runner_factory(logic)
@@ -1023,7 +1023,7 @@ class TestCounterStatusBits:
         Reset = Bool("Reset")
 
         with Program() as logic:
-            with Rung(Up):
+            with rung(Up):
                 count_up(Counter[1], preset=10).down(Down).reset(Reset)
 
         runner = runner_factory(logic)
@@ -1059,7 +1059,7 @@ class TestCounterStatusBits:
         Reset = Bool("Reset")
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 count_up(MyCounter, preset=5).reset(Reset)
 
         runner = runner_factory(logic)

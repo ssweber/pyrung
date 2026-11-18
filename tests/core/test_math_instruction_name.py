@@ -9,7 +9,7 @@ import warnings
 
 import pytest
 
-from pyrung import PLC, Int, Program, Rung, calc, math
+from pyrung import PLC, Int, Program, calc, math, rung
 from pyrung.core.instruction import CalcInstruction
 
 
@@ -23,7 +23,7 @@ def _only_instruction(program: Program) -> CalcInstruction:
 def test_math_stores_the_expression_and_returns_the_destination() -> None:
     a, result = Int("A"), Int("Result")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             returned = math(a + 2, result)
     assert returned is result
     plc = PLC(logic)
@@ -34,7 +34,7 @@ def test_math_stores_the_expression_and_returns_the_destination() -> None:
 
 def test_math_records_the_line_that_calls_it() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             line = sys._getframe().f_lineno + 1
             math(Int("A") + 1, Int("A"))
     instruction = _only_instruction(logic)
@@ -44,7 +44,7 @@ def test_math_records_the_line_that_calls_it() -> None:
 
 def test_calc_warns_at_the_line_that_calls_it_and_builds_the_same_instruction() -> None:
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with pytest.warns(FutureWarning, match=r"calc\(\) is now math\(\)") as caught:
                 line = sys._getframe().f_lineno + 1
                 calc(Int("A") + 1, Int("A"))

@@ -6,7 +6,7 @@ counterfactual evaluation, steady-state stopping, and edge cases.
 
 from __future__ import annotations
 
-from pyrung.core import PLC, And, Bool, Or, Program, Rung, branch, latch, out, reset
+from pyrung.core import PLC, And, Bool, Or, Program, branch, latch, out, reset, rung
 
 # ---------------------------------------------------------------------------
 # Worked example from spec
@@ -24,13 +24,13 @@ def _build_worked_example():
     Cmd_Run = Bool("Cmd_Run")
 
     with Program() as logic:
-        with Rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
+        with rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
             latch(Sts_FaultTripped)
 
-        with Rung(And(Sts_FaultTripped, Cmd_Reset)):
+        with rung(And(Sts_FaultTripped, Cmd_Reset)):
             reset(Sts_FaultTripped)
 
-        with Rung(Sts_FaultTripped):
+        with rung(Sts_FaultTripped):
             out(Alarm_Horn)
             reset(Cmd_Run)
 
@@ -99,7 +99,7 @@ class TestCounterfactual:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(And(A, B)):
+            with rung(And(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -119,9 +119,9 @@ class TestCounterfactual:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
-            with Rung(B):
+            with rung(B):
                 latch(Y)
 
         runner = PLC(logic)
@@ -142,7 +142,7 @@ class TestCounterfactual:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -162,7 +162,7 @@ class TestCounterfactual:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -194,9 +194,9 @@ class TestCrossScanPropagation:
         C = Bool("C")
 
         with Program() as logic:
-            with Rung(B):  # Rung 0: reads B
+            with rung(B):  # Rung 0: reads B
                 latch(C)
-            with Rung(A):  # Rung 1: writes B
+            with rung(A):  # Rung 1: writes B
                 latch(B)
 
         runner = PLC(logic)
@@ -217,9 +217,9 @@ class TestCrossScanPropagation:
         C = Bool("C")
 
         with Program() as logic:
-            with Rung(B):
+            with rung(B):
                 latch(C)
-            with Rung(A):
+            with rung(A):
                 latch(B)
 
         runner = PLC(logic)
@@ -246,7 +246,7 @@ class TestSteadyStateStopping:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -265,7 +265,7 @@ class TestSteadyStateStopping:
     def test_no_transition_returns_none(self) -> None:
         """effect() on a tag that never changed returns None."""
         with Program() as logic:
-            with Rung():
+            with rung():
                 out(Bool("X"))
 
         runner = PLC(logic)
@@ -280,7 +280,7 @@ class TestSteadyStateStopping:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -306,7 +306,7 @@ class TestEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -323,7 +323,7 @@ class TestEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -341,9 +341,9 @@ class TestEffectEdgeCases:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung():  # Unconditional — always fires
+            with rung():  # Unconditional — always fires
                 latch(X)
-            with Rung(A):  # Conditional — uses A so it's part of the program
+            with rung(A):  # Conditional — uses A so it's part of the program
                 latch(Y)
 
         runner = PLC(logic)
@@ -364,7 +364,7 @@ class TestEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -387,7 +387,7 @@ class TestEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -428,12 +428,12 @@ class TestBranchNodeAlignment:
         Result = Bool("Result")
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 with branch(Enable):
                     out(Path1)
                 with branch(~Enable):
                     out(Path2)
-            with Rung(Path1):
+            with rung(Path1):
                 out(Result)
 
         plc = PLC(prog)

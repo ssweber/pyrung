@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from pyrung.core import PLC, And, Bool, Program, Rung, Timer, latch, on_delay, out, reset, runner
+from pyrung.core import PLC, And, Bool, Program, Timer, latch, on_delay, out, reset, rung, runner
 from pyrung.core.analysis.query import CoverageReport
 from pyrung.core.rung_firings import UnrecordedScansError
 from pyrung.pytest_plugin import (
@@ -34,11 +34,11 @@ def _build_recoverable():
     Alarm = Bool("Alarm")
 
     with Program() as logic:
-        with Rung(Sensor):
+        with rung(Sensor):
             latch(Fault)
-        with Rung(And(Fault, Reset)):
+        with rung(And(Fault, Reset)):
             reset(Fault)
-        with Rung(Fault):
+        with rung(Fault):
             out(Alarm)
 
     return logic, Sensor, Fault, Reset, Alarm
@@ -51,9 +51,9 @@ def _build_stranded():
     Alarm = Bool("Alarm")
 
     with Program() as logic:
-        with Rung(Sensor):
+        with rung(Sensor):
             latch(Fault)
-        with Rung(Fault):
+        with rung(Fault):
             out(Alarm)
 
     return logic, Sensor, Fault, Alarm
@@ -89,11 +89,11 @@ class TestCoverageCollector:
             Once = Bool("Once")
             Never = Bool("Never")
             with Program() as logic:
-                with Rung():
+                with rung():
                     on_delay(Slow, 5000)
-                with Rung(Slow.Acc == 3000):
+                with rung(Slow.Acc == 3000):
                     latch(Once)
-                with Rung(Slow.Acc == 9000):
+                with rung(Slow.Acc == 9000):
                     latch(Never)
             plc = PLC(logic, dt=0.001)
             if stepped:
@@ -296,7 +296,7 @@ class TestPluginIntegration:
         pytester.makeconftest(
             """
             import pytest
-            from pyrung.core import PLC, Bool, Program, Rung, latch, out
+            from pyrung.core import PLC, Bool, Program, rung, latch, out
             from pyrung.pytest_plugin import CoverageCollector
 
             pytest_plugins = ["pyrung.pytest_plugin"]
@@ -306,9 +306,9 @@ class TestPluginIntegration:
                 Sensor = Bool("Sensor")
                 Fault = Bool("Fault")
                 with Program() as logic:
-                    with Rung(Sensor):
+                    with rung(Sensor):
                         latch(Fault)
-                    with Rung(Fault):
+                    with rung(Fault):
                         out(Bool("Alarm"))
                 runner = PLC(logic)
                 yield runner
@@ -340,7 +340,7 @@ class TestPluginIntegration:
         pytester.makeconftest(
             """
             import pytest
-            from pyrung.core import PLC, Bool, Program, Rung, out
+            from pyrung.core import PLC, Bool, Program, rung, out
             from pyrung.pytest_plugin import CoverageCollector
 
             pytest_plugins = ["pyrung.pytest_plugin"]
@@ -349,7 +349,7 @@ class TestPluginIntegration:
             def plc(pyrung_coverage):
                 A = Bool("A")
                 with Program() as logic:
-                    with Rung(A):
+                    with rung(A):
                         out(Bool("X"))
                 runner = PLC(logic)
                 yield runner
@@ -372,7 +372,7 @@ class TestPluginIntegration:
         pytester.makeconftest(
             """
             import pytest
-            from pyrung.core import PLC, Bool, Program, Rung, latch, out
+            from pyrung.core import PLC, Bool, Program, rung, latch, out
             pytest_plugins = ["pyrung.pytest_plugin"]
 
             @pytest.fixture
@@ -380,9 +380,9 @@ class TestPluginIntegration:
                 Sensor = Bool("Sensor")
                 Fault = Bool("Fault")
                 with Program() as logic:
-                    with Rung(Sensor):
+                    with rung(Sensor):
                         latch(Fault)
-                    with Rung(Fault):
+                    with rung(Fault):
                         out(Bool("Alarm"))
                 runner = PLC(logic)
                 yield runner
@@ -414,7 +414,7 @@ class TestPluginIntegration:
         pytester.makeconftest(
             """
             import pytest
-            from pyrung.core import PLC, Bool, Program, Rung, latch, out
+            from pyrung.core import PLC, Bool, Program, rung, latch, out
             pytest_plugins = ["pyrung.pytest_plugin"]
 
             @pytest.fixture
@@ -422,9 +422,9 @@ class TestPluginIntegration:
                 Sensor = Bool("Sensor")
                 Fault = Bool("Fault")
                 with Program() as logic:
-                    with Rung(Sensor):
+                    with rung(Sensor):
                         latch(Fault)
-                    with Rung(Fault):
+                    with rung(Fault):
                         out(Bool("Alarm"))
                 runner = PLC(logic)
                 yield runner
@@ -470,7 +470,7 @@ class TestPluginIntegration:
         pytester.makeconftest(
             """
             import pytest
-            from pyrung.core import PLC, Bool, Program, Rung, And, latch, out, reset
+            from pyrung.core import PLC, Bool, Program, rung, And, latch, out, reset
             pytest_plugins = ["pyrung.pytest_plugin"]
 
             @pytest.fixture
@@ -480,11 +480,11 @@ class TestPluginIntegration:
                 ResetBtn = Bool("ResetBtn")
                 Alarm = Bool("Alarm")
                 with Program() as logic:
-                    with Rung(Sensor):
+                    with rung(Sensor):
                         latch(Fault)
-                    with Rung(And(Fault, ResetBtn)):
+                    with rung(And(Fault, ResetBtn)):
                         reset(Fault)
-                    with Rung(Fault):
+                    with rung(Fault):
                         out(Alarm)
                 runner = PLC(logic)
                 yield runner

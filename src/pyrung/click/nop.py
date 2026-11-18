@@ -9,7 +9,7 @@ Usage::
     from pyrung.click import nop
 
     comment("Section header comment")
-    with Rung():
+    with rung():
         nop()
 """
 
@@ -57,7 +57,7 @@ def nop() -> None:
         from pyrung.click import nop
 
         comment("Section header")
-        with Rung():
+        with rung():
             nop()
     """
     ctx = _require_rung_context("nop")

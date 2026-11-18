@@ -6,11 +6,11 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     copy,
     latch,
     out,
     reset,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -27,7 +27,7 @@ class TestDimensionClassification:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(input_a):
+            with rung(input_a):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -45,11 +45,11 @@ class TestDimensionClassification:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(button):
+            with rung(button):
                 latch(running)
-            with Rung(stop):
+            with rung(stop):
                 reset(running)
-            with Rung(running):
+            with rung(running):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -66,7 +66,7 @@ class TestDimensionClassification:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung(button):
+            with rung(button):
                 latch(flag)
 
         result = _classify_dimensions(logic)
@@ -82,7 +82,7 @@ class TestDimensionClassification:
         output = Int("Output")
 
         with Program(strict=False) as logic:
-            with Rung(sensor):
+            with rung(sensor):
                 copy(level, output)
 
         result = _classify_dimensions(logic)
@@ -97,7 +97,7 @@ class TestDimensionClassification:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(sensor):
+            with rung(sensor):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -111,7 +111,7 @@ class TestDimensionClassification:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(config):
+            with rung(config):
                 out(light)
 
         result = _classify_dimensions(logic)

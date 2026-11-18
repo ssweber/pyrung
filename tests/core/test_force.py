@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, out, rise, system
+from pyrung.core import PLC, Bool, Int, Program, out, rise, rung, system
 
 
 class _SetTagRung:
@@ -189,7 +189,7 @@ class TestPLCForce:
         button = Bool("Button")
         pulse = Bool("Pulse")
         with Program() as logic:
-            with Rung(rise(button)):
+            with rung(rise(button)):
                 out(pulse)
 
         runner = runner_factory(logic)

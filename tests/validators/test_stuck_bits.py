@@ -6,7 +6,6 @@ from pyrung.core import (
     Int,
     Physical,
     Program,
-    Rung,
     TagType,
     call,
     copy,
@@ -14,6 +13,7 @@ from pyrung.core import (
     out,
     reset,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.validation.stuck_bits import (
@@ -43,9 +43,9 @@ State = Int("State")
 class TestMatchingPair:
     def test_latch_and_reset_no_finding(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -61,7 +61,7 @@ class TestMatchingPair:
 class TestStuckHigh:
     def test_latch_no_reset(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
 
         report = validate_stuck_bits(prog)
@@ -77,7 +77,7 @@ class TestStuckHigh:
         # The field sets a link= feedback, so the field can turn it off.
         closed = Bool("GateClosed", link="Motor")
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(closed)
 
         assert not validate_stuck_bits(prog).findings
@@ -86,7 +86,7 @@ class TestStuckHigh:
         # A physical= without link= is only metadata, so nothing outside resets the latch.
         closed = Bool("DoorShut", physical=Physical("DoorShut", on_delay="100ms"))
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(closed)
 
         assert [f.code for f in validate_stuck_bits(prog).findings] == [COIL_STUCK_HIGH]
@@ -100,7 +100,7 @@ class TestStuckHigh:
 class TestStuckLow:
     def test_reset_no_latch(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -121,10 +121,10 @@ class TestStuckLow:
 class TestUncalledSubroutine:
     def test_reset_in_uncalled_sub(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
             with subroutine("unused"):
-                with Rung():
+                with rung():
                     reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -143,12 +143,12 @@ class TestContradictingCallerConditions:
     def test_contradicting_caller(self):
         """Reset's caller has State==1 AND State==2 — impossible."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(State == 1, State == 2):
+            with rung(State == 1, State == 2):
                 call("do_reset")
             with subroutine("do_reset"):
-                with Rung():
+                with rung():
                     reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -165,12 +165,12 @@ class TestContradictingCallerConditions:
 class TestSubroutineGatedPause:
     def test_real_caller_no_finding(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 call("do_reset")
             with subroutine("do_reset"):
-                with Rung():
+                with rung():
                     reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -178,12 +178,12 @@ class TestSubroutineGatedPause:
 
     def test_state_gated_no_finding(self):
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 latch(Light)
-            with Rung(State == 2):
+            with rung(State == 2):
                 call("cleanup")
             with subroutine("cleanup"):
-                with Rung():
+                with rung():
                     reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -199,9 +199,9 @@ class TestSubroutineGatedPause:
 class TestNonContradictingConditions:
     def test_different_buttons(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -209,9 +209,9 @@ class TestNonContradictingConditions:
 
     def test_unconditional_both(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 latch(Light)
-            with Rung():
+            with rung():
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -228,9 +228,9 @@ class TestUnreachableLatch:
     def test_contradicting_latch_conditions(self):
         """Latch has State==1 AND State==2 on the same rung — impossible."""
         with Program() as prog:
-            with Rung(State == 1, State == 2):
+            with rung(State == 1, State == 2):
                 latch(Light)
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -256,7 +256,7 @@ class TestEmptyPrograms:
     def test_program_with_out_only(self):
         """out() is not latch/reset — should produce no findings."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
 
         report = validate_stuck_bits(prog)
@@ -264,9 +264,9 @@ class TestEmptyPrograms:
 
     def test_summary_with_findings(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Motor)
 
         report = validate_stuck_bits(prog)
@@ -283,9 +283,9 @@ class TestCopyAsBoolLatch:
     def test_latch_provides_latch_side(self):
         """latch(C) provides the latch side for a reset-only tag."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -294,9 +294,9 @@ class TestCopyAsBoolLatch:
     def test_copy_1_counts_as_latch(self):
         """Copy(1, C) also acts as a latch for a Bool destination."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 copy(1, Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -305,7 +305,7 @@ class TestCopyAsBoolLatch:
     def test_latch_no_reset_stuck_high(self):
         """latch(C) with no reset → STUCK_HIGH."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
 
         report = validate_stuck_bits(prog)
@@ -323,9 +323,9 @@ class TestCopyAsBoolReset:
     def test_reset_provides_reset_side(self):
         """reset(C) provides the reset side for a latch-only tag."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -334,9 +334,9 @@ class TestCopyAsBoolReset:
     def test_copy_0_counts_as_reset(self):
         """Copy(0, C) also acts as a reset for a Bool destination."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 copy(0, Light)
 
         report = validate_stuck_bits(prog)
@@ -345,7 +345,7 @@ class TestCopyAsBoolReset:
     def test_reset_no_latch_stuck_low(self):
         """reset(C) with no latch → STUCK_LOW."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -363,7 +363,7 @@ class TestCopyTagSourceBoth:
     def test_copy_tag_source_covers_both_sides(self):
         """Copy(tag, C) is conservatively both latch and reset — no finding."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 copy(ButtonB, Light)
 
         report = validate_stuck_bits(prog)
@@ -372,9 +372,9 @@ class TestCopyTagSourceBoth:
     def test_copy_tag_suppresses_latch_only(self):
         """Copy(tag, C) + reset → no finding (Copy covers latch side)."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 copy(ButtonB, Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_stuck_bits(prog)
@@ -383,9 +383,9 @@ class TestCopyTagSourceBoth:
     def test_copy_tag_suppresses_reset_only(self):
         """Copy(tag, C) + latch → no finding (Copy covers reset side)."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 copy(ButtonB, Light)
 
         report = validate_stuck_bits(prog)
@@ -401,7 +401,7 @@ class TestCopyNonBoolIgnored:
     def test_copy_to_int_not_analyzed(self):
         """Copy to an Int tag should not produce stuck-bit findings."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 copy(42, State)
 
         report = validate_stuck_bits(prog)
@@ -418,7 +418,7 @@ class TestGrouping:
         """A single reset() over a block of bools → one group, N members."""
         c = Block("C", TagType.BOOL, 1, 5)
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 reset(c.select(1, 5))
 
         report = validate_stuck_bits(prog)
@@ -438,9 +438,9 @@ class TestGrouping:
     def test_distinct_sites_do_not_group(self):
         """Two unrelated stuck bits keep their own single-member groups."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)  # stuck high
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Motor)  # stuck low
 
         report = validate_stuck_bits(prog)
@@ -453,7 +453,7 @@ class TestGrouping:
 
     def test_empty_report_groups_to_nothing(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
 
         assert validate_stuck_bits(prog).grouped() == ()
@@ -468,10 +468,10 @@ class TestRetentiveOut:
     def test_out_in_conditionally_called_sub_is_stuck_high(self):
         """The sub stops being called with the coil high → it stays high."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("run")
             with subroutine("run"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -486,12 +486,12 @@ class TestRetentiveOut:
     def test_reset_elsewhere_clears_the_finding(self):
         """A reset() outside the subroutine supplies the missing side."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("run")
-            with Rung(~ButtonA):
+            with rung(~ButtonA):
                 reset(Light)
             with subroutine("run"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -500,10 +500,10 @@ class TestRetentiveOut:
     def test_unconditionally_called_sub_is_not_retentive(self):
         """A sub called every scan runs its out() every scan — normal OTE."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("run")
             with subroutine("run"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -512,13 +512,13 @@ class TestRetentiveOut:
     def test_unconditional_call_chain_is_not_retentive(self):
         """main → outer → inner, both calls unconditional → still an OTE."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("outer")
             with subroutine("outer"):
-                with Rung():
+                with rung():
                     call("inner")
             with subroutine("inner"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -527,13 +527,13 @@ class TestRetentiveOut:
     def test_conditional_call_chain_is_retentive(self):
         """One conditional link in the chain is enough to freeze the coil."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("outer")
             with subroutine("outer"):
-                with Rung():
+                with rung():
                     call("inner")
             with subroutine("inner"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -544,12 +544,12 @@ class TestRetentiveOut:
     def test_early_return_above_the_out_is_retentive(self):
         """The sub runs every scan, but return_early() can skip the out()."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("run")
             with subroutine("run"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     return_early()
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -560,12 +560,12 @@ class TestRetentiveOut:
     def test_out_above_an_early_return_is_not_retentive(self):
         """A return below the out() never skips it."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("run")
             with subroutine("run"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     return_early()
 
         report = validate_stuck_bits(prog)
@@ -574,12 +574,12 @@ class TestRetentiveOut:
     def test_retentive_out_supplies_the_latch_side(self):
         """reset() + a retentive out() is a balanced pair — no STUCK_LOW."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("run")
-            with Rung(~ButtonA):
+            with rung(~ButtonA):
                 reset(Light)
             with subroutine("run"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -588,9 +588,9 @@ class TestRetentiveOut:
     def test_main_out_alone_supplies_both_sides(self):
         """An out() in main clears its own coil — never stuck, either way."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(Motor)
 
         report = validate_stuck_bits(prog)
@@ -609,20 +609,20 @@ class TestOutCoverage:
     def test_covering_states_no_finding(self):
         """Every state of Mode drives the coil → one out() runs every scan."""
         with Program() as prog:
-            with Rung(Mode == 1):
+            with rung(Mode == 1):
                 call("run")
-            with Rung(Mode == 2):
+            with rung(Mode == 2):
                 call("hold")
-            with Rung(Mode == 3):
+            with rung(Mode == 3):
                 call("stop")
             with subroutine("run"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
             with subroutine("hold"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
             with subroutine("stop"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -631,15 +631,15 @@ class TestOutCoverage:
     def test_missing_state_is_stuck_high(self):
         """Mode==3 drives nothing, so the coil holds through that state."""
         with Program() as prog:
-            with Rung(Mode == 1):
+            with rung(Mode == 1):
                 call("run")
-            with Rung(Mode == 2):
+            with rung(Mode == 2):
                 call("hold")
             with subroutine("run"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
             with subroutine("hold"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -650,15 +650,15 @@ class TestOutCoverage:
     def test_min_max_domain_covers(self):
         """A min/max range closes the domain just as choices= does."""
         with Program() as prog:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 call("s0")
-            with Rung(Step >= 1):
+            with rung(Step >= 1):
                 call("s12")
             with subroutine("s0"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
             with subroutine("s12"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -667,15 +667,15 @@ class TestOutCoverage:
     def test_bool_complement_covers_without_declarations(self):
         """A Bool's domain is closed by construction — no choices= needed."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("on")
-            with Rung(~ButtonA):
+            with rung(~ButtonA):
                 call("off")
             with subroutine("on"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
             with subroutine("off"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -684,15 +684,15 @@ class TestOutCoverage:
     def test_undeclared_state_tag_still_warns(self):
         """State has no declared domain — State==7 is not ruled out."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 call("run")
-            with Rung(State == 2):
+            with rung(State == 2):
                 call("hold")
             with subroutine("run"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
             with subroutine("hold"):
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -706,10 +706,10 @@ class TestOutCoverage:
         Gate = Int("Gate")  # undeclared domain, but not the reason coverage fails
 
         with Program() as prog:
-            with Rung(Mode == 1, Gate != 1):
+            with rung(Mode == 1, Gate != 1):
                 call("run")
             with subroutine("run"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -720,10 +720,10 @@ class TestOutCoverage:
     def test_rung_condition_is_not_a_gap(self):
         """A false rung still ran — out() drove the coil low. Only scope matters."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("run")
             with subroutine("run"):
-                with Rung(ButtonA, ButtonB, State == 5):
+                with rung(ButtonA, ButtonB, State == 5):
                     out(Light)
 
         report = validate_stuck_bits(prog)
@@ -732,18 +732,18 @@ class TestOutCoverage:
     def test_coverage_through_a_call_chain(self):
         """Reach chains compose: main → dispatch(Mode==N) → per-state subs."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("dispatch")
             with subroutine("dispatch"):
-                with Rung(Mode == 1):
+                with rung(Mode == 1):
                     call("run")
-                with Rung(Mode != 1):
+                with rung(Mode != 1):
                     call("idle")
             with subroutine("run"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
             with subroutine("idle"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_stuck_bits(prog)

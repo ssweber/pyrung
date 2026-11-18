@@ -47,7 +47,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, count_down, fill, forloop, latch, math, reset
+from pyrung.core import copy, count_down, fill, forloop, latch, math, reset, rung
 from tests.conformance.memory import ClickCounter, c, dd, ds
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -72,25 +72,25 @@ def prove_minus_counts(slot: Any) -> None:
         (DOWN.Acc, (0, 65535)),
     )
     count_scans(slot, WINDOW)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1, ARMED):
+    with rung(slot.Cmd != 0, slot.Scratch == 1, ARMED):
         copy(-1, DS_COUNT)
         copy(-65535, DD_LOW)
         copy(-2, DD_MINUS_TWO)
-    with Rung(slot.Cmd != 0, slot.Scratch == COUNT_SCAN, ARMED):
+    with rung(slot.Cmd != 0, slot.Scratch == COUNT_SCAN, ARMED):
         count_down(DOWN, DOWN_PRESET).reset(slot.Cmd == 0)
     for scan, ((count, readings), runs, field) in enumerate(
         zip(loops, RUNS, fields, strict=True), start=COUNT_SCAN + 1
     ):
         on_scan = (slot.Cmd != 0, slot.Scratch == scan, ARMED)
-        with Rung(*on_scan):
+        with rung(*on_scan):
             with forloop(count):
                 math(runs + 1, runs)
-        with Rung(*on_scan):
+        with rung(*on_scan):
             copy(3, field)
         for number, reading in enumerate(readings, start=1):
-            with Rung(*on_scan, runs == reading):
+            with rung(*on_scan, runs == reading):
                 copy(number, field)
-    with Rung(slot.Cmd != 0, slot.Scratch == WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch == WINDOW):
         reset(ARMED)
     done(slot, WINDOW)
 

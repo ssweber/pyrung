@@ -30,12 +30,12 @@ from pyrung.core import (
     CompiledPLC,
     Int,
     Program,
-    Rung,
     break_loop,
     continue_loop,
     forloop,
     math,
     out,
+    rung,
 )
 
 pytestmark = pytest.mark.hypothesis
@@ -245,7 +245,7 @@ def _emit_loop(loop: Loop, idx_tags: list, idx_by_depth: dict) -> None:
             if isinstance(item, Loop):
                 _emit_loop(item, idx_tags, idx_by_depth)
             elif item[0] == "rung":
-                with Rung(_emit_cond(item[1], idx_tags)):
+                with rung(_emit_cond(item[1], idx_tags)):
                     for leaf in item[2]:
                         _emit_leaf(leaf)
             else:
@@ -256,7 +256,7 @@ def _emit_loop(loop: Loop, idx_tags: list, idx_by_depth: dict) -> None:
 def _build(top: Loop) -> tuple[Program, dict[int, str]]:
     idx_by_depth: dict[int, str] = {}
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             _emit_loop(top, [], idx_by_depth)
     return logic, idx_by_depth
 

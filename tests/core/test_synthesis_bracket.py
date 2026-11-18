@@ -13,8 +13,9 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, copy
+from pyrung import Bool, Int, Program, copy, rung
 from pyrung.core.condition import AllCondition, BitCondition, NormallyClosedCondition
+from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.runner import PLC
 from pyrung.core.site_memory import PLANT_NAMESPACE, bind_sites
 from pyrung.core.synthesis import (
@@ -30,7 +31,7 @@ def _prog() -> Program:
     Fb = Bool("Fb")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Fb):
+        with rung(Enable, Fb):
             copy(1, Stage)
     return prog
 
@@ -107,7 +108,7 @@ def test_conditional_hold_branch_oscillates() -> None:
 
     W = Bool("W")
     with Program() as prog:
-        with Rung(W):
+        with rung(W):
             copy(1, Int("Seen"))
     plc = PLC(prog, dt=0.1)
     plc._synthesis = Synthesis(
@@ -127,12 +128,12 @@ def test_conditional_hold_branch_oscillates() -> None:
 def test_single_rule_conditional_hold_self_releases() -> None:
     # One guarded copy rung = a self-releasing hold: drive True while W != True,
     # so W settles True and the guard stops firing (it no longer re-drives, but the
-    # value persists).  This is the "with Rung(guard): copy(value)" shape.
+    # value persists).  This is the "with rung(guard): copy(value)" shape.
     from pyrung.core.condition import CompareNe
 
     W = Bool("W")
     with Program() as prog:
-        with Rung(W):
+        with rung(W):
             copy(1, Int("Seen"))
     plc = PLC(prog, dt=0.1)
     plc._synthesis = Synthesis(holds=[copy_hold_rung(value=True, dest=W, guard=CompareNe(W, True))])
@@ -146,7 +147,7 @@ def test_single_rule_conditional_hold_self_releases() -> None:
 def test_false_hold_turns_default_true_bool_off() -> None:
     W = Bool("W", default=True)
     with Program() as prog:
-        with Rung(W):
+        with rung(W):
             copy(1, Int("Seen"))
     plc = PLC(prog, dt=0.1)
     plc._synthesis = Synthesis(holds=[copy_hold_rung(value=False, dest=W)])
@@ -231,7 +232,7 @@ def test_a_user_rung_of_the_same_shape_solves_row_by_row() -> None:
 
     W = Bool("W")
     with Program() as prog:
-        with Rung():
+        with rung():
             with branch(~W):
                 latch(W)
             with branch(W):
@@ -250,7 +251,7 @@ def _backends(program_factory: Any) -> list[Any]:
     return [PLC(program_factory()), CompiledPLC(program_factory())]
 
 
-def _bracket_program(rung: Rung) -> Program:
+def _bracket_program(rung: RungLogic) -> Program:
     prog = Program()
     prog.rungs.append(rung)
     return prog

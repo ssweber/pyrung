@@ -118,7 +118,7 @@ class TestConditionsToSP:
         assert len(tree.children) == 3
 
     def test_rung_level_and_plus_explicit_and_flatten(self) -> None:
-        """Rung(And(A, B), C) should flatten to SPSeries with 3 children."""
+        """rung(And(A, B), C) should flatten to SPSeries with 3 children."""
         A, B, C = Bool("A"), Bool("B"), Bool("C")
         rung = Rung(And(A, B), C)
         tree = rung.sp_tree()

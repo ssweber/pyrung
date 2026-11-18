@@ -111,47 +111,47 @@ WORD and non-WORD operands; that is a static finding, not a ladder case.
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, system
+from pyrung.core import copy, fill, math, rung, system
 from pyrung.core.expression import randint
 from tests.conformance.memory import dd, df, dh
 from tests.conformance.scans import count_scans, done, scans_for
 
 
 def prove_int_calc_wraps(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(32767, slot.Scratch)
         math(slot.Scratch + 1, slot.Result1)
         math(slot.Result1 - 1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, system.fault.out_of_range):
+    with rung(slot.Cmd != 0, slot.Fired == 0, system.fault.out_of_range):
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_dint_calc_wraps(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(2147483647, dd[101])
         copy(-2147483648, dd[103])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dd[101] + 1, dd[102])
         math(dd[103] - 1, dd[104])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[102] == -2147483648):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[102] == -2147483648):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[104] == 2147483647):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[104] == 2147483647):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_dint_quotient_into_int(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(-2147483648, dd[161])
         copy(65536, dd[162])
         copy(-2147418112, dd[163])
         copy(99, slot.Result1)
         copy(99, slot.Result2)
         copy(99, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dd[161] / 65536, slot.Result1)
         math(dd[161] / dd[162], slot.Result2)
         math(dd[163] / 65536, slot.Result3)
@@ -159,13 +159,13 @@ def prove_dint_quotient_into_int(slot):
 
 
 def prove_int_math_wide_constant(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(65536, dd[171])
         copy(10, dd[172])
         copy(99, slot.Result1)
         copy(99, slot.Result2)
         copy(99, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dd[171] / 40000, slot.Result1)
         math(dd[172] * 1.5, slot.Result2)
         math(dd[171] / -40000, slot.Result3)
@@ -173,43 +173,43 @@ def prove_int_math_wide_constant(slot):
 
 
 def prove_int_math_rand_wide_bounds(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(99, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(randint(70000, 70000) / 2, slot.Result1)
         copy(1, slot.Fired)
 
 
 def prove_int_math_real_operand_constant(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(0.25, df[141])
         copy(99, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(df[141] * 100000, slot.Result1)
         copy(1, slot.Fired)
 
 
 def prove_word_calc_wraps(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(0xFFF0, dh[201])
         copy(0x0020, dh[202])
         copy(0x0001, dh[204])
         copy(0x0002, dh[205])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dh[201] + dh[202], dh[203])
         math(dh[204] - dh[205], dh[206])
         copy(dh[203], slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dh[206] == 0xFFFF):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dh[206] == 0xFFFF):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_copy_clamps_calc_wraps(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(40000, dd[111])
         copy(-40000, dd[112])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(dd[111], slot.Result1)
         math(dd[111], slot.Result2)
         copy(dd[112], slot.Result3)
@@ -218,7 +218,7 @@ def prove_copy_clamps_calc_wraps(slot):
 
 
 def prove_copy_source_to_dest(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(11, slot.Result1)
         copy(22, slot.Result2)
         copy(slot.Result1, slot.Result2)
@@ -226,10 +226,10 @@ def prove_copy_source_to_dest(slot):
 
 
 def prove_real_to_int_truncates(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(2.7, df[101])
         copy(-2.7, df[102])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(df[101], slot.Result1)
         copy(df[102], slot.Result2)
         math(df[101], slot.Result3)
@@ -238,7 +238,7 @@ def prove_real_to_int_truncates(slot):
 
 
 def prove_int_division_truncates(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(7, slot.Scratch)
         copy(2, slot.Result4)
         math(slot.Scratch / slot.Result4, slot.Result1)
@@ -248,12 +248,12 @@ def prove_int_division_truncates(slot):
 
 
 def prove_word_math_unsigned(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(0xFFFF, dh[211])
         copy(0x0002, dh[212])
         copy(0x8000, dh[214])
         copy(0x0004, dh[215])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dh[211] / dh[212], dh[213])
         math(dh[214] * dh[212] / dh[215], dh[216])
         copy(dh[213], slot.Result1)
@@ -262,16 +262,16 @@ def prove_word_math_unsigned(slot):
 
 
 def prove_hex_literal_is_decimal(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(0x0001, dh[221])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dh[221] + 10, dh[222])
         copy(dh[222], slot.Result1)
         copy(1, slot.Fired)
 
 
 def prove_intermediate_fits_32_bits(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(300, slot.Scratch)
         copy(100, slot.Result4)
         math(slot.Scratch * slot.Scratch / slot.Result4, slot.Result1)
@@ -279,21 +279,21 @@ def prove_intermediate_fits_32_bits(slot):
 
 
 def prove_intermediate_exceeds_32_bits(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(100000, dd[131])
         copy(1000000, dd[132])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(dd[131] * dd[131] / dd[132], slot.Result1)
         copy(1, slot.Fired)
 
 
 def prove_real_is_64_bit_in_pyrung(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(16777216, dd[122])
         copy(16777217, dd[121])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(dd[122], df[111])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(df[111] + 1, df[112])
         copy(dd[121], df[113])
         math(df[112] - df[111], slot.Result1)
@@ -313,33 +313,33 @@ def prove_real_overflow_stays_finite(slot):
     # still +/-Inf; half of a saturated +/-3.4028235E+38 would be +/-1.7E+38.
     count_scans(slot, REAL_OVERFLOW_WINDOW)
     on_scan = slot.Scratch == REAL_OVERFLOW_WINDOW
-    with Rung(slot.Cmd != 0, on_scan):
+    with rung(slot.Cmd != 0, on_scan):
         copy(3.0e38, df[121])
         copy(1.0, df[122])
         copy(1.0, df[123])
-    with Rung(slot.Cmd != 0, on_scan):
+    with rung(slot.Cmd != 0, on_scan):
         math(df[121] * 10, df[122])
         math(df[121] * -10, df[123])
-    with Rung(slot.Cmd != 0, on_scan, system.fault.out_of_range):
+    with rung(slot.Cmd != 0, on_scan, system.fault.out_of_range):
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, on_scan):
+    with rung(slot.Cmd != 0, on_scan):
         math(df[122] / 2, df[124])
         math(df[123] / 2, df[125])
-    with Rung(slot.Cmd != 0, on_scan, df[124] >= 3.0e38):
+    with rung(slot.Cmd != 0, on_scan, df[124] >= 3.0e38):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, on_scan, df[125] <= -3.0e38):
+    with rung(slot.Cmd != 0, on_scan, df[125] <= -3.0e38):
         copy(1, slot.Result2)
     done(slot, REAL_OVERFLOW_WINDOW)
 
 
 def prove_div_by_zero(slot):
     # Scratch stays 0: it is the divisor.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(99, slot.Result1)
         math(100 / slot.Scratch, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, system.fault.division_error):
+    with rung(slot.Cmd != 0, slot.Fired == 0, system.fault.division_error):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
@@ -352,23 +352,23 @@ def prove_real_div_by_zero(slot):
     # DF133 (the dividend of 0 / 0) and DF134 (the divisor) stay 0.0.
     count_scans(slot, REAL_DIV_WINDOW)
     on_scan = slot.Scratch == REAL_DIV_WINDOW
-    with Rung(slot.Cmd != 0, on_scan):
+    with rung(slot.Cmd != 0, on_scan):
         copy(2.5, df[131])
         copy(-2.5, df[132])
         copy(5.5, df[135])
         copy(5.5, df[136])
         copy(5.5, df[137])
-    with Rung(slot.Cmd != 0, on_scan):
+    with rung(slot.Cmd != 0, on_scan):
         math(df[131] / df[134], df[135])
         math(df[132] / df[134], df[136])
         math(df[133] / df[134], df[137])
-    with Rung(slot.Cmd != 0, on_scan, system.fault.division_error):
+    with rung(slot.Cmd != 0, on_scan, system.fault.division_error):
         copy(1, slot.Result4)
-    with Rung(slot.Cmd != 0, on_scan, df[135] == 0):
+    with rung(slot.Cmd != 0, on_scan, df[135] == 0):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, on_scan, df[136] == 0):
+    with rung(slot.Cmd != 0, on_scan, df[136] == 0):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, on_scan, df[137] == 0):
+    with rung(slot.Cmd != 0, on_scan, df[137] == 0):
         copy(1, slot.Result3)
     done(slot, REAL_DIV_WINDOW)
 

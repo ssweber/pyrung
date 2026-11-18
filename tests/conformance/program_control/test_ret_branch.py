@@ -22,15 +22,15 @@ The Return skips the rest of the subroutine, so the group holds this one case
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, branch, copy, return_early
+from pyrung.core import branch, copy, return_early, rung
 from pyrung.core.program import Program
 
 
 def prove_branch_return_stops_subroutine(slot):
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Result1)
         copy(1, slot.Fired)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Scratch)
         with branch(slot.Cmd != 0):
             # The footprint check builds a case outside any subroutine, where
@@ -40,7 +40,7 @@ def prove_branch_return_stops_subroutine(slot):
                 return_early()
             else:
                 copy(0, slot.Scratch)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Result2)
 
 

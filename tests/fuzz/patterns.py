@@ -20,7 +20,7 @@ class PatternResult:
 
 
 def timer_acc_downstream_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #1: on_delay(T, preset) + Rung(T.Acc >= K)."""
+    """Pattern #1: on_delay(T, preset) + rung(T.Acc >= K)."""
     if not pool.timers:
         return None
     timer = pool.timers[0]
@@ -39,7 +39,7 @@ def timer_acc_downstream_compare(pool: TagPool) -> list[RungSpec] | None:
 
 
 def copy_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #2: copy(T.Acc, numeric) + Rung(numeric >= K)."""
+    """Pattern #2: copy(T.Acc, numeric) + rung(numeric >= K)."""
     if not pool.timers or not pool.writable_numeric():
         return None
     timer = pool.timers[0]
@@ -60,7 +60,7 @@ def copy_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
 
 
 def conditional_write_edge_read(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #3: Rung(A): out(B) + Rung(rise(B)) — cross-scan edge dependency."""
+    """Pattern #3: rung(A): out(B) + rung(rise(B)) — cross-scan edge dependency."""
     if len(pool.all_bool()) < 1 or not pool.writable_bool():
         return None
     cond_tag = pool.all_bool()[0]
@@ -175,7 +175,7 @@ def exclusive_inputs_across_scans(pool: TagPool) -> list[RungSpec] | None:
 
 
 def count_down_constant_preset(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #8: count_down(C, -5).reset(R) + Rung(C.Acc <= -3).
+    """Pattern #8: count_down(C, -5).reset(R) + rung(C.Acc <= -3).
 
     The compare crosses on the third count, before Done (``Acc <= -5``) is reached."""
     if not pool.counters or not pool.writable_bool():
@@ -236,7 +236,7 @@ def self_referencing_accumulator(pool: TagPool) -> list[RungSpec] | None:
 
 
 def truthy_accumulator_contact(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #11: on_delay(T, 100) + Rung(T.Acc)."""
+    """Pattern #11: on_delay(T, 100) + rung(T.Acc)."""
     if not pool.timers:
         return None
     timer = pool.timers[0]
@@ -335,7 +335,7 @@ def multi_hop_copy_chain(pool: TagPool) -> list[RungSpec] | None:
 
 
 def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #29: math(block.select(start, end).sum(), Total) + Rung(Total != 0)."""
+    """Pattern #29: math(block.select(start, end).sum(), Total) + rung(Total != 0)."""
     if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
         return None
     blk = pool.int_block
@@ -360,7 +360,7 @@ def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
 
 
 def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #29b: math(block.select(start, end).max(), Out) + Rung(Out > 0).
+    """Pattern #29b: math(block.select(start, end).max(), Out) + rung(Out > 0).
 
     These are the non-additive siblings of range_sum_into_compare. Every member stays
     a read of the Math, with no element-wise sum decomposition.
@@ -443,7 +443,7 @@ def indirect_oob_source(pool: TagPool) -> list[RungSpec] | None:
 
 
 def identity_calc(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #32: math(X + 0, Y) + Rung(Y == K) — identity Math keeps X observed."""
+    """Pattern #32: math(X + 0, Y) + rung(Y == K) — identity Math keeps X observed."""
     writable_nums = pool.writable_numeric()
     all_nums = pool.all_numeric()
     if not writable_nums or not all_nums:
@@ -471,7 +471,7 @@ def identity_calc(pool: TagPool) -> list[RungSpec] | None:
 
 
 def char_state_machine(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #11b: Char tag drives state machine via copy("g", State) + Rung(State == "g")."""
+    """Pattern #11b: Char tag drives state machine via copy("g", State) + rung(State == "g")."""
     if not pool.char_tags or not pool.timers or not pool.writable_bool():
         return None
     state = pool.char_tags[0]
@@ -628,7 +628,7 @@ def conditional_write_through_intermediate(pool: TagPool) -> list[RungSpec] | No
 
 
 def receive_dest_downstream_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #5: receive(..., dest=Dest) + Rung(Dest == K) — ND dest flows through compare."""
+    """Pattern #5: receive(..., dest=Dest) + rung(Dest == K) — ND dest flows through compare."""
     if not pool.writable_bool() or not pool.int_tags:
         return None
     dest = Int("RxDest", choices={0: "OFF", 1: "ON", 2: "FAULT"})
@@ -711,7 +711,7 @@ def self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
 
 
 def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: copy(lit, A) -> copy(A, B) -> math(B + k, C) + Rung(C >= k).
+    """Adjacency: copy(lit, A) -> copy(A, B) -> math(B + k, C) + rung(C >= k).
 
     A mixed copy+Math chain (>=2 hops) whose tail is read by a comparison.
     """

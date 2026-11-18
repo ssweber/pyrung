@@ -6,7 +6,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
+from pyrung import Bool, Int, Program, Timer, copy, on_delay, out, rung
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.click import ModbusTcpTarget, nop, raw, receive, send
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
@@ -28,11 +28,11 @@ _LIVE = ModbusTcpTarget("kio", "127.0.0.1", port=502, device_id=1)
 def _receive_program(target):
     """A small examples/circuitpy_traffic_light_modbus.py, with a timer and a receive each scan."""
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Wait, 50)
-        with Rung(Wait.Done):
+        with rung(Wait.Done):
             out(Lamp)
-        with Rung():
+        with rung():
             receive(
                 target=target,
                 remote_start=ModbusAddress(0, RegisterType.COIL) if target == "panel" else "C1",
@@ -42,19 +42,19 @@ def _receive_program(target):
                 error=RxErr,
                 exception_response=RxCode,
             )
-        with Rung(Wait.Done):
+        with rung(Wait.Done):
             send(target=target, remote_start="DS1", source=Source, sending=TxBusy, success=TxOk)
     return program
 
 
 def _nop_raw_program():
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             nop()
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Wait, 50)
             raw("Email", "0x2737,1,60a5=1")
-        with Rung(Wait.Done):
+        with rung(Wait.Done):
             out(Lamp)
     return program
 
@@ -111,7 +111,7 @@ def test_a_code_py_still_refuses_nop_and_raw(instruction) -> None:
     hardware = P1AM()
     hardware.slot(1, "P1-08SIM")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             instruction()
     with pytest.raises(NotImplementedError, match="A code.py cannot run"):
         generate_circuitpy(program, hardware, target_scan_ms=10.0)
@@ -133,7 +133,7 @@ def _answered_at_once(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 def _live_send_program():
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             send(target=_LIVE, remote_start="DS1", source=Source, sending=TxBusy, success=TxOk)
     return program
 
@@ -160,9 +160,9 @@ def test_compiled_replay_of_live_io_matches_stepping(monkeypatch: pytest.MonkeyP
 
     _answered_at_once(monkeypatch)
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             send(target=_LIVE, remote_start="DS1", source=Source, sending=TxBusy, success=TxOk)
-        with Rung(TxBusy):
+        with rung(TxBusy):
             out(Lamp)
     plc = PLC(program, dt=0.01)
     plc.patch({Enable.name: True})
@@ -178,11 +178,11 @@ def test_how_runs_no_modbus_and_steers_what_the_device_supplies(
 ) -> None:
     calls = _answered_at_once(monkeypatch)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             receive(target=_LIVE, remote_start="DS1", dest=Level, receiving=RxBusy, success=RxOk)
-        with Rung(RxOk):
+        with rung(RxOk):
             copy(Level, Local)
-        with Rung(Local > 5):
+        with rung(Local > 5):
             out(Lamp)
     plc = PLC(program, dt=0.01)
     plan = plc.how(Lamp, max_scans=2000, wall_clock_s=60)
@@ -216,11 +216,11 @@ def _held(monkeypatch: pytest.MonkeyPatch) -> list[Future]:
 
 def _live_receive_program():
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             receive(target=_LIVE, remote_start="DS1", dest=Level, receiving=RxBusy, success=RxOk)
-        with Rung(RxOk):
+        with rung(RxOk):
             copy(Level, Local)
-        with Rung(Local > 5):
+        with rung(Local > 5):
             out(Lamp)
     return program
 

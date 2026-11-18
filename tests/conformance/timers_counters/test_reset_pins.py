@@ -55,7 +55,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import And, Or, Rung, copy, count_down, math, on_delay, out
+from pyrung.core import And, Or, copy, count_down, math, on_delay, out, rung
 from tests.conformance.memory import ClickCounter, ClickTimer, c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
@@ -66,18 +66,18 @@ def _down_reset(slot: Any, counter: ClickCounter, preset: int, staged: int | Non
     # The count input is on for every scan of the window, the reset on for scans 3 and 4.
     count_scans(slot)
     if staged is not None:
-        with Rung(slot.Cmd != 0, slot.Scratch == 1):
+        with rung(slot.Cmd != 0, slot.Scratch == 1):
             copy(staged, counter.Acc)
     reset = Or(slot.Cmd == 0, And(slot.Scratch >= RESET_FIRST, slot.Scratch <= RESET_LAST))
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         count_down(counter, preset).reset(reset)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         copy(counter.Acc, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch >= RESET_FIRST, slot.Scratch <= 6, ~counter.Done):
+    with rung(slot.Cmd != 0, slot.Scratch >= RESET_FIRST, slot.Scratch <= 6, ~counter.Done):
         math(slot.Result2 * 10 + slot.Scratch, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == RESET_FIRST):
+    with rung(slot.Cmd != 0, slot.Scratch == RESET_FIRST):
         copy(counter.Acc, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == RESET_LAST + 1):
+    with rung(slot.Cmd != 0, slot.Scratch == RESET_LAST + 1):
         copy(counter.Acc, slot.Result4)
     done(slot)
 
@@ -104,74 +104,74 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 def _rton(slot: Any, rton: ClickTimer, holding: Any) -> None:
     # The RTON's rung is always on. Its reset is on while *holding* is.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(rton, 200).reset(Or(slot.Cmd == 0, holding))
 
 
 def prove_rton_reset_held(slot: Any) -> None:
     clock, rton = ClickTimer(301), ClickTimer(302)
     holding = c[701]
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch == 2)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch == 2)):
         out(holding)
     # The clock times the reset, from its first scan.
-    with Rung(slot.Cmd != 0, holding):
+    with rung(slot.Cmd != 0, holding):
         on_delay(clock, 3000)
     _rton(slot, rton, holding)
     # On from the first scan after the reset, beside the RTON, so both see that scan's time.
     ton = ClickTimer(305)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         on_delay(ton, 3000)
-    with Rung(*_step(slot, 4)):
+    with rung(*_step(slot, 4)):
         copy(1, slot.Fired)
     ready = (*_step(slot, 3), ton.Acc >= COMPARE_AT)
-    with Rung(*ready, rton.Acc == ton.Acc, ~rton.Done):
+    with rung(*ready, rton.Acc == ton.Acc, ~rton.Done):
         copy(1, slot.Result4)
-    with Rung(*ready, rton.Acc < ton.Acc):
+    with rung(*ready, rton.Acc < ton.Acc):
         copy(2, slot.Result4)
-    with Rung(*ready):
+    with rung(*ready):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2), Or(rton.Done, rton.Acc != 0)):
+    with rung(*_step(slot, 2), Or(rton.Done, rton.Acc != 0)):
         math(slot.Result3 + 1, slot.Result3)
-    with Rung(*_step(slot, 2), clock.Acc >= DROP):
+    with rung(*_step(slot, 2), clock.Acc >= DROP):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), rton.Done):
+    with rung(*_step(slot, 1), rton.Done):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 1), rton.Acc != 0):
+    with rung(*_step(slot, 1), rton.Acc != 0):
         math(slot.Result2 + 10, slot.Result2)
-    with Rung(*_step(slot, 1)):
+    with rung(*_step(slot, 1)):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED, rton.Done):
+    with rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED, rton.Done):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
+    with rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
         copy(1, slot.Scratch)
 
 
 def prove_rton_reset_after(slot: Any) -> None:
     clock, rton = ClickTimer(303), ClickTimer(304)
     holding = c[703]
-    with Rung(*_step(slot, 1)):
+    with rung(*_step(slot, 1)):
         out(holding)
     # The clock times from the reset's first scan, and on past the drop.
-    with Rung(slot.Cmd != 0, slot.Scratch >= 1):
+    with rung(slot.Cmd != 0, slot.Scratch >= 1):
         on_delay(clock, 3000)
     _rton(slot, rton, holding)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Fired == 0, rton.Done, rton.Acc < 200):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Fired == 0, rton.Done, rton.Acc < 200):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 4)):
+    with rung(*_step(slot, 4)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 3), clock.Acc >= DROP + 300, rton.Done):
+    with rung(*_step(slot, 3), clock.Acc >= DROP + 300, rton.Done):
         copy(1, slot.Result3)
-    with Rung(*_step(slot, 3), clock.Acc >= DROP + 300):
+    with rung(*_step(slot, 3), clock.Acc >= DROP + 300):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2), clock.Acc >= DROP + 100, rton.Acc > 0, rton.Acc < 200):
+    with rung(*_step(slot, 2), clock.Acc >= DROP + 100, rton.Acc > 0, rton.Acc < 200):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 2), clock.Acc >= DROP + 100, rton.Acc == 0):
+    with rung(*_step(slot, 2), clock.Acc >= DROP + 100, rton.Acc == 0):
         copy(1, slot.Result4)
-    with Rung(*_step(slot, 2), clock.Acc >= DROP + 100):
+    with rung(*_step(slot, 2), clock.Acc >= DROP + 100):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), clock.Acc >= DROP):
+    with rung(*_step(slot, 1), clock.Acc >= DROP):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
+    with rung(*_step(slot, 0), rton.Acc >= PRESET_REACHED):
         copy(1, slot.Scratch)
 
 

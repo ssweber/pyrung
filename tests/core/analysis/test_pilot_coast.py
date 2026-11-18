@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, count_up, math, on_delay, out
+from pyrung import Bool, Dint, Int, Program, Timer, copy, count_up, math, on_delay, out, rung
 from pyrung.core import Counter
 from pyrung.core.analysis.pilot.coast import (
     AVOID,
@@ -66,9 +66,9 @@ def _timer_program():
     Tmr = Timer.clone("Tmr")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 100, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Done)
     return prog
 
@@ -79,9 +79,9 @@ def _role_program():
     Tmr = Timer.clone("Tmr")
     State = Int("State", default=1)
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 100, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             copy(2, State)
     return prog
 
@@ -93,11 +93,11 @@ def _dual_output_program():
     A = Bool("A")
     B = Bool("B")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 100, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(A)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(B)
     return prog
 
@@ -112,11 +112,11 @@ def _counter_program():
     Enable = Bool("Enable", external=True)
     Count = Dint("Count")
     with Program() as prog:
-        with Rung():
+        with rung():
             math(Count + 1, Count)
-        with Rung(Enable):
+        with rung(Enable):
             out(Bool("Enabled"))
-        with Rung(Count >= 1000):
+        with rung(Count >= 1000):
             out(Bool("CountDone"))
     return prog
 
@@ -126,7 +126,7 @@ def _ramp_program():
     Enable = Bool("Enable", external=True)
     Temp = Int("Temp")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             math(Temp + 1, Temp)
     return prog
 
@@ -141,11 +141,11 @@ def _blink_program():
     with Program() as prog:
         # ~Blink.Done re-enables the timer the scan after it completes, so
         # Blink_Done is True for exactly one scan each period.
-        with Rung(~Blink.Done):
+        with rung(~Blink.Done):
             on_delay(Blink, 50, "ms")
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Long, 500, "ms")
-        with Rung(Long.Done):
+        with rung(Long.Done):
             out(Target)
     return prog
 
@@ -157,11 +157,11 @@ def _free_timer_program():
     Mirror = Bool("Mirror")
     Target = Bool("Target")
     with Program() as prog:
-        with Rung():
+        with rung():
             on_delay(Tmr, 80, "ms")
-        with Rung(Input):
+        with rung(Input):
             out(Mirror)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Target)
     return prog
 
@@ -172,7 +172,7 @@ def _gated_counter_program():
     Reset = Bool("Reset", external=True)
     Ctr = Counter[1]
     with Program() as prog:
-        with Rung(~Ctr.Done):
+        with rung(~Ctr.Done):
             count_up(Ctr, preset=3).reset(Reset)
     return prog
 
@@ -187,9 +187,9 @@ def _transient_program():
     Enable = Bool("Enable", external=True)
     State = Int("State", default=1)
     with Program() as prog:
-        with Rung(Enable, State == 2):
+        with rung(Enable, State == 2):
             copy(3, State)
-        with Rung(Enable, State == 1):
+        with rung(Enable, State == 1):
             copy(2, State)
     return prog
 
@@ -203,7 +203,7 @@ def _harness_feedback_program():
     Feedback = Bool("Feedback", physical=FB, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Feedback):
+        with rung(Enable, Feedback):
             copy(1, Stage)
     return prog
 
@@ -218,13 +218,13 @@ def _two_stage_program():
     TmrB = Timer.clone("TmrB")
     State = Int("State", default=1)
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(TmrA, 100, "ms")
-        with Rung(TmrA.Done, State == 1):
+        with rung(TmrA.Done, State == 1):
             copy(2, State)
-        with Rung(State == 2):
+        with rung(State == 2):
             on_delay(TmrB, 100, "ms")
-        with Rung(TmrB.Done):
+        with rung(TmrB.Done):
             copy(3, State)
     return prog
 
@@ -234,7 +234,7 @@ def _runaway_channel_program():
     Enable = Bool("Enable", external=True)
     Chan = Int("Chan")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             math(Chan + 1, Chan)
     return prog
 
@@ -247,9 +247,9 @@ def _static_channel_long_timer_program():
     with Program() as prog:
         # Written to a constant every scan so the tag materializes but never
         # departs its value (a static channel, not a pruned unused one).
-        with Rung():
+        with rung():
             copy(5, Chan)
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Long, 10_000, "ms")
     return prog
 
@@ -530,11 +530,11 @@ class TestCrossingExactness:
         X = Int("X", default=1)
         Hit = Bool("Hit")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, 1000, "ms")
-            with Rung():
+            with rung():
                 math((X * 3) % 7, X)
-            with Rung(Tmr.Done, X == 5):
+            with rung(Tmr.Done, X == 5):
                 out(Hit)
 
         plc = PLC(prog, dt=0.010)
@@ -590,7 +590,7 @@ class TestPredicateBump:
         # A timer's accumulator: a counter counts edges, so no held counter moves.
         Enable = Bool("Enable", external=True)
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer.clone("Ramp"), 100_000)
         plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
@@ -653,9 +653,9 @@ class TestAvoidBump:
         B = Bool("AvoidProjectionB")
         Noise = Int("AvoidProjectionNoise")
         with Program() as program:
-            with Rung(A):
+            with rung(A):
                 out(B)
-            with Rung(Noise == 1):
+            with rung(Noise == 1):
                 out(B)
         plc = PLC(program)
 
@@ -877,9 +877,9 @@ class TestCoastUnderPilotRungs:
         Tmr = Timer.clone("HoldAwareTmr")
         Output = Bool("HoldAwareOutput")
         with Program() as program:
-            with Rung():
+            with rung():
                 on_delay(Tmr, 1000, "ms")
-            with Rung(Input):
+            with rung(Input):
                 out(Output)
 
         def install(plc: PLC) -> None:
@@ -1331,13 +1331,13 @@ class TestSettleLandingFolds:
         Count = Dint("SettleAdvanceCount")
         Chan = Int("SettleAdvanceChan", default=5)
         with Program() as program:
-            with Rung():
+            with rung():
                 copy(5, Chan)
-            with Rung():
+            with rung():
                 math(Count + 1, Count)
-            with Rung(Enable, ~Reset):
+            with rung(Enable, ~Reset):
                 out(Bool("SettleAdvanceEnabled"))
-            with Rung(Count >= 1000):
+            with rung(Count >= 1000):
                 out(Bool("SettleAdvanceDone"))
 
         plc = PLC(program, dt=0.010)

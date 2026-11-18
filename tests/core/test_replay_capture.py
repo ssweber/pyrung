@@ -8,7 +8,6 @@ from pyrung.core import (
     ForLoop,
     Int,
     Program,
-    Rung,
     Timer,
     call,
     copy,
@@ -17,6 +16,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
     subroutine,
     system,
 )
@@ -35,7 +35,7 @@ def test_execution_capture_is_opt_in_and_preserves_zero_net_reassertion() -> Non
     state = Int("CaptureState")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, state)
             copy(0, state)
             copy(0, state)
@@ -68,11 +68,11 @@ def test_execution_capture_is_not_retained_by_a_sealed_epoch() -> None:
 
     @subroutine("EpochCaptureSubroutine")
     def transfer() -> None:
-        with Rung():
+        with rung():
             copy(source, result)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(7, source)
             call(transfer)
 
@@ -99,7 +99,7 @@ def test_capture_sink_runs_before_monitor_callback() -> None:
     signal = Bool("CallbackCaptureSignal", external=True)
     observed = Bool("CallbackCaptureObserved")
     with Program(strict=False) as program:
-        with Rung(signal):
+        with rung(signal):
             out(observed)
 
     plc = PLC(program)
@@ -128,7 +128,7 @@ def test_replay_capture_uses_shared_state_slab_and_restores_force_map(
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     source = PLC(program, dt=0.01)
@@ -158,9 +158,9 @@ def test_sparse_replay_lands_as_stepped_across_recorded_events() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             on_delay(timer, 5000, "ms")
-        with Rung(marker):
+        with rung(marker):
             out(seen)
 
     source = PLC(program, dt=0.01, checkpoint_interval=10_000)
@@ -204,7 +204,7 @@ def test_causal_slab_spans_intermediate_checkpoints_as_one_contiguous_window() -
     timer = Timer.clone("CheckpointSpanningSlabTmr")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             on_delay(timer, 50_000, "ms")
 
     source = PLC(program, dt=0.01, checkpoint_interval=200)
@@ -235,9 +235,9 @@ def _cold_history_with_edits() -> tuple[PLC, dict[int, SystemState]]:
     timer = Timer.clone("SlabWalkTmr")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(count + 1, count)
-        with Rung(enable):
+        with rung(enable):
             on_delay(timer, 50_000, "ms")
             copy(count, held)
 
@@ -344,7 +344,7 @@ def test_sparse_replay_preserves_clock_edge_memory() -> None:
     pulses = Int("ClockPulses")
 
     with Program(strict=False) as program:
-        with Rung(rise(system.sys.clock_1s)):
+        with rung(rise(system.sys.clock_1s)):
             math(pulses + 1, pulses)
 
     source = PLC(program, dt=0.01)
@@ -368,7 +368,7 @@ def test_replay_capture_reuses_source_pdg(monkeypatch: pytest.MonkeyPatch) -> No
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     source = PLC(program)
@@ -390,7 +390,7 @@ def test_replay_capture_does_not_commit_disposable_replay(
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     source = PLC(program)
@@ -415,11 +415,11 @@ def test_replay_capture_preserves_repeated_subroutine_occurrences() -> None:
 
     @subroutine("Shared")
     def shared():
-        with Rung():
+        with rung():
             copy(source, result)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, source)
             call(shared)
             copy(2, source)
@@ -449,7 +449,7 @@ def test_replay_capture_orders_multiple_instructions_and_their_events() -> None:
     result = Int("Result")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, source)
             copy(source, result)
 
@@ -498,10 +498,10 @@ def test_replay_capture_sources_a_continued_read_from_the_write_above() -> None:
     observed = Bool("Observed")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, state)
             copy(0, state)
-        with Rung(state == 0).continued():
+        with rung(state == 0).continued():
             out(observed)
 
     plc = PLC(program)
@@ -521,12 +521,12 @@ def test_replay_capture_sources_a_continued_read_from_the_rung_above() -> None:
     observed = Bool("Observed")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(5, state)
-        with Rung():
+        with rung():
             copy(6, state)
             copy(5, state)
-        with Rung(state == 5).continued():
+        with rung(state == 5).continued():
             out(observed)
 
     plc = PLC(program)
@@ -559,7 +559,7 @@ def test_replay_capture_links_memory_read_to_exact_memory_write() -> None:
                 ctx.set_tag(self.dest.name, ctx.get_memory("scratch"))
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             pass
     program.rungs[0].add_instruction(MemoryRoundTripInstruction())
 
@@ -592,7 +592,7 @@ def test_replay_capture_marks_default_read_without_a_dynamic_definition() -> Non
                 ctx.set_tag(self.dest.name, ctx.get_tag("Missing", 9))
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             pass
     program.rungs[0].add_instruction(DefaultReadInstruction())
 
@@ -613,11 +613,11 @@ def test_replay_capture_nests_parent_child_parent_in_source_order() -> None:
 
     @subroutine("ApplyMiddle")
     def apply_middle():
-        with Rung():
+        with rung():
             copy(2, state)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, state)
             call(apply_middle)
             copy(3, state)
@@ -672,7 +672,7 @@ def test_replay_capture_preserves_repeated_writes_inside_one_instruction() -> No
                 ctx.set_tag(self.dest.name, 2)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             pass
     program.rungs[0].add_instruction(MultiWriteInstruction())
 
@@ -703,7 +703,7 @@ def test_replay_capture_orders_force_rung_and_post_force_writes() -> None:
     signal = Bool("Signal")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             reset(signal)
 
     plc = PLC(program)
@@ -743,7 +743,7 @@ def test_replay_capture_loop_iteration_owns_index_before_child() -> None:
     result = Int("Result")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             with ForLoop(2) as loop:
                 copy(loop.idx, result)
 
@@ -774,7 +774,7 @@ def test_replay_capture_retains_condition_reads_outside_instruction_reads() -> N
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     plc = PLC(program)

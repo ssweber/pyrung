@@ -31,12 +31,12 @@ def program(
     Example:
         @program
         def my_logic():
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         @program(strict=False)
         def permissive_logic():
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         runner = PLC(my_logic)

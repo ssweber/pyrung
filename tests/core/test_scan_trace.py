@@ -30,7 +30,6 @@ from pyrung import (
     Or,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     blockcopy,
@@ -50,6 +49,7 @@ from pyrung import (
     return_early,
     rise,
     run_function,
+    rung,
     shift,
     subroutine,
     system,
@@ -216,101 +216,101 @@ def _lockstep(
 
 
 def _corpus_timer_long_preset() -> None:
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 400, "s")
-    with Rung(T.Done):
+    with rung(T.Done):
         latch(Hit)
-    with Rung(T.Acc >= 350):
+    with rung(T.Acc >= 350):
         out(Lamp)
 
 
 def _corpus_two_timers_past_300s() -> None:
-    with Rung():
+    with rung():
         on_delay(T1, 310, "s")
-    with Rung():
+    with rung():
         on_delay(T2, 650_000)
-    with Rung(T1.Done):
+    with rung(T1.Done):
         out(Lamp)
-    with Rung(T2.Done):
+    with rung(T2.Done):
         out(Lamp2)
 
 
 def _corpus_off_delay() -> None:
-    with Rung(Run):
+    with rung(Run):
         off_delay(T, 2_500)
-    with Rung(T.Done):
+    with rung(T.Done):
         out(Lamp)
 
 
 def _corpus_retentive_timer() -> None:
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 5_000).reset(Rst)
-    with Rung(T.Done):
+    with rung(T.Done):
         latch(Hit)
 
 
 def _corpus_sequencer() -> None:
-    with Rung(Step == 0):
+    with rung(Step == 0):
         on_delay(T1, 300)
-    with Rung(T1.Done):
+    with rung(T1.Done):
         copy(1, Step)
-    with Rung(Step == 1):
+    with rung(Step == 1):
         on_delay(T2, 700)
-    with Rung(T2.Done):
+    with rung(T2.Done):
         copy(2, Step)
-    with Rung(Step == 2):
+    with rung(Step == 2):
         on_delay(T3, 500)
-    with Rung(T3.Done):
+    with rung(T3.Done):
         copy(0, Step)
-    with Rung(T1.Acc >= 100):
+    with rung(T1.Acc >= 100):
         out(Lamp)
 
 
 def _corpus_counter_on_clock() -> None:
-    with Rung(system.sys.clock_100ms):
+    with rung(system.sys.clock_100ms):
         count_up(Cnt, 25).reset(Rst)
-    with Rung(Cnt.Done):
+    with rung(Cnt.Done):
         latch(Hit)
 
 
 def _corpus_counter_down() -> None:
-    with Rung(system.sys.clock_500ms):
+    with rung(system.sys.clock_500ms):
         count_down(Cnt, 0).reset(Rst)
-    with Rung(Cnt.Acc <= -5):
+    with rung(Cnt.Acc <= -5):
         latch(Hit)
 
 
 def _corpus_calc_wraps() -> None:
-    with Rung():
+    with rung():
         math(N + 7, N)
-    with Rung(N < 0):
+    with rung(N < 0):
         latch(Hit)
 
 
 def _corpus_calc_gated_by_clock() -> None:
-    with Rung(system.sys.clock_1s):
+    with rung(system.sys.clock_1s):
         math(N + 1, N)
-    with Rung(N >= 5):
+    with rung(N >= 5):
         out(Lamp)
 
 
 def _corpus_real_accumulates() -> None:
-    with Rung(Run):
+    with rung(Run):
         math(Temp + 0.25, Temp)
-    with Rung(Temp >= 10.0):
+    with rung(Temp >= 10.0):
         latch(Hit)
 
 
 def _median_of(*addresses: int) -> None:
     values = Block("TraceMedianValues", TagType.INT, 1, 3)
     level = Int("TrMedianLevel")
-    with Rung(Run):
+    with rung(Run):
         copy(7, values[1])
-    with Rung(Rst):
+    with rung(Rst):
         copy(9, values[2])
-    with Rung():
+    with rung():
         math(values.select(addresses[0], addresses[-1]).median(), level)
-    with Rung(level >= 8):
+    with rung(level >= 8):
         latch(Hit)
 
 
@@ -323,89 +323,89 @@ def _corpus_median_of_an_odd_count() -> None:
 
 
 def _corpus_real_overflows() -> None:
-    with Rung():
+    with rung():
         copy(1.5e30, Temp, oneshot=True)
-    with Rung():
+    with rung():
         math(Temp * 1.5, Temp)
-    with Rung(Temp > 1e37):
+    with rung(Temp > 1e37):
         latch(Hit)
 
 
 def _corpus_division_by_moving() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 2_000)
-    with Rung():
+    with rung():
         math(100 / (T.Acc - 1_000), N)
 
 
 def _corpus_copy_out_of_range() -> None:
-    with Rung():
+    with rung():
         math(Big + 300, Big)
-    with Rung():
+    with rung():
         copy(Big, N)
 
 
 def _corpus_clock_stored() -> None:
-    with Rung(system.sys.clock_1s):
+    with rung(system.sys.clock_1s):
         out(Lamp)
-    with Rung(system.sys.clock_100ms):
+    with rung(system.sys.clock_100ms):
         out(Lamp2)
 
 
 def _corpus_rtc_gate() -> None:
-    with Rung(system.rtc.second < 30):
+    with rung(system.rtc.second < 30):
         math(N + 1, N)
-    with Rung():
+    with rung():
         on_delay(T, 60_000)
 
 
 def _corpus_rtc_stored() -> None:
-    with Rung():
+    with rung():
         copy(system.rtc.second, N)
-    with Rung(N == 59):
+    with rung(N == 59):
         latch(Hit)
 
 
 def _corpus_edges() -> None:
-    with Rung(rise(system.sys.clock_1s)):
+    with rung(rise(system.sys.clock_1s)):
         math(N + 1, N)
-    with Rung(fall(Run)):
+    with rung(fall(Run)):
         math(M + 1, M)
-    with Rung(rise(Run)):
+    with rung(rise(Run)):
         latch(Lamp)
 
 
 def _corpus_oneshot() -> None:
-    with Rung(T.Done):
+    with rung(T.Done):
         copy(1, N, oneshot=True)
-    with Rung(N == 0):
+    with rung(N == 0):
         math(M + 1, M)
-    with Rung():
+    with rung():
         copy(0, N)
-    with Rung():
+    with rung():
         on_delay(T, 200)
 
 
 def _corpus_double_acc_write() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 300)
-    with Rung():
+    with rung():
         copy(0, T.Acc)
 
 
 def _corpus_preset_around_reader() -> None:
-    with Rung():
+    with rung():
         copy(200, Preset)
-    with Rung():
+    with rung():
         on_delay(T, Preset)
-    with Rung():
+    with rung():
         copy(5_000, Preset)
-    with Rung(T.Done):
+    with rung(T.Done):
         latch(Hit)
 
 
 def _corpus_drum() -> None:
-    with Rung(Run):
+    with rung(Run):
         time_drum(
             outputs=[Lamp, Lamp2],
             pattern=[[1, 0], [0, 1], [1, 1]],
@@ -418,84 +418,84 @@ def _corpus_drum() -> None:
 
 
 def _corpus_block_fill_and_copy() -> None:
-    with Rung(system.sys.clock_500ms):
+    with rung(system.sys.clock_500ms):
         fill(N, Ds.select(1, 3))
-    with Rung():
+    with rung():
         blockcopy(Ds.select(1, 3), Ds.select(4, 6))
-    with Rung():
+    with rung():
         math(N + 1, N)
 
 
 def _corpus_indirect() -> None:
-    with Rung():
+    with rung():
         copy(Step, Ds[N])
-    with Rung(T.Done):
+    with rung(T.Done):
         math(N + 1, N)
-    with Rung(~T.Done):
+    with rung(~T.Done):
         on_delay(T, 250)
-    with Rung(N >= 8):
+    with rung(N >= 8):
         copy(1, N)
-    with Rung(Ds[N] == 3):
+    with rung(Ds[N] == 3):
         out(Lamp)
 
 
 def _corpus_shift() -> None:
-    with Rung(Run):
+    with rung(Run):
         shift(Bits.select(1, 6)).clock(system.sys.clock_100ms).reset(Rst)
-    with Rung(Bits[6]):
+    with rung(Bits[6]):
         latch(Hit)
 
 
 def _corpus_subroutine() -> None:
     @subroutine("TrSub")
     def _sub() -> None:
-        with Rung(Rst):
+        with rung(Rst):
             return_early()
-        with Rung():
+        with rung():
             math(N + 1, N)
-        with Rung(N >= 100):
+        with rung(N >= 100):
             copy(0, N)
 
-    with Rung(Run):
+    with rung(Run):
         call(_sub)
-    with Rung():
+    with rung():
         on_delay(T, 1_000)
 
 
 def _corpus_rtc_apply() -> None:
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 2_000)
-    with Rung(rise(T.Done)):
+    with rung(rise(T.Done)):
         copy(10, system.rtc.new_second)
         copy(5, system.rtc.new_minute)
         copy(1, system.rtc.new_hour)
         out(system.rtc.apply_time)
-    with Rung(rise(T.Done)):
+    with rung(rise(T.Done)):
         copy(system.rtc.hour, N)
-    with Rung():
+    with rung():
         copy(system.rtc.hour, M)
-    with Rung():
+    with rung():
         copy(system.rtc.second, Step)
 
 
 def _corpus_rtc_apply_date() -> None:
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 1_000)
-    with Rung(rise(T.Done)):
+    with rung(rise(T.Done)):
         copy(1, system.rtc.new_day)
         copy(2, system.rtc.new_month)
         copy(2027, system.rtc.new_year4)
         out(system.rtc.apply_date)
-    with Rung(Run):
+    with rung(Run):
         on_delay(T1, 3_000)
-    with Rung(rise(T1.Done)):
+    with rung(rise(T1.Done)):
         copy(2, system.rtc.new_hour)
         copy(0, system.rtc.new_minute)
         copy(0, system.rtc.new_second)
         out(system.rtc.apply_time)
-    with Rung():
+    with rung():
         copy(system.rtc.month, M)
-    with Rung():
+    with rung():
         copy(system.rtc.hour, Step)
 
 
@@ -504,49 +504,49 @@ def _corpus_rtc_apply_held() -> None:
 
     From then on the hook is never quiet, so no scan reaches the loop.
     """
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 1_000)
-    with Rung(T.Done):
+    with rung(T.Done):
         copy(2, system.rtc.new_hour)
         copy(0, system.rtc.new_minute)
         copy(0, system.rtc.new_second)
         out(system.rtc.apply_time)
-    with Rung():
+    with rung():
         copy(system.rtc.second, Step)
 
 
 def _corpus_mode_stop() -> None:
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 2_000)
-    with Rung(rise(T.Done)):
+    with rung(rise(T.Done)):
         out(system.sys.cmd_mode_stop)
-    with Rung():
+    with rung():
         math(N + 1, N)
 
 
 def _corpus_mode_stop_at_once() -> None:
-    with Rung(Run):
+    with rung(Run):
         out(system.sys.cmd_mode_stop)
-    with Rung():
+    with rung():
         math(N + 1, N)
 
 
 def _corpus_forloop() -> None:
-    with Rung(Run), forloop(3):
+    with rung(Run), forloop(3):
         math(N + 1, N)
-    with Rung(N >= 900):
+    with rung(N >= 900):
         latch(Hit)
 
 
 def _corpus_text_to_codes() -> None:
     # Copy to text iterates the text's characters. It limits the store to the block's length.
-    with Rung():
+    with rung():
         copy("A", Txt[1])
-    with Rung(Run):
+    with rung(Run):
         on_delay(T, 2_000)
-    with Rung(Run):
+    with rung(Run):
         copy(Txt[1], Ds[1], convert=to_ascii)
-    with Rung(T.Done):
+    with rung(T.Done):
         copy(Txt[2], Ds[2], convert=to_ascii)
         copy(T.Acc, N)
 
@@ -721,11 +721,11 @@ def test_a_harness_plant_runs_in_the_loop_as_part_of_the_scan(fine_loop: None) -
     Plant = Real("TrPlant", physical=Physical("TrSensor", ramp_on=1.0, ramp_off=-0.5), link="TrRun")
 
     def fill_program() -> None:
-        with Rung(Run):
+        with rung(Run):
             out(Lamp)
-        with Rung(Plant >= 3.0):
+        with rung(Plant >= 3.0):
             latch(Hit)
-        with Rung():
+        with rung():
             on_delay(T, 40_000)
 
     program = _build(fill_program)
@@ -757,9 +757,9 @@ def test_a_bool_plant_latches_its_arming_key_as_stepping_does(fine_loop: None) -
     )
 
     def fill_program() -> None:
-        with Rung(Feedback):
+        with rung(Feedback):
             latch(Hit)
-        with Rung():
+        with rung():
             on_delay(T, 40_000)
 
     program = _build(fill_program)
@@ -783,25 +783,25 @@ def _reads_and_writes(tag: Any) -> Callable[[], None]:
 
     def fill_program() -> None:
         if tag.type == TagType.BOOL:
-            with Rung(tag):
+            with rung(tag):
                 out(Lamp2)
         elif tag.type == TagType.REAL:
-            with Rung():
+            with rung():
                 copy(tag, Temp)
         else:
-            with Rung():
+            with rung():
                 copy(tag, N)
-        with Rung():
+        with rung():
             on_delay(T, 500)
-        with Rung():
+        with rung():
             on_delay(T1, 1_500)
         if tag.name in WRITABLE_SYSTEM_TAG_NAMES:
-            with Rung(rise(T.Done)):
+            with rung(rise(T.Done)):
                 if tag.type == TagType.BOOL:
                     out(tag)
                 else:
                     copy(3, tag)
-            with Rung(rise(T1.Done)):
+            with rung(rise(T1.Done)):
                 if tag.type == TagType.BOOL:
                     reset(tag)
                 else:
@@ -827,45 +827,45 @@ Source = Real("TrSource")
 
 
 def _pulsed_coil_on_int() -> None:
-    with Rung(Hit):
+    with rung(Hit):
         out(Coiled)
 
 
 def _pulsed_oneshot_on_int() -> None:
-    with Rung(Hit):
+    with rung(Hit):
         out(Coiled, oneshot=True)
 
 
 def _pulsed_coil_on_real() -> None:
-    with Rung(Hit):
+    with rung(Hit):
         out(CoiledReal)
 
 
 def _pulsed_coil_on_a_slot() -> None:
-    with Rung(Hit):
+    with rung(Hit):
         out(Ds[1])
 
 
 def _pulsed_coil_on_a_range() -> None:
-    with Rung(Hit):
+    with rung(Hit):
         out(Ds.select(1, 3))
 
 
 def _pulsed_latch_over_a_stored_one() -> None:
-    with Rung(fall(system.sys.clock_1s)):
+    with rung(fall(system.sys.clock_1s)):
         copy(1, Coiled)
-    with Rung(rise(system.sys.clock_1s)):
+    with rung(rise(system.sys.clock_1s)):
         reset(Coiled)
-    with Rung(Hit):
+    with rung(Hit):
         latch(Coiled)
 
 
 def _pulsed_negative_gain() -> None:
-    with Rung(Hit):
+    with rung(Hit):
         copy(5.5, Source)
-    with Rung(~Hit):
+    with rung(~Hit):
         copy(0.0, Source)
-    with Rung():
+    with rung():
         math(Source * -1.0, Gained)
 
 
@@ -891,9 +891,9 @@ def test_a_stretch_between_published_states_leaves_what_stepping_does(
     """
 
     def program() -> None:
-        with Rung(Run):
+        with rung(Run):
             on_delay(T, 10_000_000)
-        with Rung(rise(system.sys.clock_1s), T.Acc > 100):
+        with rung(rise(system.sys.clock_1s), T.Acc > 100):
             out(Hit)
         LAST_WRITTEN[name]()
 
@@ -903,9 +903,9 @@ def test_a_stretch_between_published_states_leaves_what_stepping_does(
 
 def test_stepping_publishes_the_write_that_equals_what_the_tag_held() -> None:
     def program() -> None:
-        with Rung(Run):
+        with rung(Run):
             out(Coiled)
-        with Rung():
+        with rung():
             math(Source * -1.0, Gained)
 
     plc = PLC(_build(program), dt=0.01)
@@ -960,25 +960,25 @@ STOPS: dict[str, Callable[[], Any]] = {
 
 
 def _stop_program() -> None:
-    with Rung(Step == 0):
+    with rung(Step == 0):
         on_delay(T1, 300)
-    with Rung(T1.Done):
+    with rung(T1.Done):
         copy(1, Step)
-    with Rung(Step == 1):
+    with rung(Step == 1):
         on_delay(T2, 700)
-    with Rung(T2.Done):
+    with rung(T2.Done):
         copy(2, Step)
-    with Rung(Step == 2):
+    with rung(Step == 2):
         on_delay(T3, 500)
-    with Rung(T3.Done):
+    with rung(T3.Done):
         copy(0, Step)
-    with Rung(T1.Acc >= 100):
+    with rung(T1.Acc >= 100):
         out(Lamp)
-    with Rung(system.sys.clock_500ms):
+    with rung(system.sys.clock_500ms):
         math(N + 1, N)
-    with Rung():
+    with rung():
         copy(N, Ds[2])
-    with Rung():
+    with rung():
         copy(Step, Ds[M])
 
 
@@ -1045,11 +1045,11 @@ def test_bounds_are_watched_on_every_scan_of_the_loop(fine_loop: None) -> None:
     Choice = Int("TrChoice", choices={0: "a", 1: "b"})
 
     def fill_program() -> None:
-        with Rung(system.sys.clock_100ms):
+        with rung(system.sys.clock_100ms):
             math(Limited + 1, Limited)
-        with Rung(T.Done):
+        with rung(T.Done):
             copy(5, Choice)
-        with Rung():
+        with rung():
             on_delay(T, 8_000)
 
     program = _build(fill_program)
@@ -1077,9 +1077,9 @@ def test_bounds_are_watched_on_every_scan_of_the_loop(fine_loop: None) -> None:
 
 def _timer_program() -> Program:
     def fill_program() -> None:
-        with Rung():
+        with rung():
             on_delay(T, 2_000)
-        with Rung():
+        with rung():
             math(N + 3, N)
 
     return _build(fill_program)
@@ -1133,11 +1133,11 @@ def test_block_cell_rewritten_with_its_own_value_goes_live_in_the_loop(fine_loop
     """Write a cell with its own value. No value changes, but the cell is committed from then on."""
 
     def fill_program() -> None:
-        with Rung():
+        with rung():
             on_delay(T, 2_000)
-        with Rung(T.Acc >= 500):
+        with rung(T.Acc >= 500):
             fill(0, Ds.select(1, 3))
-        with Rung():
+        with rung():
             copy(Step, Ds[N])
 
     counts = _lockstep(_build(fill_program), [(3.0, {N: 5})])
@@ -1149,13 +1149,13 @@ def test_block_cell_rewritten_with_its_own_value_goes_live_in_the_loop(fine_loop
 
 def _busy_toggle() -> Program:
     def fill_program() -> None:
-        with Rung(~Lamp):
+        with rung(~Lamp):
             out(Lamp)
-        with Rung(Lamp):
+        with rung(Lamp):
             math(N + 1, N)
-        with Rung(~Lamp):
+        with rung(~Lamp):
             math(M + N, M)
-        with Rung(M > 100):
+        with rung(M > 100):
             copy(0, M)
 
     return _build(fill_program)
@@ -1189,9 +1189,9 @@ def test_a_program_that_keeps_exiting_backs_off(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.parametrize("tag", [system.sys.scan_counter, system.sys.scan_clock_toggle])
 def test_scan_derived_tag_declines_the_run(tag: Any, fine_loop: None) -> None:
     def fill_program() -> None:
-        with Rung(tag):
+        with rung(tag):
             math(N + 1, N)
-        with Rung():
+        with rung():
             copy(tag, M)
 
     counts = _lockstep(_build(fill_program), [(1.0, {})])
@@ -1201,7 +1201,7 @@ def test_scan_derived_tag_declines_the_run(tag: Any, fine_loop: None) -> None:
 
 def test_randint_declines_the_run(fine_loop: None) -> None:
     def fill_program() -> None:
-        with Rung():
+        with rung():
             copy(randint(1, 6), N)
 
     counts = _lockstep(_build(fill_program), [(0.5, {})])
@@ -1227,7 +1227,7 @@ def test_a_run_function_body_is_not_traced(fine_loop: None) -> None:
         return {"out": value + 1}
 
     def fill_program() -> None:
-        with Rung():
+        with rung():
             run_function(impure, ins={"value": N}, outs={"out": N})
 
     program = _build(fill_program)

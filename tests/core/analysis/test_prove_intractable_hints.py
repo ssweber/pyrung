@@ -7,13 +7,13 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     copy,
     on_delay,
     out,
     run_function,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -31,9 +31,9 @@ class TestIntractableTags:
             return {"result": 42}
 
         with Program(strict=False) as logic:
-            with Rung(trigger):
+            with rung(trigger):
                 run_function(compute, outs={"result": result_tag})
-            with Rung(result_tag == 1):
+            with rung(result_tag == 1):
                 out(Bool("Output"))
 
         result = _classify_dimensions(logic)
@@ -53,7 +53,7 @@ class TestIntractableHints:
         dest = Int("Out")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -68,7 +68,7 @@ class TestIntractableHints:
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
-            with Rung(level > threshold):
+            with rung(level > threshold):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -82,7 +82,7 @@ class TestIntractableHints:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung(val > other):
+            with rung(val > other):
                 out(flag)
 
         result = _classify_dimensions(logic)
@@ -98,9 +98,9 @@ class TestIntractableHints:
             return {"result": 42}
 
         with Program(strict=False) as logic:
-            with Rung(trigger):
+            with rung(trigger):
                 run_function(compute, outs={"result": result_tag})
-            with Rung(result_tag == 1):
+            with rung(result_tag == 1):
                 out(Bool("Output"))
 
         result = _classify_dimensions(logic)
@@ -114,7 +114,7 @@ class TestIntractableHints:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung(val > other):
+            with rung(val > other):
                 out(flag)
 
         result = _classify_dimensions(logic)
@@ -136,15 +136,15 @@ class TestThresholdBlockerHints:
         alarm_b = Bool("SharedAlarmB")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(500, shared_ts)
-            with Rung(enable_a):
+            with rung(enable_a):
                 on_delay(t_a, preset=1000)
-            with Rung(enable_b):
+            with rung(enable_b):
                 on_delay(t_b, preset=1000)
-            with Rung(t_a.Acc > shared_ts):
+            with rung(t_a.Acc > shared_ts):
                 out(alarm_a)
-            with Rung(t_b.Acc > shared_ts):
+            with rung(t_b.Acc > shared_ts):
                 out(alarm_b)
 
         result = _classify_dimensions(logic)
@@ -164,13 +164,13 @@ class TestThresholdBlockerHints:
         mode = Bool("ThresholdMode")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(500, ts)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t, preset=1000)
-            with Rung(t.Acc > ts):
+            with rung(t.Acc > ts):
                 out(alarm)
-            with Rung(ts == 500):
+            with rung(ts == 500):
                 out(mode)
 
         result = _classify_dimensions(logic)
@@ -189,13 +189,13 @@ class TestThresholdBlockerHints:
         alarm = Bool("DataReadAlarm")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(500, threshold)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t, preset=1000)
-            with Rung():
+            with rung():
                 copy(t.Acc, saved)
-            with Rung(t.Acc > threshold):
+            with rung(t.Acc > threshold):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -216,7 +216,7 @@ class TestMultipleBlockers:
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
-            with Rung(a > b):
+            with rung(a > b):
                 out(flag)
 
         result = _classify_dimensions(logic)

@@ -43,7 +43,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, out, pack_text, reset, system
+from pyrung.core import copy, fill, math, out, pack_text, reset, rung, system
 from tests.conformance.memory import c, dd, df, dh, txt
 from tests.conformance.probe_kit import class_of, finish, once
 
@@ -56,7 +56,7 @@ PAST_RANGE = "3.40282352E38"
 
 def _flag_bits(slot: Any, coils: tuple[Any, ...], into: Any) -> None:
     for bit, coil in zip((1, 2, 4), coils, strict=True):
-        with Rung(*once(slot), coil):
+        with rung(*once(slot), coil):
             math(into + bit, into)
 
 
@@ -70,7 +70,7 @@ def _stage_non_finite(inf: Any, minus_inf: Any, nan: Any) -> None:
 def prove_fraction_into_word(slot: Any) -> None:
     fields = (slot.Result1, slot.Result2, slot.Result3, slot.Result4)
     for value, address, field in zip((1.5, 2.5, -1.5, 1.4), range(131, 135), fields, strict=True):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             copy(value, dh[address])
             copy(dh[address], field)
     finish(slot)
@@ -84,22 +84,22 @@ def prove_copy_non_finite_into_dd(slot: Any) -> None:
     inf, minus_inf, nan = df[121], df[122], df[123]
     dints = (dd[211], dd[212], dd[213])
     coils = (c[721], c[722], c[723])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         _stage_non_finite(inf, minus_inf, nan)
         fill(99, dd.select(211, 213))
     for source, dint, coil in zip((nan, inf, minus_inf), dints, coils, strict=True):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             copy(source, dint)
-        with Rung(*once(slot), SC43):
+        with rung(*once(slot), SC43):
             out(coil)
     for dint, field in zip(dints, (slot.Result1, slot.Result2, slot.Result3), strict=True):
         class_of(slot, dint, DD_CLASSES, field)
     _flag_bits(slot, coils, slot.Result4)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1, slot.ErrorCode)
-    with Rung(*once(slot), nan >= 0):
+    with rung(*once(slot), nan >= 0):
         copy(0, slot.ErrorCode)
-    with Rung(*once(slot), nan < 0):
+    with rung(*once(slot), nan < 0):
         copy(0, slot.ErrorCode)
     finish(slot)
 
@@ -113,16 +113,16 @@ def init_copy_non_finite_into_dd(slot: Any) -> None:
 def prove_math_non_finite_into_ints(slot: Any) -> None:
     inf, minus_inf, nan = df[124], df[125], df[126]
     coils = (c[724], c[725], c[726])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         _stage_non_finite(inf, minus_inf, nan)
         copy(99, slot.Result1)
         fill(99, dd.select(214, 215))
     for source, dest, coil in zip(
         (minus_inf, nan, minus_inf), (slot.Result1, dd[214], dd[215]), coils, strict=True
     ):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             math(source, dest)
-        with Rung(*once(slot), SC43):
+        with rung(*once(slot), SC43):
             out(coil)
     class_of(slot, dd[214], DD_CLASSES, slot.Result2)
     class_of(slot, dd[215], DD_CLASSES, slot.Result3)
@@ -141,10 +141,10 @@ def prove_pack_text_past_range(slot: Any) -> None:
     coils = (c[727], c[728], c[729])
     # Each Copy and Fill takes two of a CLICK rung's 32 rows, so the 16 Copies and the Fill need two
     # rungs.
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         for offset, char in enumerate(PAST_RANGE):
             copy(char, txt[411 + offset])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(9.0, df.select(127, 129))
         for offset, char in enumerate("1.5"):
             copy(char, txt[441 + offset])
@@ -154,15 +154,15 @@ def prove_pack_text_past_range(slot: Any) -> None:
         coils,
         strict=True,
     ):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             pack_text(source, dest)
-        with Rung(*once(slot), SC43):
+        with rung(*once(slot), SC43):
             out(coil)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(over * 0.5, half)
-    with Rung(*once(slot), half > 3.0e38):
+    with rung(*once(slot), half > 3.0e38):
         copy(1, slot.Result1)
-    with Rung(*once(slot), over == 9.0):
+    with rung(*once(slot), over == 9.0):
         copy(2, slot.Result1)
     class_of(slot, blank, (9.0, 0.0), slot.Result2)
     class_of(slot, good, (1.5, 9.0), slot.Result3)

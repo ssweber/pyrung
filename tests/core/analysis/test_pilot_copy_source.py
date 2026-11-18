@@ -7,7 +7,7 @@ the copy source to find the chain.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, blockcopy, call, copy, out, reset, rise, subroutine
+from pyrung import Bool, Int, Program, blockcopy, call, copy, out, reset, rise, rung, subroutine
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.memory_block import Block
 from pyrung.core.runner import PLC
@@ -28,33 +28,33 @@ def _jump_state_program():
 
     @subroutine("mode_sub")
     def mode_sub():
-        with Rung(ProdMode):
+        with rung(ProdMode):
             copy(1, UnitMode, oneshot=True)
-        with Rung(UnitMode >= 1, UnitMode <= 3):
+        with rung(UnitMode >= 1, UnitMode <= 3):
             copy(UnitMode, Mode)
-        with Rung():
+        with rung():
             copy(0, ReqBool)
-        with Rung():
+        with rung():
             copy(0, UnitMode)
-        with Rung():
+        with rung():
             reset(ChgReq)
 
     with Program() as prog:
-        with Rung(ChgReq):
+        with rung(ChgReq):
             copy(1, ReqBool, oneshot=True)
-        with Rung(ReqBool == 1):
+        with rung(ReqBool == 1):
             call(mode_sub)
-        with Rung(Adv, Cur == 9):
+        with rung(Adv, Cur == 9):
             copy(15, Req)
-        with Rung(Mode == 1, Cur == 15):
+        with rung(Mode == 1, Cur == 15):
             copy(1, CompleteBool)
-        with Rung(CompleteBool == 1):
+        with rung(CompleteBool == 1):
             copy(4, Req)
             copy(0, CompleteBool)
-        with Rung(Req != 0):
+        with rung(Req != 0):
             copy(Req, Cur)
             copy(0, Req)
-        with Rung(Cur == 4):
+        with rung(Cur == 4):
             out(Target)
 
     return prog, Target
@@ -101,12 +101,12 @@ def test_blockcopy_source_receipt_keeps_subroutine_call_gate() -> None:
 
     @subroutine("BlockCopyShift")
     def shift():
-        with Rung(rise(Push)):
+        with rung(rise(Push)):
             blockcopy(log.select(1, 2), log.select(2, 3))
             copy(Value, log[1])
 
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             call(shift)
 
     path = pilot_how(PLC(prog, dt=0.010), log[2] == 7, max_scans=500)

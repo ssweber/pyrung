@@ -14,7 +14,7 @@ legitimate early-window idiom and stays quiet.
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, Timer, copy, on_delay
+from pyrung.core import Bool, Int, Program, Timer, copy, on_delay, rung
 from pyrung.core.validation.report import check
 
 
@@ -23,9 +23,9 @@ def _literal_preset_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Acc < 5):
+        with rung(tmr.Acc < 5):
             copy(1, out)
     return prog
 
@@ -36,9 +36,9 @@ def _tag_preset_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, setpoint, "sec")
-        with Rung(setpoint > tmr.Acc):
+        with rung(setpoint > tmr.Acc):
             copy(1, out)
     return prog
 
@@ -68,9 +68,9 @@ def _completion_check_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Acc >= 5):
+        with rung(tmr.Acc >= 5):
             copy(1, out)
     return prog
 
@@ -80,9 +80,9 @@ def _early_window_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
-        with Rung(tmr.Acc <= 2):
+        with rung(tmr.Acc <= 2):
             copy(1, out)
     return prog
 

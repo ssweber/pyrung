@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung import PLC, Block, Bool, Int, Program, Rung, copy, latch, math, out, run_function
+from pyrung import PLC, Block, Bool, Int, Program, copy, latch, math, out, run_function, rung
 from pyrung.core.analysis.causal import CausalChain, why_cause
 from pyrung.core.state import SystemState
 from pyrung.core.tag import TagType
@@ -27,11 +27,11 @@ def _program(*, listed: bool = False, dest: Any = None) -> tuple[Program, Block]
     big = Block("Big", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
         if listed:
-            with Rung(SET):
+            with rung(SET):
                 copy(3, big[5])
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT] if dest is None else dest(big))
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     return prog, big
 
@@ -124,13 +124,13 @@ def test_why_follows_a_pointer_aimed_by_a_force_upstream() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     cmd, ptr = Int("Cmd"), Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung(SET):
+        with rung(SET):
             copy(150, cmd)
-        with Rung():
+        with rung():
             math(cmd * 10, ptr)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[ptr])
-        with Rung(big[10] > 50):
+        with rung(big[10] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.force("Cmd", 1)
@@ -172,11 +172,11 @@ def test_why_names_the_pointer_write_that_stored_last() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     at2, k, w2 = Int("At2", external=True), Int("K", external=True), Bool("W2", external=True)
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(w2):
+        with rung(w2):
             copy(k, big[at2])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = _overwritten_then_restored(prog, {"W2": True, "At2": 5, "K": 100})
 
@@ -214,15 +214,15 @@ def test_why_reads_a_pointer_write_from_scans_a_compiled_run_did_not_record() ->
     big = Block("Big", TagType.INT, 1, 2000)
     cnt, ptr = Int("Cnt"), Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung(cnt < 30000):
+        with rung(cnt < 30000):
             math(cnt + 1, cnt)
-        with Rung(cnt > 1500):
+        with rung(cnt > 1500):
             math(AT - 2, ptr)
-        with Rung(cnt <= 1500):
+        with rung(cnt <= 1500):
             copy(AT, ptr)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[ptr])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Source": 100, "Write": True, "At": 7})
@@ -241,11 +241,11 @@ def _rewrites(*, pointer: bool, listed_first: bool) -> PLC:
     first = Bool("First", external=True)
     with Program(strict=False) as prog:
         if listed_first:
-            with Rung(first):
+            with rung(first):
                 copy(100, big[5])
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT] if pointer else big[5])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"First": True} if listed_first else {"Big5": 100})
@@ -270,11 +270,11 @@ def _blocked(*, pointer: bool, fired_before: bool) -> PLC:
     big = Block("Big", TagType.INT, 1, 2000)
     reset = Bool("Reset", external=True)
     with Program(strict=False) as prog:
-        with Rung(reset):
+        with rung(reset):
             copy(0, big[5])
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT] if pointer else big[5])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     if fired_before:
@@ -318,10 +318,10 @@ def test_why_does_not_credit_a_logger_with_the_element_after_the_one_it_wrote() 
     # Big6's value there.
     big, idx = Block("Big", TagType.INT, 1, 2000), Int("Idx")
     with Program(strict=False) as prog:
-        with Rung(LOG):
+        with rung(LOG):
             copy(VALUE, big[idx])
             math(idx + 1, idx)
-        with Rung(big[6] > 50):
+        with rung(big[6] > 50):
             out(HIGH)
     plc = _logged(prog, Big6=60)
     assert plc.current_state.tags["Big5"] == 7
@@ -335,11 +335,11 @@ def test_why_does_not_credit_a_logger_with_the_element_after_the_one_it_wrote() 
 def test_why_does_not_trust_a_pointer_a_later_rung_moves() -> None:
     big, idx = Block("Big", TagType.INT, 1, 2000), Int("Idx")
     with Program(strict=False) as prog:
-        with Rung(LOG):
+        with rung(LOG):
             copy(VALUE, big[idx])
-        with Rung(LOG):
+        with rung(LOG):
             math(idx + 1, idx)
-        with Rung(big[6] > 50):
+        with rung(big[6] > 50):
             out(HIGH)
     plc = _logged(prog, Big6=60)
 
@@ -351,11 +351,11 @@ def test_why_does_not_trust_a_pointer_a_pending_force_moves() -> None:
     big, cmd = Block("Big", TagType.INT, 1, 2000), Int("Cmd")
     go = Bool("Go", external=True)
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(150, cmd)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[cmd * 10])
-        with Rung(big[10] > 50):
+        with rung(big[10] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Source": 3, "Go": True, "Write": True, "Big10": 60})
@@ -463,9 +463,9 @@ def test_cause_does_not_credit_a_pointer_write_to_a_tag_of_another_block() -> No
     big = Block("Big", TagType.INT, 1, 2000)
     other = Block("Other", TagType.INT, 1, 10)
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(other[5] > 50):
+        with rung(other[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -487,11 +487,11 @@ def test_cause_finds_a_pointer_write_into_a_tag_mapped_onto_two_banks() -> None:
     twice.map_to(second[3500])
     at_second = Int("AtSecond", external=True)
     with Program(strict=False) as prog:
-        with Rung(SET):
+        with rung(SET):
             copy(3, twice)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, first[AT])
-        with Rung():
+        with rung():
             copy(second[at_second], Int("Shown"))
     plc = PLC(prog, dt=0.01)
     plc.step()
@@ -528,11 +528,11 @@ def test_why_follows_a_forced_pointer_past_what_the_program_stores_in_it() -> No
     big = Block("Big", TagType.INT, 1, 2000)
     ptr = Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung(SET):
+        with rung(SET):
             copy(1500, ptr)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[ptr])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Source": 100, "Write": True})
@@ -560,15 +560,15 @@ def _moved_between_scans(*, pointer: bool) -> PLC:
     # lists no targets for the write.
     big, ptr = Block("Big", TagType.INT, 1, 2000), Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(AT, ptr)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[ptr] if pointer else big[5])
-        with Rung():
+        with rung():
             math(ptr + 4, ptr)
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
-        with Rung(big[9] > 50):
+        with rung(big[9] > 50):
             out(FAR)
     plc = PLC(prog, dt=0.01)
     plc.patch({"At": 5, "Source": 100})
@@ -598,13 +598,13 @@ def test_why_aims_a_blocked_pointer_write_with_the_pending_forces() -> None:
     for forced in ("Ptr", "Cmd"):
         big, cmd, ptr = Block("Big", TagType.INT, 1, 2000), Int("Cmd"), Int("Ptr")
         with Program(strict=False) as prog:
-            with Rung(SET):
+            with rung(SET):
                 copy(150, cmd)
-            with Rung(aim):
+            with rung(aim):
                 math(cmd * 10, ptr)
-            with Rung(WRITE):
+            with rung(WRITE):
                 copy(SOURCE, big[ptr])
-            with Rung(big[10] > 50):
+            with rung(big[10] > 50):
                 out(HIGH)
         plc = PLC(prog, dt=0.01)
         plc.patch({"Set": True, "Aim": True})
@@ -626,10 +626,10 @@ def test_why_marks_a_blocked_pointer_write_its_own_rung_moves_first() -> None:
     # Idx as the rung starts, at 5, so it cannot say where the copy would aim.
     big, idx = Block("Big", TagType.INT, 1, 2000), Int("Idx")
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             math(idx + 1, idx)
             copy(SOURCE, big[idx])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Idx": 5})
@@ -679,10 +679,10 @@ def test_why_reads_a_blocked_write_pointer_where_the_next_scan_starts() -> None:
     # and then the rung moves Idx on to 6.  Big6's 60 is a patch.
     big, idx = Block("Big", TagType.INT, 1, 2000), Int("Idx")
     with Program(strict=False) as prog:
-        with Rung(LOG):
+        with rung(LOG):
             copy(VALUE, big[idx])
             math(idx + 1, idx)
-        with Rung(big[6] > 50):
+        with rung(big[6] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Idx": 5, "Value": 7, "Big6": 60})
@@ -697,11 +697,11 @@ def test_why_reads_a_blocked_write_pointer_before_a_later_rung_moves_it() -> Non
     # In the next scan the copy reads Ptr as 5, and then r2 moves it to 9.
     big, ptr = Block("Big", TagType.INT, 1, 2000), Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[ptr])
-        with Rung():
+        with rung():
             copy(AT, ptr)
-        with Rung(big[9] > 50):
+        with rung(big[9] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"At": 5, "Big9": 60})
@@ -717,11 +717,11 @@ def test_why_does_not_credit_a_write_whose_forced_pointer_a_rung_above_moves() -
     # every scan.  Big5's 60 is a patch.
     big, ptr = Block("Big", TagType.INT, 1, 2000), Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(9, ptr)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[ptr])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.force("Ptr", 5)
@@ -758,11 +758,11 @@ def test_why_answers_without_a_trial_scan_that_raises() -> None:
 
     big = Block("Big", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             run_function(poll)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"At": 5, "Big5": 60})
@@ -786,11 +786,11 @@ def _aimed_away() -> Program:
     big = Block("Big", TagType.INT, 1, 2000)
     ptr = Int("Ptr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1500, ptr)
-        with Rung(GO):
+        with rung(GO):
             copy(SOURCE, big[ptr])
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(HIT)
     return prog
 
@@ -833,11 +833,11 @@ X = Bool("X", external=True)
 def _order_program(*, big_first: bool) -> PLC:
     big = Block("Big", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
-        with Rung(WRITE, MID):
+        with rung(WRITE, MID):
             copy(SOURCE, big[AT])
-        with Rung(X):
+        with rung(X):
             out(MID)
-        with Rung(*((big[5] > 50, MID) if big_first else (MID, big[5] > 50))):
+        with rung(*((big[5] > 50, MID) if big_first else (MID, big[5] > 50))):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     plc.patch({"At": 5, "Source": 100, "Write": True, "X": True})
@@ -862,11 +862,11 @@ def test_why_counts_each_uncertain_root_once() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     other = Bool("W2", external=True)
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(WRITE, other):
+        with rung(WRITE, other):
             copy(SOURCE, big[AT])
-        with Rung(big[5] > 50, big[6] > 50, big[7] > 50):
+        with rung(big[5] > 50, big[6] > 50, big[7] > 50):
             out(HIGH)
     plc = PLC(prog, dt=0.01)
     for at in (5, 6, 7):
@@ -884,11 +884,11 @@ def test_why_keeps_every_trigger_that_may_have_set_a_latch() -> None:
     a, b = Bool("A", external=True), Bool("B", external=True)
     latched, shown = Bool("L"), Bool("Out")
     with Program(strict=False) as prog:
-        with Rung(a):
+        with rung(a):
             latch(latched)
-        with Rung(b):
+        with rung(b):
             latch(latched)
-        with Rung(latched, ~b):
+        with rung(latched, ~b):
             out(shown)
     plc = PLC(prog, dt=0.01)
     plc.patch({"B": True})
@@ -905,15 +905,15 @@ def test_why_counts_a_trigger_shared_by_two_latches_twice() -> None:
     a, c, d = (Bool(name, external=True) for name in "ACD")
     first, second, shown = Bool("L1"), Bool("L2"), Bool("Out")
     with Program(strict=False) as prog:
-        with Rung(a):
+        with rung(a):
             latch(first)
-        with Rung(c):
+        with rung(c):
             latch(first)
-        with Rung(a):
+        with rung(a):
             latch(second)
-        with Rung(d):
+        with rung(d):
             latch(second)
-        with Rung(first, second):
+        with rung(first, second):
             out(shown)
     plc = PLC(prog, dt=0.01)
     plc.patch({"C": True, "D": True})

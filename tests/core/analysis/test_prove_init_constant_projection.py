@@ -7,12 +7,12 @@ from pyrung.core import (
     InputBlock,
     Int,
     Program,
-    Rung,
     copy,
     latch,
     out,
     reset,
     rise,
+    rung,
 )
 from pyrung.core.analysis.prove.passes import (
     _pass_build_graph,
@@ -45,9 +45,9 @@ def test_simple_init_pattern_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(5, cfg)
             latch(init_done)
 
@@ -68,9 +68,9 @@ def test_readonly_constant_source_is_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(s_idle, cfg)
             latch(init_done)
 
@@ -87,9 +87,9 @@ def test_copy_true_latch_still_valid() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(5, cfg)
             latch(init_done)
 
@@ -107,12 +107,12 @@ def test_additional_writer_outside_init_rung_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(5, cfg)
             latch(init_done)
-        with Rung(trigger):
+        with rung(trigger):
             copy(3, cfg)
 
     ctx = _run_through_initconst(logic)
@@ -128,9 +128,9 @@ def test_non_literal_init_write_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(src, cfg)
             latch(init_done)
 
@@ -147,12 +147,12 @@ def test_latch_not_monotonic_nothing_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(5, cfg)
             latch(init_done)
-        with Rung(clear):
+        with rung(clear):
             reset(init_done)
 
     ctx = _run_through_initconst(logic)
@@ -169,14 +169,14 @@ def test_multiple_independent_latches() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg_a > 3):
+        with rung(cfg_a > 3):
             out(seen)
-        with Rung(cfg_b > 5):
+        with rung(cfg_b > 5):
             out(seen)
-        with Rung(~init_a):
+        with rung(~init_a):
             copy(5, cfg_a)
             latch(init_a)
-        with Rung(~init_b):
+        with rung(~init_b):
             copy(7, cfg_b)
             latch(init_b)
 
@@ -195,10 +195,10 @@ def test_edge_source_under_init_kept() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(~init_done):
+        with rung(~init_done):
             latch(cfg)
             latch(init_done)
-        with Rung(rise(cfg)):
+        with rung(rise(cfg)):
             out(seen)
 
     ctx = _run_through_initconst(logic)
@@ -215,15 +215,15 @@ def test_multiple_tags_in_separate_init_rungs() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(dh1 > 5):
+        with rung(dh1 > 5):
             out(seen)
-        with Rung(dh2 > 10):
+        with rung(dh2 > 10):
             out(seen)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(10, dh1)
-        with Rung(~init_done):
+        with rung(~init_done):
             copy(20, dh2)
-        with Rung(~init_done):
+        with rung(~init_done):
             latch(init_done)
 
     ctx = _run_through_initconst(logic)
@@ -246,11 +246,11 @@ def test_colatch_two_tags_under_nd_guard() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(x > 3):
+        with rung(x > 3):
             out(seen)
-        with Rung(y > 5):
+        with rung(y > 5):
             out(seen)
-        with Rung(f):
+        with rung(f):
             copy(5, x)
             copy(7, y)
 
@@ -276,13 +276,13 @@ def test_colatch_different_rungs_separate_groups() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(x > 3):
+        with rung(x > 3):
             out(seen)
-        with Rung(y > 5):
+        with rung(y > 5):
             out(seen)
-        with Rung(f):
+        with rung(f):
             copy(5, x)
-        with Rung(f):
+        with rung(f):
             copy(7, y)
 
     ctx = _run_through_initconst(logic)
@@ -299,9 +299,9 @@ def test_colatch_single_tag_no_projection() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(x > 3):
+        with rung(x > 3):
             out(seen)
-        with Rung(f):
+        with rung(f):
             copy(5, x)
 
     ctx = _run_through_initconst(logic)
@@ -320,11 +320,11 @@ def test_first_scan_system_guard_projects_peers() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg_a > 3):
+        with rung(cfg_a > 3):
             out(seen)
-        with Rung(cfg_b > 5):
+        with rung(cfg_b > 5):
             out(seen)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(5, cfg_a)
             copy(7, cfg_b)
 
@@ -350,9 +350,9 @@ def test_first_scan_single_tag_not_projected() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg > 3):
+        with rung(cfg > 3):
             out(seen)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(5, cfg)
 
     ctx = _run_through_initconst(logic)
@@ -368,17 +368,17 @@ def test_first_scan_across_rungs() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg_a > 3):
+        with rung(cfg_a > 3):
             out(seen)
-        with Rung(cfg_b > 5):
+        with rung(cfg_b > 5):
             out(seen)
-        with Rung(cfg_c > 7):
+        with rung(cfg_c > 7):
             out(seen)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(5, cfg_a)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(7, cfg_b)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(9, cfg_c)
 
     ctx = _run_through_initconst(logic)
@@ -401,11 +401,11 @@ def test_first_scan_representative_needs_nondefault() -> None:
     seen = Bool("Seen")
 
     with Program(strict=False) as logic:
-        with Rung(cfg_a > 3):
+        with rung(cfg_a > 3):
             out(seen)
-        with Rung(cfg_b > 5):
+        with rung(cfg_b > 5):
             out(seen)
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(0, cfg_a)
             copy(0, cfg_b)
 

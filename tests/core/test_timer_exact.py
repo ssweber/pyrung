@@ -28,7 +28,6 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     Timer,
     compiled_run,
     copy,
@@ -38,6 +37,7 @@ from pyrung.core import (
     math,
     off_delay,
     on_delay,
+    rung,
     scan_trace,
     time_drum,
     timed,
@@ -104,11 +104,11 @@ def _on_delay_program(preset: int, unit: str) -> Program:
     First = Dint("First", retentive=False)
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Scans + 1, Scans)
-        with Rung():
+        with rung():
             on_delay(Ton, preset=preset, unit=unit)
-        with Rung(Ton.Done, ~Seen):
+        with rung(Ton.Done, ~Seen):
             copy(Scans, First)
             latch(Seen)
     return prog
@@ -122,14 +122,14 @@ def _off_delay_program(preset: int, unit: str) -> Program:
     Seen = Bool("Seen", retentive=False)
     Armed = Bool("Armed", retentive=False)
     with Program(strict=False) as prog:
-        with Rung(~Armed):
+        with rung(~Armed):
             off_delay(Tof, preset=preset, unit=unit)
-        with Rung(Armed):
+        with rung(Armed):
             math(Scans + 1, Scans)
-        with Rung(Armed, ~Tof.Done, ~Seen):
+        with rung(Armed, ~Tof.Done, ~Seen):
             copy(Scans, First)
             latch(Seen)
-        with Rung():
+        with rung():
             latch(Armed)
     return prog
 
@@ -145,9 +145,9 @@ def _drum_program(preset: int, unit: str) -> Program:
     Out1 = Bool("Out1", retentive=False)
     Out2 = Bool("Out2", retentive=False)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Scans + 1, Scans)
-        with Rung():
+        with rung():
             time_drum(
                 outputs=[Out1, Out2],
                 presets=[preset, 32000],
@@ -157,7 +157,7 @@ def _drum_program(preset: int, unit: str) -> Program:
                 accumulator=Acc,
                 completion_flag=Flag,
             ).reset(Reset)
-        with Rung(Step == 2, ~Seen):
+        with rung(Step == 2, ~Seen):
             copy(Scans, First)
             latch(Seen)
     return prog
@@ -519,9 +519,9 @@ def test_a_ratio_dt_leaves_the_loop_when_a_timer_starts(dt: float) -> None:
     Ton = Timer.clone("Ton")
     Scans = Dint("Scans", retentive=False)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Scans + 1, Scans)
-        with Rung(Scans > 100):
+        with rung(Scans > 100):
             on_delay(Ton, preset=3, unit="Ts")
     ran = PLC(prog, dt=dt)
     assert 0 < _in_the_long_run(ran, 400) <= 100
@@ -673,7 +673,7 @@ def test_a_reload_cuts_each_carry_to_below_a_unit_of_its_timer(build: Any, keys:
     def program(unit: str) -> Program:
         Ton, Other = Timer.clone("Ton"), Timer.clone("Other")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 build(Ton, Other, unit)
         return prog
 
@@ -704,10 +704,10 @@ def _coil_program(build: Any) -> Program:
     First = Dint("First", retentive=False)
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Scans + 1, Scans)
         build(Target)
-        with Rung(Target, ~Seen):
+        with rung(Target, ~Seen):
             copy(Scans, First)
             latch(Seen)
     return prog
@@ -719,11 +719,11 @@ def test_debounce_turns_on_at_ceil_whichever_unit(engine: Any, dt: str) -> None:
     OnT, OffT = Timer.clone("OnT"), Timer.clone("OffT")
 
     def seconds(target: Any) -> None:
-        with Rung():
+        with rung():
             debounce(target, on=(OnT, 1), off=(OffT, 1), unit="Ts")
 
     def millis(target: Any) -> None:
-        with Rung():
+        with rung():
             debounce(target, on=(OnT, 1000), off=(OffT, 1000), unit="Tms")
 
     expect = want(1, "Ts", dt)
@@ -739,11 +739,11 @@ def test_timed_coil_drops_at_ceil_in_seconds(engine: Any) -> None:
     First = Dint("First", retentive=False)
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Scans + 1, Scans)
-        with Rung():
+        with rung():
             timed(Target, Pulse, 1, unit="Ts")
-        with Rung(~Target, ~Seen):
+        with rung(~Target, ~Seen):
             copy(Scans, First)
             latch(Seen)
     assert engine(prog, 0.1, 13) == 10
@@ -757,11 +757,11 @@ def test_flasher_changes_phase_at_ceil_in_seconds(engine: Any) -> None:
     First = Dint("First", retentive=False)
     Seen = Bool("Seen", retentive=False)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Scans + 1, Scans)
-        with Rung():
+        with rung():
             flasher(Target, on=(OnT, 1), off=(OffT, 1), unit="Ts")
-        with Rung(~Target, ~Seen):
+        with rung(~Target, ~Seen):
             copy(Scans, First)
             latch(Seen)
     # The on phase ends on its 10th tick.  The coil shows it through that scan.
