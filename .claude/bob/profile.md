@@ -143,6 +143,8 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
 
 ## Machine budget
 
+- Worktree venvs use Python 3.14. Set `UV_PYTHON=3.14` when you create or sync one, so a branch is
+  timed on the same interpreter as its base.
 - Time base and branch on the same interpreter. The main checkout's venv is Python 3.13 and the
   worktrees' are 3.14, and a base timed in one against a branch timed in the other is skewed
   (2026-11-08: "dev 95 s" was 75 s on 3.14).

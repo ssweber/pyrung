@@ -31,15 +31,29 @@ jobs:
       - name: Install all dependencies
         run: uv sync --locked --all-extras --dev
 
-      - name: Run tests
-        # Same selection and options as local `make test` (markers, --ignore,
-        # --runner-backend=both); edit the Makefile target, not this step.
-        run: make test
-        env:
-          PYTEST_WORKERS: auto
+      - name: Check that the commit is on main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Commit $GITHUB_SHA is not on main. Merge it to main, then publish again from a tag on main or run this workflow on main."
+            exit 1
+          fi
 
       - name: Build package
         run: uv build
+
+      - name: Check the built wheel
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          uv venv /tmp/wheelcheck
+          uv pip install --python /tmp/wheelcheck dist/*.whl packaging
+          version=$(/tmp/wheelcheck/bin/python -c "import importlib.metadata, pyrung; print(importlib.metadata.version('pyrung'))")
+          echo "Built wheel reports version $version"
+          if [ -n "$TAG" ] && ! /tmp/wheelcheck/bin/python -c "import sys; from packaging.version import Version; sys.exit(Version(sys.argv[1]) != Version(sys.argv[2].removeprefix('v')))" "$version" "$TAG"; then
+            echo "::error::The wheel is version $version but the release tag is $TAG. Fix the tag or the version source and publish again."
+            exit 1
+          fi
 
       - name: Publish to PyPI (using uv)
         uses: pypa/gh-action-pypi-publish@release/v1

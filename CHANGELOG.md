@@ -119,7 +119,7 @@ You can now record a debug session and replay it as a pytest test. Ladder export
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
   Fix the row, or leave its Data Type blank.
 - `TagMap.from_nickname_file()` keeps a space at the start of a TXT initial value. A TXT holds one character, so `  a ` loads as `" "` (it loaded `"a"`). A CLICK trims a bare value and keeps a quoted one.
-  Remove the spaces before a bare value.
+  Remove the leading spaces from a bare value.
 
 ### Fixes
 
