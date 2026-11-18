@@ -330,7 +330,7 @@ def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None
 
     head: list[str] = []
     head.extend(_render_imports(ctx))
-    head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
+    head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers), kernel=ctx.kernel_runtime))
     head.extend(_render_indirect_helpers(ctx))
     tail: list[str] = []
     tail.extend(_render_declarations(ctx))
@@ -396,7 +396,10 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_store_word_clamped" in ctx.used_helpers
     )
     needs_struct = (
-        "_int_to_float_bits" in ctx.used_helpers or "_float_to_int_bits" in ctx.used_helpers
+        "_int_to_float_bits" in ctx.used_helpers
+        or "_float_to_int_bits" in ctx.used_helpers
+        or "_computed_real" in ctx.used_helpers
+        or "_parse_pack_text_value" in ctx.used_helpers
     )
     needs_re = "_parse_pack_text_value" in ctx.used_helpers
     if needs_math:

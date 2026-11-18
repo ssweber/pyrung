@@ -25,13 +25,108 @@
     "response_hex": "00050000000601060000002a"
   },
   {
-    "name": "write_x1_illegal",
+    "name": "write_x1",
     "request_hex": "00060000000601050000ff00",
-    "response_hex": "000600000003018502"
+    "response_hex": "00060000000601050000ff00"
   },
   {
     "name": "read_yd0",
     "request_hex": "0007000000060103e2000001",
     "response_hex": "0007000000050103021234"
+  },
+  {
+    "name": "read_x1",
+    "request_hex": "000800000006010200000001",
+    "response_hex": "00080000000401020101"
+  },
+  {
+    "name": "write_t1",
+    "request_hex": "0009000000060105b000ff00",
+    "response_hex": "0009000000060105b000ff00"
+  },
+  {
+    "name": "read_t1",
+    "request_hex": "000a000000060101b0000001",
+    "response_hex": "000a0000000401010101"
+  },
+  {
+    "name": "write_ct1",
+    "request_hex": "000b00000008010fc00000010101",
+    "response_hex": "000b00000006010fc0000001"
+  },
+  {
+    "name": "read_ct1",
+    "request_hex": "000c000000060102c0000001",
+    "response_hex": "000c0000000401020101"
+  },
+  {
+    "name": "write_y_gap",
+    "request_hex": "000d0000000a010f202e001403ffff0f",
+    "response_hex": "000d00000006010f202e0014"
+  },
+  {
+    "name": "read_y_gap",
+    "request_hex": "000e000000060101202e0014",
+    "response_hex": "000e00000006010103ffff0f"
+  },
+  {
+    "name": "write_x_gap",
+    "request_hex": "000f0000000601050030ff00",
+    "response_hex": "000f0000000601050030ff00"
+  },
+  {
+    "name": "read_x_gap",
+    "request_hex": "001000000006010200300001",
+    "response_hex": "00100000000401020101"
+  },
+  {
+    "name": "read_past_xd8",
+    "request_hex": "0011000000060104e0110001",
+    "response_hex": "0011000000050104020000"
+  },
+  {
+    "name": "read_xd8_and_past",
+    "request_hex": "0012000000060104e0100002",
+    "response_hex": "00120000000701040400000000"
+  },
+  {
+    "name": "read_past_yd8",
+    "request_hex": "0013000000060103e2110001",
+    "response_hex": "0013000000050103020000"
+  },
+  {
+    "name": "read_xd1_to_past_xd8",
+    "request_hex": "0014000000060104e0020010",
+    "response_hex": "0014000000230104200000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "write_df1_high_nan",
+    "request_hex": "001500000006010670017fc0",
+    "response_hex": "001500000006010670017fc0"
+  },
+  {
+    "name": "read_df1_nan",
+    "request_hex": "001600000006010370000002",
+    "response_hex": "00160000000701030400007fc0"
+  },
+  {
+    "name": "write_df1_low",
+    "request_hex": "001700000006010670000000",
+    "response_hex": "001700000006010670000000"
+  },
+  {
+    "name": "read_df1_still_nan",
+    "request_hex": "001800000006010370000002",
+    "response_hex": "00180000000701030400007fc0"
+  },
+  {
+    "name": "write_df1_high",
+    "request_hex": "001900000006010670014020",
+    "response_hex": "001900000006010670014020"
+  },
+  {
+    "name": "read_df1_2_5",
+    "request_hex": "001a00000006010370000002",
+    "response_hex": "001a0000000701030400004020"
   }
 ]

@@ -374,6 +374,8 @@ To run it on a CLICK:
    - SD29, SD31 and SD32 get today's date. Then SC53 goes on and sets the PLC's date from them. SD29 also gets the next year. Each is written back.
    - C1..C1969, written with the values they read just before.
    - YD register 3, only with `PYRUNG_CONFORMANCE_OUTPUTS=1`. It may turn Y116 on until it is written back.
+   - X001, X101..X132, T1, CT1 and the coils after X116 and Y116 get ON, and then what they read before.
+   - Y115, Y116, Y201 and Y202 get ON and are written back, only with `PYRUNG_CONFORMANCE_OUTPUTS=1`.
 2. `make test-conformance PLC=192.168.0.10 GROUP=modbus_raw`. Each probe goes into `readings.toml` as `modbus_raw/<probe>`, never into `confirmed.toml`.
 3. SC51 (watchdog reset) and SC50 (STOP) are sent last, and only with `PYRUNG_CONFORMANCE_STOP=1` set. SC50 puts the PLC in STOP. The run then reminds you to put the PLC back in RUN.
 

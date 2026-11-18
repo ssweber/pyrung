@@ -199,11 +199,18 @@ The generated server serves:
 - every register the TagMap maps, whether a rung uses it or not, so an HMI or SCADA system can write a value no ladder rung touches
 - every raw CLICK register a rung uses directly (`ds[3901]`, `c[1801]`), at its own address
 - the whole bank, when a rung reaches it by pointer or block instruction (`ds[ptr]`, `fill(0, c.select(1, 3))`)
-- XD and YD in CLICK's layout, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits.
+- every X and Y coil, and the coils between X or Y slots. The server keeps a write to one that no tag holds, so a read returns it.
+- XD and YD in CLICK's layout, built from the X and Y bits. A write to YD sets those Y bits.
 
-A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap.
+A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap. An unused T or CT bit is one of these addresses. A T or CT bit is unused if no rung uses it and the TagMap doesn't map it.
 
-A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. A coil write to X, T or CT gets exception 2 as well, because a client can only read those. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
+A read of the register after XD8 or after YD8 returns 0, as on a CLICK.
+
+A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
+
+The server sends every NaN in a `Real` as 0xFFFF:0xFFFF, the NaN that a CLICK's Math stores. An Unpack Copy and `send()` give the same words. A CLICK keeps the bits of a NaN that a client writes, so a NaN such as 0x0000:0x7FC0 reads back differently from the P1AM. CircuitPython's floats are 30 bits wide, so they can't hold a NaN's bits.
+
+A client that writes 2.5 to a `Real` holding a NaN one register at a time, low word first, reads back 2.50002 (0xFFFF:0x4020). The low word it wrote still makes a NaN, so the server sends 0xFFFF in its place. Write both words of a `Real` in one FC 16 request.
 
 ## Scan cycle with Modbus
 

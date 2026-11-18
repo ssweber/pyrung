@@ -17,7 +17,7 @@ from pyrung.core.analysis.sp_values import (
 from pyrung.core.context import ScanContext
 from pyrung.core.crossing import CrossingContext, Eq, eq_target
 from pyrung.core.site_memory import edge_memory_seeding
-from pyrung.core.state import value_changed
+from pyrung.core.state import nan_bits, value_changed
 
 from .history import _find_last_transition_scan
 from .models import (
@@ -214,8 +214,9 @@ def _condition_relation(
     seen_moves: set[tuple[str, Any]] = set()
 
     def add_move(tag: str, value: Any, source: str) -> None:
-        # Different NaN objects would hash apart, so every NaN maps to one shared key.
-        key = (tag, _NAN_KEY if _values_equal(value, _NAN) else value)
+        # Two NaN objects hash apart even with the same bits, so a NaN's key is its bits.
+        nan = isinstance(value, float) and value != value
+        key = (tag, (_NAN_KEY, nan_bits(value)) if nan else value)
         if key in seen_moves or _values_equal(state.tags.get(tag), value):
             return
         seen_moves.add(key)
@@ -265,7 +266,6 @@ def _relation_rhs_repr(rhs: Any) -> str:
     return repr(rhs)
 
 
-_NAN = float("nan")
 _NAN_KEY = object()
 
 

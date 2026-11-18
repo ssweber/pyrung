@@ -41,6 +41,7 @@ _HELPER_ORDER = (
     "_store_word",
     "_store_word_clamped",
     "_store_real",
+    "_computed_real",
     "_store_bool",
     "_math_func",
     "_permissive_math",

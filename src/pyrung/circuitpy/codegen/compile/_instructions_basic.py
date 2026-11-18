@@ -16,6 +16,7 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.expression import Expression
 from pyrung.core.instruction import (
     CallInstruction,
     CopyInstruction,
@@ -401,6 +402,9 @@ def _compile_copy_instruction(
     if convert is not None or fanout:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent, convert)
     source_expr = _compile_copy_source(instr.source, ctx)
+    if ctx.kernel_runtime and target_type == "REAL" and isinstance(instr.source, Expression):
+        ctx.mark_helper("_computed_real")
+        source_expr = f"_computed_real({source_expr})"
     source_type = (
         "CHAR" if isinstance(instr.source, str) else _optional_value_type_name(instr.source)
     )

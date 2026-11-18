@@ -209,11 +209,9 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   +/-Inf, the pack_text of text past the Real range, and the TD write (`jobs/plc-answers/NOTES.md`). bob/plc-runtime
   matched pyrung to them and added part follow4_reads (groups `plc_stores` and `td_count_on`).
   - Run part follow4_reads on a CLICK to confirm its cases.
-  - modbus_raw probes, with no ladder change. FC15 across the Y gap (Y115..Y202) skips reserved coils and stores named
-    ones. FC05 to a reserved coil (Y117) answers 02. A read past XD8/YD8 answers 02. A read in an X gap (units 17..32)
-    reads 0. FC05/FC15 to X001, T1 and CT1 answer 02.
-  - A Modbus write of one word of a DF that holds NaN. pyrung keeps 0xFFFF in the other word. Also writing 2.5 as two
-    FC6 writes, low word first, over a NaN (pyrung leaves 2.50002).
+  - Run part modbus_raw once on a CLICK, to record its probes of X, T, CT, the coils between slots and the registers
+    after XD8 and YD8 in `readings.toml`. clicknick read the same requests by hand (`jobs/plc-answers/NOTES.md`), and
+    bob/plc-modbus made both Modbus servers match them.
   - `flag_boxes/ton_ctu_by_pointer` (part follow_flags) can't tell whether a TON or a CTU clears an SC44 raised
     through pointer -1. It needs another way to raise and hold SC44.
   - Re-run parts drum1, drum2, follow_timing, follow_extra and text_flasher to confirm their rewritten readings.

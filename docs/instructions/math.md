@@ -32,6 +32,8 @@ A CLICK REAL is a 32-bit float. A `math()` or `copy()` result past ±3.4028235E+
 
 If a `math()` result of ±Inf goes into an `Int`, `Dint` or `Word`, it stores 0 and sets `out_of_range`. A NaN result stores 0 and sets no flag. A `copy()` of ±Inf clamps instead (see [Copy](copy.md)).
 
+A NaN result in a `Real` reads 0xFFFF:0xFFFF over Modbus, as on a CLICK. A NaN that a client writes keeps its own bits, and a `copy()` of that tag keeps them too. The P1AM sends every NaN as 0xFFFF:0xFFFF (see [CircuitPython Modbus](../dialects/circuitpy-modbus.md#which-registers-the-server-serves)).
+
 `math()` checks the range when it stores its result, not at each step of the formula.
 
 Inside the range, pyrung keeps a `Real` at Python's 64-bit precision. A CLICK REAL is a 32-bit float. For example, `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
