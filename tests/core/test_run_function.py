@@ -230,7 +230,7 @@ def test_run_function_returning_none_with_outs_raises_type_error():
 def test_run_function_outside_rung_raises_runtime_error():
     with pytest.raises(RuntimeError) as exc_info:
         run_function(lambda: {"ok": 1})
-    assert str(exc_info.value) == "run_function() must be called inside a Rung context"
+    assert str(exc_info.value) == "run_function() must be called inside a rung() context"
 
 
 def test_run_function_non_callable_raises_type_error():

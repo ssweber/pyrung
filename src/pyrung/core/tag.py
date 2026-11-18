@@ -381,7 +381,7 @@ class Tag:
         """Prevent accidental use as boolean."""
         raise TypeError(
             f"Cannot use Tag '{self.name}' as boolean. "
-            "Use it in a Rung condition instead: Rung(tag) or Rung(tag == value)"
+            "Use it in a Rung condition instead: rung(tag) or rung(tag == value)"
         )
 
     @property

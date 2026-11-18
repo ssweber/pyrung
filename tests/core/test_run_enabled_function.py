@@ -135,7 +135,7 @@ def test_run_enabled_function_writes_multiple_output_tags():
 def test_run_enabled_function_outside_rung_raises_runtime_error():
     with pytest.raises(RuntimeError) as exc_info:
         run_enabled_function(lambda enabled: {"ok": enabled})
-    assert str(exc_info.value) == "run_enabled_function() must be called inside a Rung context"
+    assert str(exc_info.value) == "run_enabled_function() must be called inside a rung() context"
 
 
 def test_run_enabled_function_non_callable_raises_type_error():

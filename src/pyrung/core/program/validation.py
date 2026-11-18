@@ -13,7 +13,7 @@ class ForbiddenControlFlowError(RuntimeError):
     """Raised when Python control flow is used inside strict DSL scope."""
 
 
-_IF_HINT = "Use `Rung(condition)` to express conditional logic"
+_IF_HINT = "Use `rung(condition)` to express conditional logic"
 
 
 _BOOL_HINT = "Use `And()` / `Or()` for compound conditions"

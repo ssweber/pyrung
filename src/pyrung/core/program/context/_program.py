@@ -122,7 +122,7 @@ class Program:
                 else "program"
             )
             raise RuntimeError(
-                f"Rung.continued() cannot be the first rung in a {scope}. "
+                f"rung.continued() cannot be the first rung in a {scope}. "
                 "It continues the rung above it, in the same execution scope."
             )
         target.append(rung)

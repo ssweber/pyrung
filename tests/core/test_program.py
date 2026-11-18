@@ -1392,7 +1392,7 @@ class TestBranch:
 
         Light = Bool("Light")
 
-        with pytest.raises(RuntimeError, match="must be called inside a Rung"):
+        with pytest.raises(RuntimeError, match="must be called inside a rung"):
             with Program():
                 with branch():  # No parent rung!
                     out(Light)

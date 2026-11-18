@@ -329,7 +329,7 @@ class Branch:
         # Get parent rung context
         self._parent_ctx = _current_rung()
         if self._parent_ctx is None:
-            raise RuntimeError("branch() must be called inside a Rung context")
+            raise RuntimeError("branch() must be called inside a rung() context")
         self._parent_ctx._assert_no_pending_required_builder("branch")
 
         # Create a nested rung for the branch that includes BOTH parent and branch conditions

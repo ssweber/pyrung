@@ -41,7 +41,7 @@ def _require_rung_context(func_name: str) -> Rung:
     """Get current rung or raise error."""
     rung = _current_rung()
     if rung is None:
-        raise RuntimeError(f"{func_name}() must be called inside a Rung context")
+        raise RuntimeError(f"{func_name}() must be called inside a rung() context")
     return rung
 
 

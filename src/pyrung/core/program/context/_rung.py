@@ -50,7 +50,7 @@ class Rung:
         self._loop = _current_forloop_body()
         if self._loop is None and _state._building.forloops:
             raise RuntimeError(
-                "Rung() inside forloop() must sit directly in the loop body, "
+                "rung() inside forloop() must sit directly in the loop body, "
                 "not inside another body rung"
             )
         source_file, source_line = _capture_source(depth=2)
@@ -156,7 +156,7 @@ class Rung:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
             if exc_type is None:
-                self._assert_required_builders_resolved("Rung")
+                self._assert_required_builders_resolved("rung")
         finally:
             _pop_rung_context()
         _set_scope_end_line(
