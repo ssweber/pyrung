@@ -115,8 +115,8 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   the CircuitPython code. Each of its helpers records what its piece of code reads, writes and compares. prove/ and
   pilot/ then read those records in place of their hand-kept lists for each instruction. The design is
   `pyrung-wt/buildbot/jobs/bindings/EMIT-DESIGN.md`.
-  - Steps 0 and 1a are in progress on bob/emit-helpers. Step 0 is a script that renders a corpus of programs. Step 1a
-    moves the raw code strings into shared helpers, with byte-identical output. [nothing]
+  - Steps 0 and 1a are in main (#79). Step 1a moved the raw code strings into shared helpers, with byte-identical
+    output. The timer records followed (#84).
   - Step 2 onward waits for Sam's nod on the size. The design estimates about 1,600 to 2,100 lines of package and
     codegen code, plus tests. [Sam]
   - Two gaps the records close (`bindings/CONSUMERS.md` 1.2 and 1.3, migration step 2).
@@ -390,7 +390,10 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
      becomes a runtime dependency here.
      - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
        laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
-  2. Export through laddercodec (plan step 5).
+  2. Export through laddercodec (plan step 5). laddercodec's main has `csv_rows()`, a public `CSV_HEADER`, and
+     `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When pyrung moves to
+     `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
+     `Program.subroutines` is a dict keyed by name.
   3. Import reads laddercodec's objects (plan step 6).
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
   2026-11-17). This replaces "the refusal wins". The pyrung sections of
@@ -408,6 +411,11 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 ## Small fixes
 
 All [nothing] unless marked.
+
+- **Two subroutine names that differ only in case.** pyrung accepts "Pump" and "pump" in one program. The export
+  writes `subroutines/Pump.csv` and then `subroutines/pump.csv`, and on Windows the second file overwrites the first.
+  laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
+  export. Whether CLICK treats subroutine names without case is unread. [CLICK]
 
 - **Two how() labels print a rung number that does not count from 1.** `pilot/trace_routes.py:558`
   (`_writer_label`) prints an index into `pdg.rung_nodes` as "rung N". `pilot/options.py:914` (`program_note`) prints
