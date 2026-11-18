@@ -34,7 +34,7 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
   - a pack fills it
   - the outside writes it too
   - it copies a `Real` that may hold one, such as an input or a receive payload
-- An input `Real` with no ladder writer and a `receive()` payload keep an input domain, which has no NaN in it. A copy of an input `Real` with no ladder writer into another type takes that domain plus what a NaN or an Inf stores. So does a `math()` of the bare tag. A copy stores 0 for a NaN and clamps an Inf (a Word stores 65535 or 32768). A `math()` stores 0 for a NaN and for either Inf.
+- An input `Real` with no ladder writer and a `receive()` payload keep an input domain, which has no NaN in it. A copy of an input `Real` with no ladder writer into another type takes that domain plus what a NaN or an Inf stores. So does a `math()` of the bare tag. A copy clamps an Inf (a Word stores 65535 or 32768). It stores 0 for a NaN, except into a `Dint`, which stores -2147483648. A `math()` stores 0 for a NaN and for either Inf.
 - A write through a pointer with no declared bounds, into a block of more than 1000 elements (`_INDIRECT_BLOCK_CAP` in pdg.py), lists no targets. `ProgramGraph.unlisted_writers_of` names the rungs that make such writes, for every element the pointer can reach. The facts give such an element no domain, whatever its type. A window or an index expression into such a block counts too, even with declared bounds.
   - The pointer reaches its power-on value and what its writers store (`_UnlistedReach` in pdg.py, over `value_sets`).
   - A tag the scan writes before every read of it (`unconditional_write_before_read`) never shows its power-on value.

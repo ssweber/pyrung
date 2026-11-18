@@ -46,9 +46,18 @@
 - A negative constant down to -32768 in a hex `math()`, written as its 16 bits (-1 is FFFFh).
 - `randint()` with DH bounds in a hex `math()`.
 - A `copy()` of an `Int`, `Dint` or `Word` into a TXT with no `convert`, which exports as `to_text()`.
+- A `copy()` of a constant with a fraction into DH or YD, such as `copy(1.5, DH1)`.
 
 ### Behaviour changes
 
+- pyrung requires pyclickplc 0.9.0 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
+  If your own code calls pyclickplc, read pyclickplc's 0.9.0 changelog.
+- The soft PLC's Modbus server stores a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (it answered exception 2). A rung that reads the T or CT bit sees the write.
+  If a client of yours relied on that refusal, check the address before it writes.
+- The generated P1AM server stores a coil write to X, or to a coil between X or Y slots (it answered exception 2). It stores a write to a T or CT bit that a rung uses or the TagMap maps.
+  If a client of yours relied on that refusal, check the address before it writes.
+- A NaN that a client writes to a `Real` keeps its own bits, as a CLICK keeps them. Modbus reads, `send()` and `unpack_to_words()` give those bits (they gave 0xFFFF:0xFFFF for any NaN). A NaN that a `math()` computes still reads 0xFFFF:0xFFFF. The P1AM still sends every NaN as 0xFFFF:0xFFFF, because its floats can't hold a NaN's bits.
+  Test for NaN with `math.isnan()` on the decoded float, not by comparing the words with 0xFFFF:0xFFFF.
 - The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
   Give an absolute path to replay a file from somewhere else.
 - `ModbusRtuTarget` refuses a `device_id` above 247, the last Modbus RTU device address (it took up to 255).
@@ -85,11 +94,17 @@
   Update any test that matches the old text.
 - A ladder export issue's `path` and a CLICK finding's `location` count rungs from 1, so the first rung is `main.rung[1]` (it was `main.rung[0]`).
   Add 1 to a rung index that you compare with a path.
+- A `copy()`, `fill()` or `blockcopy()` of a NaN `Real` into a `Dint` stores -2147483648, as a CLICK does (it stored 0).
+  Update any test that expects 0.
+- A `pack_text()` of text such as "1E39" or "-1E39" into a `Real` stores +Inf or -Inf with no fault flag, as a CLICK does (it left the `Real` as it was and turned on `system.fault.out_of_range`).
+  To catch such text, check the `Real` for +Inf or -Inf after the pack.
 
 ### Fixes
 
+- The soft PLC's Modbus server and the generated P1AM server read 0 from the register after XD8 and the one after YD8, as a CLICK does (they answered exception 2).
 - The messages from `how()`, the debug console and `pyrung live` now say what went wrong and what to do about it.
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
+- The debugger shows a TXT character outside printable ASCII as CLICK's Data View does, such as `$C8` (it showed the character).
 - A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
@@ -126,6 +141,8 @@
   - A preset stays 0.
 - `program.check()` now reports a write by any instruction to a `readonly=True` tag, and a second writer of a `final=True` tag (it saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`).
 - `run_for()` and `run_until()` now raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
+- In `run_for()` and `run_until()`, a `pack_text()` of a character above FFh, such as U+0661, turns on `system.fault.out_of_range` and writes nothing, as stepping does (it read the character as a digit).
+- Generated CircuitPython code runs a `pack_text()` into a `Word` (it stopped with an error).
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 - `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
 

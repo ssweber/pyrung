@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import struct
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,9 @@ class StoreTransform:
     kind: str = "identity"
     lower: int | None = None
     upper: int | None = None
+    #: The value that a ``clamp``, ``wrap`` or ``word`` store writes for a NaN.  It is 0,
+    #: except for a Copy of a REAL into a DINT.  A CLICK stores -2147483648 there.
+    nan: int = 0
 
 
 IDENTITY_STORE = StoreTransform()
@@ -22,6 +26,20 @@ IDENTITY_STORE = StoreTransform()
 #: keeps a REAL at 64-bit precision but never outside this range.  A result
 #: past it is +/-Inf, as a CLICK's float32 Math stores it.
 REAL_MAX = 3.4028235e38
+
+#: The NaN that a CLICK's Math stores.  It reads 0xFFFF:0xFFFF over Modbus.
+CLICK_NAN: float = struct.unpack("<f", struct.pack("<I", 0xFFFFFFFF))[0]
+
+
+def computed_real(value: Any) -> Any:
+    """Return *value*, with a NaN replaced by :data:`CLICK_NAN`.
+
+    pyrung calls this on what a Math or an arithmetic expression computes.  A CLICK's
+    Math stores one NaN whatever made it.  A NaN that a client writes, or that a Copy
+    moves, keeps its own bits, so a plain store does not call this.
+    """
+    return CLICK_NAN if value != value else value
+
 
 #: The blank CHAR.  A CLICK TXT is one byte, so blank and NUL ($00) are the
 #: same value.  An unwritten TXT, ``fill("")`` and ``reset()`` all leave NUL.
@@ -102,12 +120,16 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     if kind == "real":
         return store_real(value)
     if isinstance(value, float) and not math.isfinite(value):
-        # A clamp pins +/-Inf at its bound.  NaN, and anything that wraps, is 0.
-        if kind == "clamp" and value == value and storage.lower is not None:
+        # A clamp pins +/-Inf at its bound.  An infinity that wraps is 0.
+        if kind == "bool":
+            return False
+        if value != value:
+            return storage.nan
+        if kind == "clamp" and storage.lower is not None:
             return storage.upper if value > 0 else storage.lower
-        if kind == "word" and value == value and storage.upper is not None:
+        if kind == "word" and storage.upper is not None:
             return storage.upper if value > 0 else WORD_STORE_FLOOR & 0xFFFF
-        return False if kind == "bool" else 0
+        return 0
     if kind == "bool":
         return bool(value)
     if kind == "char":
@@ -145,12 +167,14 @@ def check_real_literal(value: Any, dest: Any, what: str) -> None:
 
 __all__ = [
     "BLANK_CHAR",
+    "CLICK_NAN",
     "IDENTITY_STORE",
     "REAL_MAX",
     "StoreTransform",
     "WORD_STORE_FLOOR",
     "check_real_literal",
     "check_real_value",
+    "computed_real",
     "real_in_range",
     "store_char",
     "store_real",

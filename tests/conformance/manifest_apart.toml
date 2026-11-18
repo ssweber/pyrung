@@ -284,3 +284,20 @@ slots = 2
 
 [groups.deb_off.cases]
 off_td_with_coil_off = 1
+
+[groups.plc_stores]
+base = 1671 # Conf_PlcStores: DS1671..DS1730
+slots = 5
+
+[groups.plc_stores.cases]
+fraction_into_word = 1
+copy_non_finite_into_dd = 2
+math_non_finite_into_ints = 3
+pack_text_past_range = 4
+
+[groups.td_count_on]
+base = 1731 # Conf_TdCountOn: DS1731..DS1760
+slots = 2
+
+[groups.td_count_on.cases]
+ton_counts_on_from_written_td = 1

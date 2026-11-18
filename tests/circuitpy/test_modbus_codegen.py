@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import struct
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -166,13 +168,32 @@ def _float_from_bits(bits: int) -> float:
     return struct.unpack("<f", struct.pack("<I", bits))[0]
 
 
+def _board_struct(monkeypatch) -> None:
+    """Make the generated code's ``struct`` refuse to pack a NaN as a float32.
+
+    CircuitPython's floats are 30 bits, so a NaN's bits can't ride through a float on the
+    P1AM.  A desktop run would carry them, so the tests take that way away.
+    """
+    board = types.ModuleType("struct")
+    board.__dict__.update({k: v for k, v in vars(struct).items() if not k.startswith("__")})
+
+    def pack(fmt, *values):
+        if "f" in fmt and any(isinstance(v, float) and v != v for v in values):
+            raise AssertionError("the P1AM code packed a NaN as a float32")
+        return struct.pack(fmt, *values)
+
+    board.pack = pack
+    monkeypatch.setitem(sys.modules, "struct", board)
+
+
 @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
-def test_a_df_holding_any_nan_serves_as_a_click_serves_it(monkeypatch, bits):
+def test_a_df_holding_any_nan_serves_all_ones(monkeypatch, bits):
     level = Real("Level")
     mapping = TagMap({level: df[1]})
     with Program(strict=False) as prog:
         pass
     result = _ctx_and_source(prog, mapping)
+    _board_struct(monkeypatch)
     ns = _run_single_scan_source(
         result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime
     )
@@ -182,14 +203,14 @@ def test_a_df_holding_any_nan_serves_as_a_click_serves_it(monkeypatch, bits):
 
     resp = handle(_mbap(1, struct.pack(">BHH", 3, addr, 2)), 12)
     assert struct.unpack(">HH", resp[-4:]) == (0xFFFF, 0xFFFF)
-    # A write to the high word keeps the low word the client read.
+    # A write to the high word keeps the low word that the server sent.
     req = _mbap(2, struct.pack(">BHH", 6, addr + 1, 0x4000))
     assert handle(req, len(req)) == req
-    assert struct.unpack("<I", struct.pack("<f", ns["_t_Level"]))[0] == 0x4000FFFF
+    assert struct.pack("<f", ns["_t_Level"]) == struct.pack("<HH", 0xFFFF, 0x4000)
 
 
 @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
-def test_a_send_of_any_nan_sends_what_a_click_sends(monkeypatch, bits):
+def test_a_send_of_any_nan_sends_all_ones(monkeypatch, bits):
     source = Real("Source")
     flags = {name: Bool(name) for name in ("Sending", "Success", "Error")}
     with Program(strict=False) as prog:
@@ -203,12 +224,13 @@ def test_a_send_of_any_nan_sends_what_a_click_sends(monkeypatch, bits):
                     success=flags["Success"],
                     error=flags["Error"],
                 )
+    _board_struct(monkeypatch)
     ns, _sockets = _run_raw_client_job(monkeypatch, prog)
     nan = _float_from_bits(bits)
     assert ns["_mb_client_pack_register_values"]("DF", [nan]) == [0xFFFF, 0xFFFF]
-    for order in ("high_low", "low_high"):
-        raw = ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], order)
-        assert raw == [0xFFFF, 0xFFFF]
+    for order in ("low_high", "high_low"):
+        packed = ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], order)
+        assert packed == [0xFFFF, 0xFFFF]
 
 
 def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
@@ -542,7 +564,17 @@ def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
     yd_word = 0x1234
     for idx in range(1, 17):
         outputs.slot(idx, default=bool((yd_word >> (idx - 1)) & 0x1))
-    mapping = TagMap({coil: c[1], reg: ds[1], outputs: y.select(1, 16)})
+    timer_bit, counter_bit, level = Bool("TimerBit"), Bool("CounterBit"), Real("Level")
+    mapping = TagMap(
+        {
+            coil: c[1],
+            reg: ds[1],
+            outputs: y.select(1, 16),
+            timer_bit: t[1],
+            counter_bit: ct[1],
+            level: df[1],
+        }
+    )
     with Program(strict=False) as prog:
         pass
 
@@ -578,11 +610,24 @@ def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
     fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "modbus_fixtures.json"
     fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))
 
+    # pyclickplc keeps the NaN 0x0000:0x7FC0 and the low word written over it, as a CLICK
+    # does.  The P1AM sends every NaN as 0xFFFF:0xFFFF, so the high word written next keeps
+    # 0xFFFF below it.
+    p1am_words = {
+        "read_df1_nan": ("00007fc0", "ffffffff"),
+        "read_df1_still_nan": ("00007fc0", "ffffffff"),
+        "read_df1_2_5": ("00004020", "ffff4020"),
+    }
     for fixture in fixtures:
         request = bytes.fromhex(fixture["request_hex"])
         response = namespace["_mb_handle"](request, len(request))
         assert response is not None, fixture["name"]
-        assert response.hex() == fixture["response_hex"], fixture["name"]
+        expected = fixture["response_hex"]
+        if fixture["name"] in p1am_words:
+            click, p1am = p1am_words[fixture["name"]]
+            assert expected.endswith(click), fixture["name"]
+            expected = expected.removesuffix(click) + p1am
+        assert response.hex() == expected, fixture["name"]
 
 
 def test_modbus_client_send_codegen_builds_expected_request_and_states(monkeypatch):

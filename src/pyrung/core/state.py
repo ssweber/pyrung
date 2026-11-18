@@ -6,6 +6,7 @@ All state transitions produce new SystemState instances.
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Iterator, Mapping
 from typing import Any, cast
 
@@ -33,14 +34,23 @@ def snapshot_dict(mapping: Mapping[str, Any]) -> dict[str, Any]:
     return dict(mapping)
 
 
+#: The bits of a float, as bytes.  Two NaNs are the same value only when their bits match.
+nan_bits = struct.Struct("<d").pack
+
+
 def value_changed(old: Any, new: Any) -> bool:
     """Return True when a tag that held *old* changed when it came to hold *new*.
 
     Every reader that reports whether a tag changed calls this, so stepping, history and the
-    DAP agree.  A NaN differs from itself, but a Real that stays NaN has not changed.
+    DAP agree.  A NaN differs from itself, but a Real that stays the same NaN has not
+    changed.  A NaN with other bits is a change, because a Modbus client reads the bits.
     Replacing ``0.0`` with ``-0.0``, or ``False`` with ``0``, is not a change either.
     """
-    return old is not new and old != new and (old == old or new == new)
+    return (
+        old is not new
+        and old != new
+        and (old == old or new == new or nan_bits(old) != nan_bits(new))
+    )
 
 
 _EMPTY: PMap = pmap()

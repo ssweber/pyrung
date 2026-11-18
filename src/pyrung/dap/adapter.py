@@ -786,8 +786,10 @@ class DAPAdapter:
 
     def _format_value(self, value: Any) -> str:
         if isinstance(value, str):
-            if value == "\x00":
-                return "$00"
+            # CLICK's Data View shows a TXT byte outside printable ASCII as $ and two hex
+            # digits: $00 for a blank, $C8 for C8h.
+            if len(value) == 1 and not " " <= value <= "~" and ord(value) <= 0xFF:
+                return f"${ord(value):02X}"
             return value
         return repr(value)
 

@@ -1,7 +1,13 @@
 """The generated Modbus server answers as a CLICK did (``tests/conformance/test_modbus_raw.py``).
 
 Each test sends one of that part's raw requests to the generated code and checks the CLICK's
-answer, recorded in ``tests/conformance/readings.toml`` on 2026-11-10.
+answer.  Most answers are recorded in ``tests/conformance/readings.toml`` on 2026-11-10.  A
+CLICK C2-03CPU with firmware 4.00 gave the answers to the writes of X, T, CT and gap coils, the
+reads past XD8 and YD8, and the DF written one word at a time.
+
+Two answers differ on purpose.  A CLICK read X001 as 0 after a client wrote it, because its
+input scan rewrites X001.  No input module drives X001 here, so it keeps the write.  A CLICK
+keeps the bits of a NaN that a client writes, and the P1AM sends every NaN as 0xFFFF:0xFFFF.
 """
 
 from __future__ import annotations
@@ -11,11 +17,31 @@ import struct
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Dint, Int, Program, Rung, TagType, copy, fill
+from pyrung import (
+    Block,
+    Bool,
+    Dint,
+    Int,
+    Program,
+    Real,
+    Rung,
+    TagType,
+    copy,
+    fill,
+    math,
+    out,
+    unpack_to_words,
+)
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.click import ClickBlocks, TagMap
 from tests.circuitpy.test_codegen import _run_single_scan_source
-from tests.circuitpy.test_modbus_codegen import _client_source, _ctx_and_source, _IdleBase, _mbap
+from tests.circuitpy.test_modbus_codegen import (
+    _board_struct,
+    _client_source,
+    _ctx_and_source,
+    _IdleBase,
+    _mbap,
+)
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -155,6 +181,15 @@ def test_xd_and_yd_serve_17_registers_with_no_x_or_y_mapped(monkeypatch):
     assert _read_regs(send, 3, YD0, 17) == [0] * 17
 
 
+def test_the_register_after_xd8_or_yd8_reads_0(monkeypatch):
+    _ns, send = _server(monkeypatch, TagMap())
+    for fc, first in ((4, XD0), (3, YD0)):
+        assert _read_regs(send, fc, first + 17, 1) == [0]
+        assert _read_regs(send, fc, first + 16, 2) == [0, 0]
+        assert _read_regs(send, fc, first, 18) == [0] * 18
+    assert _exception(send(struct.pack(">BHH", 6, YD0 + 17, 1))) == 2
+
+
 def test_xd_words_follow_their_x_slots(monkeypatch):
     lower = Block("Lower", TagType.BOOL, 1, 16)
     upper = Block("Upper", TagType.BOOL, 1, 16)
@@ -198,6 +233,63 @@ def test_reads_with_the_other_function_code_answer(monkeypatch):
     assert _read_regs(send, 3, XD0, 1) == [0]
     assert _read_bits(send, 1, _addr("X", 1), 1) == [0]
     assert _read_bits(send, 2, _addr("C", 1), 1) == [0]
+
+
+def test_a_df_word_written_alone_keeps_the_other_word(monkeypatch):
+    _board_struct(monkeypatch)
+    ns, send = _server(monkeypatch, TagMap({Real("Level"): df[1]}))
+    first = _addr("DF", 1)
+    # 2.5 one word at a time, low word first, over 0.0 and then over a NaN.  A CLICK keeps the
+    # NaN's words, so it reads 2.5 at the end.  The P1AM sends that NaN as all ones, so the
+    # high word lands over 0xFFFF.
+    for offset, word, after in (
+        (0, 0x0000, [0x0000, 0x0000]),
+        (1, 0x4020, [0x0000, 0x4020]),
+        (1, 0x7FC0, [0xFFFF, 0xFFFF]),
+        (0, 0x0000, [0xFFFF, 0xFFFF]),
+        (1, 0x4020, [0xFFFF, 0x4020]),
+    ):
+        request = struct.pack(">BHH", 6, first + offset, word)
+        assert send(request)[7:] == request
+        assert _read_regs(send, 3, first, 2) == after
+    assert struct.pack("<f", ns["_t_Level"]) == struct.pack("<HH", 0xFFFF, 0x4020)
+
+
+def test_a_nan_that_a_math_computes_reads_all_ones(monkeypatch):
+    # A CLICK reads 0xFFFF:0xFFFF from a DF that Inf - Inf filled (modbus_raw/staged_nan).
+    big = Real("Big", default=3.0e38)
+    inf = Real("Inf")
+    level = Real("Level")
+    with Program(strict=False) as prog:
+        with Rung():
+            math(big * 10, inf)
+            math(inf - inf, level)
+            copy(inf - inf, df[2])
+    _board_struct(monkeypatch)
+    _ns, send = _server(monkeypatch, TagMap({level: df[1]}), prog)
+    assert _read_regs(send, 3, _addr("DF", 1), 4) == [0xFFFF] * 4
+
+
+def test_an_unpack_copy_of_a_nan_that_a_client_wrote_gives_all_ones(monkeypatch):
+    # A CLICK unpacks the NaN 0x0000:0x7FC0 to those words (modbus_raw/df_quiet_nan).  The
+    # P1AM's floats can't hold a NaN's bits, so it gives 0xFFFF:0xFFFF.
+    level = Real("Level")
+    with Program(strict=False) as prog:
+        with Rung():
+            unpack_to_words(level, Block("W", TagType.WORD, 1, 2).select(1, 2))
+            copy(level, df[2])
+    result = _ctx_and_source(prog, TagMap({level: df[1]}))
+    _board_struct(monkeypatch)
+    request = _mbap(1, _fc16(_addr("DF", 1), [0x0000, 0x7FC0]))
+    # The request arrives after the first scan.  The second scan unpacks and copies it.
+    serve = f"if __scan_once == 1: _t_answer = _rt._mb_handle({request!r}, {len(request)})"
+    code = result.code.replace("while True:\n", f"while True:\n    {serve}\n", 1)
+    ns = _run_single_scan_source(
+        code, monkeypatch, _IdleBase(), runtime_source=result.runtime, scans=2
+    )
+    assert ns["_b_W"][:2] == [0xFFFF, 0xFFFF]
+    read = _mbap(2, struct.pack(">BHH", 3, _addr("DF", 1), 4))
+    assert list(struct.unpack(">4H", ns["_mb_handle"](read, len(read))[9:])) == [0xFFFF] * 4
 
 
 def test_a_read_in_the_y_gap_answers_0(monkeypatch):
@@ -260,7 +352,7 @@ def test_a_cell_a_block_instruction_reaches_is_served(monkeypatch):
     assert ns["_b_C"][1998:2000] == [True, True]
 
 
-# -- X gaps and read-only coil banks -------------------------------------------------------
+# -- X and Y gaps, and writes of X, T and CT -----------------------------------------------
 
 
 def test_a_read_between_x_or_y_slots_answers_0(monkeypatch):
@@ -272,14 +364,50 @@ def test_a_read_between_x_or_y_slots_answers_0(monkeypatch):
         assert _read_bits(send, 1 if base else 2, base + 288, 1) == 2
 
 
-@pytest.mark.parametrize("bank", ["X", "T", "CT"])
-def test_a_coil_write_to_a_read_only_bank_answers_02(monkeypatch, bank):
-    bit = Bool("Bit")
-    hardware = {"X": x, "T": t, "CT": ct}[bank]
-    ns, send = _server(monkeypatch, TagMap({bit: hardware[1]}))
-    assert _exception(send(struct.pack(">BHH", 5, _addr(bank, 1), 0xFF00))) == 2
-    assert _exception(send(_fc15(_addr(bank, 1), [True]))) == 2
-    assert _read_bits(send, 2, _addr(bank, 1), 1) == [0]
+def test_a_write_between_x_or_y_slots_is_stored(monkeypatch):
+    _ns, send = _server(monkeypatch, TagMap())
+    # Y115 and Y116, the 16 gap coils after them, then Y201 and Y202.
+    start = _addr("Y", 115)
+    assert _exception(send(_fc15(start, [True] * 20))) is None
+    assert _read_bits(send, 1, start, 20) == [1] * 20
+    # X021, then a gap coil of X slots 1 and 8 and of Y slots 2 and 8.
+    for coil in (16, 48, 272, 8272, 8464):
+        request = struct.pack(">BHH", 5, coil, 0xFF00)
+        assert send(request)[7:] == request
+        assert _read_bits(send, 1, coil, 1) == [1]
+        assert _read_bits(send, 2, coil, 1) == [1]
+        assert _exception(send(struct.pack(">BHH", 5, coil, 0x0000))) is None
+        assert _read_bits(send, 1, coil, 1) == [0]
+
+
+def test_an_x_write_is_stored_with_or_without_a_tag(monkeypatch):
+    start = Bool("Start")
+    _ns, send = _server(monkeypatch, TagMap({start: x[1]}))
+    # X101..X132 runs across slot 1's gap coils.
+    assert _exception(send(_fc15(_addr("X", 101), [True] * 32))) is None
+    assert _read_bits(send, 2, _addr("X", 101), 32) == [1] * 32
+    request = struct.pack(">BHH", 5, _addr("X", 1), 0xFF00)
+    assert send(request)[7:] == request
+    # A CLICK read 0, because its input scan rewrites X001.  No input module drives it here.
+    assert _read_bits(send, 1, _addr("X", 1), 1) == [1]
+
+
+@pytest.mark.parametrize("bank", ["T", "CT"])
+def test_a_rung_reads_a_t_or_ct_bit_that_a_client_wrote(monkeypatch, bank):
+    hardware = {"T": t, "CT": ct}[bank]
+    with Program(strict=False) as prog:
+        with Rung(hardware[1]):
+            out(c[1])
+    result = _ctx_and_source(prog, TagMap())
+    request = _mbap(1, struct.pack(">BHH", 5, _addr(bank, 1), 0xFF00))
+    # The request arrives after the first scan.  The second scan reads the bit.
+    serve = f"if __scan_once == 1: _t_answer = _rt._mb_handle({request!r}, {len(request)})"
+    code = result.code.replace("while True:\n", f"while True:\n    {serve}\n", 1)
+    ns = _run_single_scan_source(
+        code, monkeypatch, _IdleBase(), runtime_source=result.runtime, scans=2
+    )
+    assert ns["_t_answer"] == request
+    assert ns["_t_C1"] is True
 
 
 # -- Code size -----------------------------------------------------------------------------

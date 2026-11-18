@@ -6,85 +6,26 @@ import json
 import struct
 from pathlib import Path
 
-from pyclickplc.server import MemoryDataProvider, _ClickDeviceContext
-from pymodbus.constants import ExcCodes
+from pyclickplc.server import MemoryDataProvider, _answer, _ClickDeviceContext
 
 
 def _mbap(tid: int, pdu: bytes, uid: int = 1) -> bytes:
     return struct.pack(">HHHB", tid, 0, len(pdu) + 1, uid) + pdu
 
 
-def _err(tid: int, uid: int, fc: int, code: int) -> bytes:
-    return struct.pack(">HHHBB", tid, 0, 3, uid, (fc & 0x7F) | 0x80) + bytes([code & 0xFF])
-
-
 def _handle(ctx: _ClickDeviceContext, request: bytes) -> bytes:
-    tid, pid, length, uid = struct.unpack(">HHHB", request[:7])
-    if pid != 0:
-        raise ValueError("fixture generator only supports pid=0")
-    fc = int(request[7])
+    """Return the frame that pyclickplc's ``ClickServer`` sends back for *request*."""
+    tid, _pid, _length, uid = struct.unpack(">HHHB", request[:7])
+    pdu = _answer(ctx, request[7:])
+    return struct.pack(">HHHB", tid, 0, len(pdu) + 1, uid) + pdu
 
-    if fc in (1, 2):
-        start, count = struct.unpack(">HH", request[8:12])
-        values = ctx.getValues(fc, start, count)
-        if isinstance(values, int):
-            return _err(tid, uid, fc, int(values))
-        payload = bytearray((count + 7) // 8)
-        for offset, bit in enumerate(values):
-            if bit:
-                payload[offset // 8] |= 1 << (offset % 8)
-        return struct.pack(">HHHBBB", tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(
-            payload
-        )
 
-    if fc in (3, 4):
-        start, count = struct.unpack(">HH", request[8:12])
-        values = ctx.getValues(fc, start, count)
-        if isinstance(values, int):
-            return _err(tid, uid, fc, int(values))
-        payload = bytearray()
-        for reg in values:
-            payload.extend(struct.pack(">H", int(reg) & 0xFFFF))
-        return struct.pack(">HHHBBB", tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(
-            payload
-        )
-
-    if fc == 5:
-        address, raw = struct.unpack(">HH", request[8:12])
-        result = ctx.setValues(fc, address, [raw == 0xFF00])
-        if result is not None:
-            return _err(tid, uid, fc, int(result))
-        return request[:12]
-
-    if fc == 6:
-        address, raw = struct.unpack(">HH", request[8:12])
-        result = ctx.setValues(fc, address, [raw])
-        if result is not None:
-            return _err(tid, uid, fc, int(result))
-        return request[:12]
-
-    if fc == 15:
-        start, count, byte_count = struct.unpack(">HHB", request[8:13])
-        payload = request[13 : 13 + byte_count]
-        values = [bool((payload[offset // 8] >> (offset % 8)) & 0x1) for offset in range(count)]
-        result = ctx.setValues(fc, start, values)
-        if result is not None:
-            return _err(tid, uid, fc, int(result))
-        return struct.pack(">HHHBBHH", tid, 0, 6, uid, fc, start, count)
-
-    if fc == 16:
-        start, count, byte_count = struct.unpack(">HHB", request[8:13])
-        payload = request[13 : 13 + byte_count]
-        values = [
-            struct.unpack(">H", payload[offset : offset + 2])[0]
-            for offset in range(0, len(payload), 2)
-        ]
-        result = ctx.setValues(fc, start, values)
-        if result is not None:
-            return _err(tid, uid, fc, int(result))
-        return struct.pack(">HHHBBHH", tid, 0, 6, uid, fc, start, count)
-
-    return _err(tid, uid, fc, int(ExcCodes.ILLEGAL_FUNCTION))
+def _fc15(start: int, bits: list[bool]) -> bytes:
+    payload = bytearray((len(bits) + 7) // 8)
+    for i, bit in enumerate(bits):
+        if bit:
+            payload[i // 8] |= 1 << (i % 8)
+    return struct.pack(">BHHB", 15, start, len(bits), len(payload)) + bytes(payload)
 
 
 def main() -> None:
@@ -105,8 +46,31 @@ def main() -> None:
         ("read_valid_unmapped_ds2", _mbap(3, struct.pack(">BHH", 3, 1, 1))),
         ("write_c1_false", _mbap(4, struct.pack(">BHH", 5, 16384, 0x0000))),
         ("write_ds1_42", _mbap(5, struct.pack(">BHH", 6, 0, 42))),
-        ("write_x1_illegal", _mbap(6, struct.pack(">BHH", 5, 0, 0xFF00))),
+        ("write_x1", _mbap(6, struct.pack(">BHH", 5, 0, 0xFF00))),
         ("read_yd0", _mbap(7, struct.pack(">BHH", 3, 57856, 1))),
+        ("read_x1", _mbap(8, struct.pack(">BHH", 2, 0, 1))),
+        ("write_t1", _mbap(9, struct.pack(">BHH", 5, 45056, 0xFF00))),
+        ("read_t1", _mbap(10, struct.pack(">BHH", 1, 45056, 1))),
+        ("write_ct1", _mbap(11, _fc15(49152, [True]))),
+        ("read_ct1", _mbap(12, struct.pack(">BHH", 2, 49152, 1))),
+        # Y115 and Y116, the 16 gap coils after them, then Y201 and Y202.
+        ("write_y_gap", _mbap(13, _fc15(8238, [True] * 20))),
+        ("read_y_gap", _mbap(14, struct.pack(">BHH", 1, 8238, 20))),
+        # Unit 17 of slot 1, after X116.
+        ("write_x_gap", _mbap(15, struct.pack(">BHH", 5, 48, 0xFF00))),
+        ("read_x_gap", _mbap(16, struct.pack(">BHH", 2, 48, 1))),
+        ("read_past_xd8", _mbap(17, struct.pack(">BHH", 4, 57361, 1))),
+        ("read_xd8_and_past", _mbap(18, struct.pack(">BHH", 4, 57360, 2))),
+        ("read_past_yd8", _mbap(19, struct.pack(">BHH", 3, 57873, 1))),
+        # XD1 through the register after XD8.
+        ("read_xd1_to_past_xd8", _mbap(20, struct.pack(">BHH", 4, 57346, 16))),
+        # DF1 as NaN (0x0000:0x7FC0), then 2.5 written low word first, one word at a time.
+        ("write_df1_high_nan", _mbap(21, struct.pack(">BHH", 6, 28673, 0x7FC0))),
+        ("read_df1_nan", _mbap(22, struct.pack(">BHH", 3, 28672, 2))),
+        ("write_df1_low", _mbap(23, struct.pack(">BHH", 6, 28672, 0x0000))),
+        ("read_df1_still_nan", _mbap(24, struct.pack(">BHH", 3, 28672, 2))),
+        ("write_df1_high", _mbap(25, struct.pack(">BHH", 6, 28673, 0x4020))),
+        ("read_df1_2_5", _mbap(26, struct.pack(">BHH", 3, 28672, 2))),
     ]
 
     fixtures = [

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import struct
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -39,8 +38,10 @@ for _lo, _hi in _XY_SLOT_RANGES:
         raise RuntimeError("Each X/Y sparse slot must be 16 bits wide.")
 
 _WORD_SIZE = 16
-_CLICK_NAN: float = struct.unpack("<f", b"\xff\xff\xff\xff")[0]
 _MIRRORED_WORD_BANKS: dict[str, str] = {"XD": "X", "YD": "Y"}
+#: The banks that *blocks* serve.  A client may write a T or CT bit, and a rung that reads
+#: the bit sees the write.
+_BLOCK_BANKS = _PLAIN_DATA_BANKS | {"T", "CT"}
 
 
 class ClickDataProvider:
@@ -74,8 +75,8 @@ class ClickDataProvider:
         blocks: Click bank blocks whose slots the program uses directly,
             without a TagMap entry (``x.slot(1, name="Start")`` or a bare
             ``ds[5]``).  Accepts a ``ClickBlockSet`` or any iterable of
-            blocks; only the plain data banks (X, Y, C, DS, DD, DH, DF, TXT)
-            are used.
+            blocks.  The provider uses the blocks of X, Y, C, T, CT, DS, DD,
+            DH, DF and TXT.
         on_stop: Called instead of ``runner.stop()`` when a write to the STOP
             command bit (SC50) reaches the provider.  pyclickplc's Modbus
             server refuses that write (exception code 2), so a Modbus client
@@ -110,7 +111,7 @@ class ClickDataProvider:
         self._banks: dict[str, Block] = {
             blk.name: blk
             for blk in (blocks if blocks is not None else ())
-            if isinstance(blk, Block) and blk.name in _PLAIN_DATA_BANKS
+            if isinstance(blk, Block) and blk.name in _BLOCK_BANKS
         }
         self._bank_slots: dict[str, _MappedRuntimeSlot | None] = {}
         self._on_stop = on_stop
@@ -159,11 +160,7 @@ class ClickDataProvider:
         normalized, bank, index = self._normalize(address)
         if bank in _MIRRORED_WORD_BANKS:
             return self._read_mirrored_word(bank, index)
-        value = self._read_mapped_or_fallback(normalized)
-        if isinstance(value, float) and value != value:
-            # pyrung serves every NaN it holds the way a CLICK serves its NaN: 0xFFFF:0xFFFF.
-            return _CLICK_NAN
-        return value
+        return self._read_mapped_or_fallback(normalized)
 
     def write(self, address: str, value: PlcValue) -> None:
         normalized, bank, index = self._normalize(address)

@@ -98,13 +98,13 @@ SC43 for a Math. What each case tells apart:
   for NaN <> NaN; IEEE compares read 8.  SC43 and SC46 after Inf - Inf are
   bits 1 and 2 of Result4.  A CLICK reads 1, 1, 8, 0: IEEE, and
   a Math that produces NaN raises neither flag.
-- ``non_finite_math_into_int`` (probe): a Math of +Inf into an Int preset 99
+- ``non_finite_math_into_int``: a Math of +Inf into an Int preset 99
   (Result1), of NaN into an Int (Result2), of +Inf into a DD preset 99
   (Result3: 1 for 0, 2 for 99, 3 for 2147483647, 4 for -2147483648, 5 for
   anything else), and SC43 after each as bits 1, 2 and 4 of Result4.
   A CLICK reads 0, 0, 1, 5: each writes 0, and NaN raises no
   SC43.
-- ``copy_non_finite_to_int`` (probe): a Copy of +Inf, -Inf and NaN into an
+- ``copy_non_finite_to_int``: a Copy of +Inf, -Inf and NaN into an
   Int preset 99 (Result1..3), SC43 after each as bits 1, 2 and 4 of Result4.
   A CLICK reads 32767, -32768, 0, 3: +Inf and -Inf clamp with
   SC43, and NaN writes 0 without it.
@@ -607,7 +607,6 @@ group = Group(
             init=_init(8, dds=[(521, 521)], dfs=[(486, 487)]),
             expect={"Result1": 0, "Result2": 0, "Result3": 1, "Result4": 5},
             scans=SCANS,
-            probe="Math of Inf or NaN into an Int or a DD",
         ),
         case(
             "A Copy of +Inf or -Inf into an Int clamps and raises SC43, and of NaN writes 0 "
@@ -617,7 +616,6 @@ group = Group(
             init=_init(9, dfs=[(488, 490)]),
             expect={"Result1": 32767, "Result2": -32768, "Result3": 0, "Result4": 3},
             scans=SCANS,
-            probe="Copy of Inf or NaN into an Int",
         ),
         case(
             "A Copy of +Inf to text writes inf with no flag: TXT401..404 read i, n, f and "

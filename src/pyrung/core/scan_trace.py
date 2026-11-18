@@ -18,12 +18,10 @@ Every value it reads is one of two things:
 
 * A **constant** is a recorded (key, value) pair. A trace only runs from a state in
   which every recorded pair still holds, compared by type and value. Here and below,
-  any NaN is the same value as any other. From any NaN the kernel takes the same
-  decisions and stores a NaN in the same cells, though the sign may differ
-  (``math(-R, R)``). No pyrung reader tells two NaNs apart. History, the DAP and
-  ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag changed.
-  Text shows every NaN as ``nan``. An Unpack Copy and the Modbus servers give CLICK's
-  0xFFFF:0xFFFF for any NaN.
+  two NaNs are the same value only when their bits match. A Modbus client and an
+  Unpack Copy read a NaN's bits, so a NaN with other bits is another value. History,
+  the DAP and ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag
+  changed, and it compares a NaN's bits too.
 * A **moving** value is read from the loop's locals on every iteration. The moving
   values are the time-derived system tags (:data:`MOVING_SYSTEM_TAGS`) and every cell
   that the scan changes. The tracer finds those cells with a fixed point. It traces,
@@ -111,7 +109,8 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.state import value_changed
+from pyrung.core.state import nan_bits, value_changed
+from pyrung.core.storage import CLICK_NAN
 from pyrung.core.system_points import (
     _CLOCK_HALF_PERIODS,
     _DERIVED_TAG_NAMES,
@@ -258,7 +257,8 @@ def same(a: Any, b: Any) -> bool:
 
     ``==`` treats ``1 == True == 1.0`` and ``0.0 == -0.0`` as equal, and it treats NaN as
     different from itself. A stored value keeps its type, and -0.0 divides differently
-    from 0.0.
+    from 0.0. Two NaNs are the same only when their bits match, because a Modbus client
+    reads the bits.
     """
     if a is b:
         return True
@@ -266,7 +266,7 @@ def same(a: Any, b: Any) -> bool:
         return False
     if type(a) is float:
         if a != a:
-            return b != b
+            return b != b and nan_bits(a) == nan_bits(b)
         return a == b and math.copysign(1.0, a) == math.copysign(1.0, b)
     return a == b
 
@@ -319,6 +319,10 @@ class KernelSource:
                 continue
             target = node.targets[0]
             if not isinstance(target, ast.Name) or target.id in rebound:
+                continue
+            if target.id == "_CLICK_NAN":
+                # The helper _computed_real defines it with struct, which no literal spells.
+                self.constants[target.id] = CLICK_NAN
                 continue
             try:
                 value = ast.literal_eval(node.value)
@@ -1771,6 +1775,7 @@ def _loop_function(
         "clock_high": clock_high,
         "math": math,
         "same": same,
+        "nan_bits": nan_bits,
         "EXIT": [_LEFT_AT_LIMIT],
         "GUARDS": tuple(guard_list),
     }
@@ -2010,7 +2015,7 @@ def _coast_guards(
         elif free_to_move and type(after) is float and type(before) is float:
             # Nothing says how far a Real moves, only whether it does. A scan that holds the
             # Real is another path, and a record of it says "moved" on every scan it runs.
-            # A NaN that stays NaN does not move, though it differs from itself.
+            # A NaN that keeps its bits does not move, though it differs from itself.
             if not value_changed(before, after):
                 guards.append(_Guard(_changed(new, old), uses, why=f"{name} starts moving"))
                 held.append(name)
@@ -2047,7 +2052,10 @@ def _changed(old: str, new: str) -> str:
     The spelling leaves out the identity test, because ``is`` on a literal is a syntax
     warning.
     """
-    return f"{old} != {new} and ({old} == {old} or {new} == {new})"
+    return (
+        f"{old} != {new} and ({old} == {old} or {new} == {new} "
+        f"or nan_bits({old}) != nan_bits({new}))"
+    )
 
 
 # --- Driving the loop through a run --------------------------------------------

@@ -1723,7 +1723,7 @@ class TestBoardPeripheralsAndRunStop:
             ("nan", Int, 0, False),
             ("inf", Dint, 2147483647, False),
             ("-inf", Dint, -2147483648, False),
-            ("nan", Dint, 0, False),
+            ("nan", Dint, -2147483648, False),
             ("inf", Word, 65535, False),
             ("-inf", Word, 32768, False),
             ("nan", Word, 0, False),
@@ -1736,7 +1736,8 @@ class TestBoardPeripheralsAndRunStop:
 
         It clamps with no flag on a DINT, as it does for a Real past the DINT range
         (``flag_probe/bulk_ops_clear_flags``). It also clamps with no flag on a WORD
-        (CLICK: 65535 and 32768). A Copy of NaN stores 0 with no flag.
+        (CLICK: 65535 and 32768). A Copy of NaN sets no flag. It stores -2147483648 in a
+        DINT and 0 in an INT or a WORD.
         """
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)

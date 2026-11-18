@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.expression import Expression
 from pyrung.core.memory_block import PastBankError
-from pyrung.core.storage import check_real_literal
+from pyrung.core.storage import check_real_literal, computed_real
 from pyrung.core.tag import Tag
 
 from .base import Instruction, OneShotMixin
@@ -92,10 +93,10 @@ class CopyInstruction(OneShotMixin, Instruction):
     **Clamping semantics:** Out-of-range values are clamped to the
     destination type's min/max (e.g. copying 40 000 into an INT tag produces
     32 767) and the out-of-range flag (``system.fault.out_of_range``, CLICK's
-    SC43) is set; +/-Inf into an INT clamps the same way, and NaN stores 0 with
-    no flag.  A REAL into a DINT clamps with no flag (read on a CLICK for a Copy
-    of DF 1.0E+10 into a DD; Inf, Block copy and Fill into a DINT follow it, not
-    yet measured).  This differs from `CalcInstruction`, which wraps.  A WORD
+    SC43) is set.  +/-Inf into an INT clamps the same way, and NaN stores 0 with
+    no flag.  A REAL into a DINT clamps with no flag, and a NaN stores
+    -2147483648.  A CLICK was read doing both for a Copy of a DF into a DD.
+    This differs from `CalcInstruction`, which wraps.  A WORD
     into an INT keeps its bits (0xFFFF is -1); into a WORD a constant keeps its
     low 16 bits, and a DINT or REAL clamps past 65535 and below 0 keeps its low
     16 bits, with no flag (see ``copy_store_transform``).
@@ -191,6 +192,8 @@ class CopyInstruction(OneShotMixin, Instruction):
 
         if resolved_target is None:
             return
+        if resolved_target.type.name == "REAL" and isinstance(self.source, Expression):
+            value = computed_real(value)
 
         # String literal fan-out: "00026" → sequential CHAR tags, as many as the block holds
         from pyrung.core.tag import TagType
@@ -473,6 +476,8 @@ class FillInstruction(OneShotMixin, Instruction):
         except IndexError:
             _set_fault_address_error(ctx)
             return
+        if dst_tags and dst_tags[0].type.name == "REAL" and isinstance(self.value, Expression):
+            value = computed_real(value)
 
         source = copy_source_kind(self.value)
         updates = {}

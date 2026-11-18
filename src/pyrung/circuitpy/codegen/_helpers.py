@@ -44,10 +44,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
     ],
     "_float_to_int_bits": [
         "def _float_to_int_bits(f):",
-        "    f = float(f)",
-        "    if f != f:",
-        "        return 0xFFFFFFFF",
-        '    return struct.unpack("<I", struct.pack("<f", f))[0]',
+        '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
         "",
     ],
     "_ascii_char_from_code": [
@@ -158,18 +155,18 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '            raise ValueError("integer parse failed")',
         "        return int(_m.group(1), 10)",
         '    if dest_type == "WORD":',
-        '        if not re.fullmatch(r"[0-9A-Fa-f]+", text):',
+        # MicroPython's re has no fullmatch.
+        '        if re.match(r"[0-9A-Fa-f]+$", text) is None:',
         '            raise ValueError("hex parse failed")',
         "        parsed = int(text, 16)",
         "        if parsed < 0 or parsed > 0xFFFF:",
         '            raise ValueError("hex out of WORD range")',
         "        return parsed",
         '    if dest_type == "REAL":',
-        "        parsed = float(text)",
-        "        if not math.isfinite(parsed):",
-        '            raise ValueError("REAL parse produced non-finite value")',
-        '        struct.pack("<f", parsed)',
-        "        return parsed",
+        # A number past the REAL range is +/-Inf, and "inf" or "nan" is not a number.
+        '        if re.match(r"[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?$", text) is None:',
+        '            raise ValueError("REAL parse failed")',
+        "        return _store_real(float(text))",
         '    raise TypeError(f"Unsupported pack_text destination type: {dest_type}")',
         "",
     ],
@@ -225,6 +222,14 @@ _HELPER_DEFS: dict[str, list[str]] = {
         f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
         "",
     ],
+    # A Copy of a REAL into a DINT clamps.  A CLICK stores -2147483648 for a NaN.
+    "_store_dint_from_real": [
+        "def _store_dint_from_real(value):",
+        "    if value != value:",
+        f"        return {_DINT_MIN}",
+        "    return _store_dint(value)",
+        "",
+    ],
     "_store_word": [
         "def _store_word(value):",
         "    if type(value) is int:",
@@ -261,6 +266,17 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '        return float("inf")',
         f"    if value < {-REAL_MAX!r}:",
         '        return float("-inf")',
+        "    return value",
+        "",
+    ],
+    # A CLICK's Math stores one NaN, whatever made it.  It reads 0xFFFF:0xFFFF over Modbus.
+    # Only the desktop kernel uses it (_BOARD_HELPER_DEFS).
+    "_computed_real": [
+        "_CLICK_NAN = struct.unpack('<f', struct.pack('<I', 0xFFFFFFFF))[0]",
+        "",
+        "def _computed_real(value):",
+        "    if value != value:",
+        "        return _CLICK_NAN",
         "    return value",
         "",
     ],
@@ -613,11 +629,32 @@ def _render_index_helpers(
     return lines
 
 
-def _render_helper_defs(needed: Iterable[str]) -> list[str]:
-    """Return the definitions of the helpers in *needed*, in ``_HELPER_ORDER``."""
+#: The P1AM's own versions of some helpers.  CircuitPython's floats are 30 bits, so a
+#: float on the board can't hold a NaN's bits.  On the P1AM, every NaN unpacks to
+#: 0xFFFFFFFF, the NaN that a CLICK's Math stores.
+_BOARD_HELPER_DEFS: dict[str, list[str]] = {
+    "_float_to_int_bits": [
+        "def _float_to_int_bits(f):",
+        "    f = float(f)",
+        "    if f != f:",
+        "        return 0xFFFFFFFF",
+        '    return struct.unpack("<I", struct.pack("<f", f))[0]',
+        "",
+    ],
+    # The P1AM sends every NaN as 0xFFFF:0xFFFF, so it has no _computed_real.
+    "_computed_real": [],
+}
+
+
+def _render_helper_defs(needed: Iterable[str], *, kernel: bool) -> list[str]:
+    """Return the definitions of the helpers in *needed*, in ``_HELPER_ORDER``.
+
+    *kernel* is True for the desktop kernel and False for the P1AM's code.
+    """
     needed = set(needed)
+    defs = _HELPER_DEFS if kernel else {**_HELPER_DEFS, **_BOARD_HELPER_DEFS}
     lines: list[str] = []
     for name in _HELPER_ORDER:
         if name in needed:
-            lines.extend(_HELPER_DEFS[name])
+            lines.extend(defs[name])
     return lines

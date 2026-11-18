@@ -494,7 +494,7 @@ def test_unknown_targets_are_errors(tmp_path: Path):
     runner = adapter._runner
     assert runner is not None
 
-    # Timer/counter banks are only reachable through TagMap entries.
+    # Timer and counter accumulators are only reachable through TagMap entries.
     messages = _request(adapter, out_stream, "pyrungForce", {"tag": "td5", "value": 1})
     response = _response(messages)
     assert response["success"] is False

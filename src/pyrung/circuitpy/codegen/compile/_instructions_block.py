@@ -18,6 +18,7 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.expression import Expression
 from pyrung.core.instruction import (
     BlockCopyInstruction,
     EventDrumInstruction,
@@ -164,6 +165,9 @@ def _compile_fill_instruction(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     value_expr = _compile_value(instr.value, ctx)
+    if ctx.kernel_runtime and dest_type == "REAL" and isinstance(instr.value, Expression):
+        ctx.mark_helper("_computed_real")
+        value_expr = f"_computed_real({value_expr})"
     source_type = "CHAR" if isinstance(instr.value, str) else _optional_value_type_name(instr.value)
     clamp_cond = _copy_clamp_condition("_fill_value", dest_type, source_type)
     fault_body = _compile_set_out_of_range_fault_body(ctx)

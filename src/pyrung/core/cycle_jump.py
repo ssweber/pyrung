@@ -79,6 +79,7 @@ from pyrung.core.scan_trace import (
     _Guard,
     same,
 )
+from pyrung.core.state import nan_bits
 from pyrung.core.system_points import clock_high
 
 # The most times that one prediction asks the stop predicate about moving values.
@@ -318,6 +319,8 @@ def _unary(bound: _Bound, name: str, value: Any) -> Any:
 _PURE: dict[str, Callable[..., Any]] = {
     **{name: pure.function for name, pure in _PURE_BUILTINS.items()},
     **{pure.spelling: pure.function for pure in _PURE_MATH.values()},
+    # A guard that asks whether a NaN changed calls it (scan_trace._changed).
+    "nan_bits": nan_bits,
 }
 
 
@@ -461,7 +464,7 @@ class _Rewrite(ast.NodeTransformer):
         function = node.func
         if node.keywords:
             raise Unsupported("call with keywords")
-        if isinstance(function, ast.Name) and function.id in _PURE_BUILTINS:
+        if isinstance(function, ast.Name) and function.id in _PURE:
             spelling = function.id
         elif (
             isinstance(function, ast.Attribute)
@@ -574,7 +577,7 @@ class Iteration:
             lines.append(f"    {targets}, = {values},")
         lines.append("    return True")
         # The loop's own names, so that an operation spelled as in the loop means the same.
-        namespace.update(math=math, same=same, clock_high=clock_high)
+        namespace.update(math=math, same=same, nan_bits=nan_bits, clock_high=clock_high)
         namespace.update(
             _truth=_truth, _cmp=_cmp, _bin=_bin, _unary=_unary, _call=_call, _or=_or, _and=_and
         )

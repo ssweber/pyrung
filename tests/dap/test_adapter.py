@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from pyrung.core import Counter
 from pyrung.core.debug_trace import RungTraceEvent
 from pyrung.dap.adapter import DAPAdapter
@@ -589,6 +591,16 @@ def _branch_then_call_script() -> str:
         "runner = PLC(prog)\n"
         "runner.patch({'Step': 0, 'AutoMode': True, 'BranchDone': False, 'SubLight': False})\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [("\x00", "$00"), ("\xc8", "$C8"), ("\x7f", "$7F"), ("\n", "$0A"), ("A", "A"), ("~", "~")],
+)
+def test_a_txt_byte_outside_printable_ascii_shows_as_click_shows_it(value, shown):
+    # CLICK 4.00's Data View shows a TXT holding C8h as $C8.
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=io.BytesIO())
+    assert adapter._format_value(value) == shown
 
 
 def test_initialize_advertises_capabilities():
