@@ -12,7 +12,7 @@ pip install pyrung
 
 ```python
 from pyrung import Bool, Int, Real, PLC, Program, rung, out, copy, rise
-from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy, validate_circuitpy_program
+from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy
 ```
 
 ## Hardware setup — P1AM
@@ -217,7 +217,7 @@ The generated code can include a Modbus TCP server, client, or both via the P1AM
 ## Validation
 
 ```python
-report = validate_circuitpy_program(program, hw, mode="warn")
+report = hw.validate(program, mode="warn")
 print(report.summary())
 
 for finding in report.errors + report.warnings + report.hints:
@@ -227,7 +227,6 @@ for finding in report.errors + report.warnings + report.hints:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `program` | `Program` | — | Program to validate |
-| `hw` | `P1AM \| None` | `None` | Hardware config for I/O traceability checks |
 | `mode` | `"warn" \| "strict"` | `"warn"` | `"warn"` emits hints; `"strict"` enforces blocking findings as errors |
 
 ### Finding codes

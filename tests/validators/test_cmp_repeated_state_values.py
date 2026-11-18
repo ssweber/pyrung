@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pyrung.core import Bool, Int, Program, Rung, branch, copy, subroutine
-from pyrung.core.validation import CMP_REPEATED_STATE_VALUE, validate
+from pyrung.core.validation import CMP_REPEATED_STATE_VALUE, check
 from pyrung.core.validation.cmp_conditions import (
     _REPEATED_STATE_MIN_INTERVENING_RUNGS,
     _REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS,
@@ -11,7 +11,7 @@ from pyrung.core.validation.cmp_conditions import (
 
 
 def _findings(program: Program):
-    return list(validate(program, select={CMP_REPEATED_STATE_VALUE}))
+    return list(check(program, select={CMP_REPEATED_STATE_VALUE}))
 
 
 def _comparison_rung(state, value: int, result) -> None:

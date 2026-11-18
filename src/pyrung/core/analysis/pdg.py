@@ -229,10 +229,14 @@ class ProgramGraph:
     _influenced_cone_cache: dict[tuple[str, bool, frozenset[str]], InfluenceCone] | None = field(
         default=None, init=False, repr=False
     )
-    _downstream_slice_cache: dict[tuple[str, bool], frozenset[str]] | None = field(
+    _downstream_slice_cache: dict[tuple[str, bool | str], frozenset[str]] | None = field(
         default=None, init=False, repr=False
     )
-    _upstream_slice_cache: dict[tuple[str, bool], frozenset[str]] | None = field(
+    # The reverse of the reads that ``upstream_slice`` follows: tag -> nodes that read it.
+    _slice_readers_cache: dict[str, frozenset[int]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _upstream_slice_cache: dict[tuple[str, bool | str], frozenset[str]] | None = field(
         default=None, init=False, repr=False
     )
 
@@ -649,16 +653,22 @@ class ProgramGraph:
         self,
         tag_name: str,
         *,
-        follow_calls: bool = True,
+        follow_calls: bool | Literal["call_site"] = True,
     ) -> frozenset[str]:
         """Return all tags transitively upstream of *tag_name*.
 
         Always follows ``condition_reads``, ``data_reads``, and
-        ``exclusive_reads``.  When *follow_calls* is ``True`` (the
-        default), call-site conditions of subroutines are included —
-        the conservative closure safe for soundness-critical analysis.
-        Pass ``follow_calls=False`` for informational / display uses
-        where a tighter cone is preferred.
+        ``exclusive_reads``.  *follow_calls* says what a writer rung inside a
+        subroutine adds:
+
+        - ``True`` (the default): the condition tags of every rung that calls
+          the subroutine, up the call chain, and everything upstream of them.
+          Soundness-critical analysis needs this full closure.
+        - ``"call_site"``: the same call-condition tags, but none of their own
+          upstream. The call condition is the subroutine's enable, so the cone
+          stops there. A call-condition tag that the cone also reads in the
+          ordinary way still expands.
+        - ``False``: nothing.
         """
         if self._upstream_slice_cache is None:
             self._upstream_slice_cache = {}
@@ -670,7 +680,9 @@ class ProgramGraph:
         visited_tags: set[str] = set()
         visited_rungs: set[int] = set()
         visited_subs: set[str] = set()
+        call_conditions: set[str] = set()
         queue: list[str] = [tag_name]
+        expand_call_conditions = follow_calls is True
 
         while queue:
             current = queue.pop()
@@ -697,12 +709,16 @@ class ProgramGraph:
                     visited_subs.add(sub_name)
                     for caller_idx in self._subroutine_caller_indices().get(sub_name, ()):
                         caller = self.rung_nodes[caller_idx]
-                        for read_tag in caller.condition_reads:
-                            if read_tag not in visited_tags:
-                                queue.append(read_tag)
+                        if expand_call_conditions:
+                            for read_tag in caller.condition_reads:
+                                if read_tag not in visited_tags:
+                                    queue.append(read_tag)
+                        else:
+                            call_conditions.update(caller.condition_reads)
                         if caller.subroutine is not None:
                             pending_subs.append(caller.subroutine)
 
+        visited_tags.update(call_conditions)
         visited_tags.discard(tag_name)
         result = frozenset(visited_tags)
         self._upstream_slice_cache[cache_key] = result
@@ -783,13 +799,21 @@ class ProgramGraph:
         self,
         tag_name: str,
         *,
-        follow_calls: bool = False,
+        follow_calls: bool | Literal["call_site"] = False,
     ) -> frozenset[str]:
         """Return all tags transitively downstream of *tag_name*.
 
-        By default this preserves the historical direct PDG slice.  Pass
-        ``follow_calls=True`` to include subroutine bodies reached by call
-        instructions and caller sites reached from subroutine rungs.
+        *follow_calls* says how the slice crosses subroutine calls:
+
+        - ``False`` (the default): it does not. This is the direct PDG slice.
+        - ``True``: it includes subroutine bodies reached by call instructions
+          and caller sites reached from subroutine rungs.
+        - ``"call_site"``: the reverse of ``upstream_slice(follow_calls="call_site")``.
+          If a rung that calls a subroutine reads *tag_name* in its condition, the
+          slice includes every tag that the subroutine, or a subroutine it calls,
+          writes. Every later step follows ordinary reads, so a tag reached on the
+          way does not open a subroutine. *X* is in the call-site upstream slice of
+          *Y* exactly when *Y* is in the call-site downstream slice of *X*.
         """
         if self._downstream_slice_cache is None:
             self._downstream_slice_cache = {}
@@ -797,6 +821,11 @@ class ProgramGraph:
         cached = self._downstream_slice_cache.get(cache_key)
         if cached is not None:
             return cached
+
+        if follow_calls == "call_site":
+            result = self._call_site_downstream(tag_name)
+            self._downstream_slice_cache[cache_key] = result
+            return result
 
         if follow_calls:
             # influenced_cone has its own cache; this just keys the write_tags.
@@ -826,6 +855,60 @@ class ProgramGraph:
         result = frozenset(visited_tags)
         self._downstream_slice_cache[cache_key] = result
         return result
+
+    def _slice_readers(self) -> dict[str, frozenset[int]]:
+        """Map each tag to the nodes whose reads ``upstream_slice`` follows back to it."""
+        if self._slice_readers_cache is None:
+            readers: dict[str, set[int]] = defaultdict(set)
+            for idx, node in enumerate(self.rung_nodes):
+                for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
+                    readers[read_tag].add(idx)
+            self._slice_readers_cache = {name: frozenset(ids) for name, ids in readers.items()}
+        return self._slice_readers_cache
+
+    def _call_site_downstream(self, tag_name: str) -> frozenset[str]:
+        # The edges are those that upstream_slice walks backward, so the two slices
+        # stay exact reverses of each other.
+        readers = self._slice_readers()
+        members = self._subroutine_member_indices()
+        callers = self._subroutine_caller_indices()
+
+        # The first step may cross a call: the subroutines whose call rungs read
+        # tag_name, and every subroutine those call in turn.
+        pending_subs = [
+            sub_name
+            for sub_name, caller_indices in callers.items()
+            if any(tag_name in self.rung_nodes[idx].condition_reads for idx in caller_indices)
+        ]
+        opened: set[str] = set()
+        while pending_subs:
+            sub_name = pending_subs.pop()
+            if sub_name in opened:
+                continue
+            opened.add(sub_name)
+            for idx in members.get(sub_name, ()):
+                pending_subs.extend(self.rung_nodes[idx].calls)
+
+        queue: list[str] = [tag_name]
+        for sub_name in opened:
+            for idx in members.get(sub_name, ()):
+                queue.extend(self.node_writes(self.rung_nodes[idx]))
+
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
+                continue
+            visited_tags.add(current)
+            for rung_idx in readers.get(current, frozenset()):
+                if rung_idx in visited_rungs:
+                    continue
+                visited_rungs.add(rung_idx)
+                queue.extend(self.node_writes(self.rung_nodes[rung_idx]))
+
+        visited_tags.discard(tag_name)
+        return frozenset(visited_tags)
 
     def to_json_dict(self) -> dict[str, Any]:
         """Serialize the graph for DAP/webview consumption.

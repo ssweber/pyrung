@@ -323,7 +323,7 @@ def test_validate_accepts_eq_with_expression_operand(elem_kind: str, side: str) 
     with Program() as p:
         with Rung(cond):
             out(A)
-    p.validate()
+    p.check()
 
 
 @pytest.mark.parametrize(

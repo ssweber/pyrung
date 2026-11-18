@@ -52,7 +52,7 @@ hardware-agnostic ``pyrung`` core:
 **Mapping and validation:**
 
 - :class:`TagMap` — maps logical Tags/Blocks to Click hardware addresses.
-- :func:`validate_click_program` — checks a Program against Click hardware restrictions.
+- :meth:`TagMap.validate` — checks a Program against Click hardware restrictions.
 
 **Soft PLC adapter:**
 
@@ -79,7 +79,7 @@ Typical usage::
     mapping = TagMap({Button: x[1], Light: y[1]})
 """
 
-from typing import Any, NamedTuple, cast
+from typing import NamedTuple, cast
 
 from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
@@ -97,7 +97,6 @@ from pyrung.core import (
     TagType,
     Word,
 )
-from pyrung.core.program import Program
 
 Bit = Bool
 Int2 = Dint
@@ -244,10 +243,23 @@ from pyrung.click.ladder import (
 )
 from pyrung.click.nop import NopInstruction, nop
 from pyrung.click.raw import RawInstruction, raw
-from pyrung.click.tag_map import SystemNicknameRepair, SystemNicknameRepairRequired, TagMap
+from pyrung.click.tag_map import (
+    MIGRATIONS,
+    OldCommentFormError,
+    SystemNicknameRepair,
+    SystemNicknameRepairRequired,
+    TagMap,
+    TagMeta,
+    comment_needs_upgrade,
+    format_tag_meta,
+    old_form_tokens,
+    parse_tag_meta,
+    upgrade_comment,
+)
 from pyrung.click.validation import (
+    ClickFinding,
+    ClickValidationReport,
     ValidationMode,
-    validate_click_program,
 )
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
@@ -261,21 +273,6 @@ from pyrung.core.instruction.send_receive import (
     send,
 )
 
-
-def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: Any) -> Any:
-    tag_map = kwargs.pop("tag_map", None)
-    if tag_map is None:
-        raise TypeError("Program.validate('click', ...) requires keyword argument 'tag_map'.")
-    if not isinstance(tag_map, TagMap):
-        raise TypeError("Program.validate('click', ...) expects tag_map=TagMap(...).")
-    if mode not in {"warn", "strict"}:
-        raise ValueError("Program.validate('click', ...) mode must be 'warn' or 'strict'.")
-    validated_mode = mode
-    return validate_click_program(program, tag_map=tag_map, mode=validated_mode, **kwargs)
-
-
-Program.register_dialect("click", _click_dialect_validator)
-
 __all__ = [
     "Bit",
     "Int2",
@@ -287,6 +284,14 @@ __all__ = [
     "TagMap",
     "SystemNicknameRepair",
     "SystemNicknameRepairRequired",
+    "TagMeta",
+    "format_tag_meta",
+    "parse_tag_meta",
+    "OldCommentFormError",
+    "MIGRATIONS",
+    "comment_needs_upgrade",
+    "old_form_tokens",
+    "upgrade_comment",
     "LadderBundle",
     "LadderExportError",
     "CLICK_STEP_LIMIT",
@@ -311,6 +316,7 @@ __all__ = [
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
     "pyrung_to_ladder",
-    "validate_click_program",
+    "ClickValidationReport",
+    "ClickFinding",
     "ValidationMode",
 ]

@@ -608,6 +608,14 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
 
 
 def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
+    """Split a nickname comment into its bracket metadata and the rest of the text.
+
+    For ``"Tank level [min=0, max=100, uom=gal]"`` it returns a ``TagMeta`` with those
+    three fields, and ``"Tank level"``. For a comment with no metadata it returns None
+    and the text. A bracket group that is not metadata stays in the text. Raise
+    ``ValueError`` if the comment sets ``choices=`` twice or a value that the field
+    does not accept.
+    """
     if comment == "":
         return None, ""
 
@@ -690,6 +698,12 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
 
 
 def format_tag_meta(meta: TagMeta | None) -> str:
+    """Write *meta* as the bracket group that :func:`parse_tag_meta` reads back.
+
+    The result looks like ``"[min=0, max=100, uom=gal]"``. For None, or a ``TagMeta``
+    with every field unset, it returns ``""``. Raise ``ValueError`` if a value can't be
+    written in a comment, or if a physical flag has no ``link=`` or ``physical=``.
+    """
     if meta is None:
         return ""
     response = meta.physical_values()

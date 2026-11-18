@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder, validate_click_program
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
-from pyrung.click.validation import CLK_TEXT_ORDER_COMPARE, CLK_TEXT_WINDOW_NOT_CONTIGUOUS
+from pyrung.click.validation import (
+    CLK_TEXT_ORDER_COMPARE,
+    CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
+    validate_click_program,
+)
 from pyrung.core import Bool, Char, Program, rung
 from pyrung.core.program import out
 

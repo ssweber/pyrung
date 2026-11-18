@@ -18,7 +18,7 @@ plc = PLC(logic, initial_state=state)
 In a project generated from CLICK, pass `blocks=blocks` (exported beside `mapping`) so plain nicknamed addresses are seeded as well. See [Loading PLC state](../dialects/click.md#loading-plc-state) for the full CLICK workflow. For other targets, build the state directly:
 
 ```python
-from pyrung.core.state import SystemState
+from pyrung import SystemState
 
 plc = PLC(logic, initial_state=SystemState().with_tags(tags))
 ```
@@ -28,8 +28,7 @@ plc = PLC(logic, initial_state=SystemState().with_tags(tags))
 `why()` walks the program graph backward from a tag and explains how it reached its current value from the snapshot. There is one exception: a write through a pointer with no declared bounds, into a block of more than 1000 elements. For that write, `why()` reads the scan history to see where it stored. If the history cannot say, or the rung is off, `why()` steps the next scan on a throwaway copy of the PLC and sees where the write stores. The copy takes the pending forces and patches. The PLC itself does not change.
 
 ```python
-from pyrung import Bool, And, PLC, Program, rung, out, latch, reset
-from pyrung.core.state import SystemState
+from pyrung import Bool, And, PLC, Program, SystemState, rung, out, latch, reset
 
 StartBtn    = Bool(external=True)
 Auto        = Bool(external=True)
@@ -201,7 +200,7 @@ To express a composite prohibition, write `avoid=And(A, B)`. It avoids only the 
 
 When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
-If an `avoid=` callable raises, `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the callable's exception as its cause. A state may not have every tag yet, so read tags with `snapshot.get(name, default)`.
+If an `avoid=` callable raises, `how()` returns no plan and raises `AvoidCheckError` (from `pyrung`), with the callable's exception as its cause. A state may not have every tag yet, so read tags with `snapshot.get(name, default)`.
 
 ### The route taken
 

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from pyrung.core import Bool, Int, Program, Real, Rung, copy, math
-from pyrung.core.validation.report import validate
+from pyrung.core.validation.report import check
 
 CODE = "CMP_EQ_ON_COMPUTED_REAL"
 
 
 def _hits(prog: Program):
-    return [f for f in validate(prog, select={"CMP"}) if f.code == CODE]
+    return [f for f in check(prog, select={"CMP"}) if f.code == CODE]
 
 
 def _prog(build) -> Program:

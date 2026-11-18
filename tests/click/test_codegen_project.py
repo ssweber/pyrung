@@ -34,6 +34,7 @@ from pyrung.core.program import (
     reset,
     subroutine,
 )
+from tests.click.helpers import pyrung_import_names
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1120,7 +1121,7 @@ class TestMathFormulaImports:
         sub_py = files[f"{_SUBROUTINES_DIR}/_sub_calc_sub.py"]
         assert "ds.select(1, 4).mean()" in main_py
         assert "ds" in main_py.split("from .tags import", 1)[1].splitlines()[0]
-        assert "from pyrung.core.expression import sqrt" in sub_py
+        assert "sqrt" in pyrung_import_names(sub_py)
         assert "dd" in sub_py.split("from ..tags import", 1)[1].splitlines()[0]
         assert all("import abs" not in text for text in files.values())
 

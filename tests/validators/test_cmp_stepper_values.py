@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from pyrung.core import Block, Bool, Int, Program, Rung, TagType, copy, math
-from pyrung.core.validation import CMP_STEPPER_VALUE_NOT_SET, validate
+from pyrung.core.validation import CMP_STEPPER_VALUE_NOT_SET, check
 
 
 def _findings(program: Program):
-    return list(validate(program, select={CMP_STEPPER_VALUE_NOT_SET}))
+    return list(check(program, select={CMP_STEPPER_VALUE_NOT_SET}))
 
 
 def _direct_stepper(compare_value: int) -> Program:

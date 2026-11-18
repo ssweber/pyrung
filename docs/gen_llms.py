@@ -98,6 +98,8 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "reference/api/data-model.md",
             "reference/api/program-structure.md",
             "reference/api/instruction-set.md",
+            "reference/api/validation.md",
+            "reference/api/live.md",
             "reference/api/click-dialect.md",
             "reference/api/circuitpy-dialect.md",
         ),

@@ -295,7 +295,7 @@ Commands chained with `;` run in order over one connection and halt on the first
 ### Python library
 
 ```python
-from pyrung.dap.live import send_command, list_sessions
+from pyrung.live import send_command, list_sessions
 
 sessions = list_sessions()          # ["logic", "pump_test"]
 ok, text = send_command("logic", "step 5")

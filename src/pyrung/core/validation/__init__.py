@@ -120,7 +120,6 @@ from pyrung.core.validation.report import (
     Finding,
     ValidationReport,
     check,
-    validate,
 )
 from pyrung.core.validation.rung_conditions import (
     RUNG_CONTRADICTION,
@@ -236,7 +235,6 @@ __all__ = [
     "ValueKind",
     "check",
     "reads_after_write",
-    "validate",
     "validate_cmp_conditions",
     "validate_call_graph",
     "validate_dead_writes",

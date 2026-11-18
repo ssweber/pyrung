@@ -370,6 +370,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     for cc in sorted(collection.used_copy_converters):
         core_imports.append(cc)
 
+    # Expression functions (sqrt, lsh, ...) and system points
+    core_imports.extend(sorted(collection.used_expr_funcs))
+    if collection.has_system_operands:
+        core_imports.append("system")
+
     lines.append(f"from pyrung import {', '.join(core_imports)}")
 
     # Click imports
@@ -399,14 +404,6 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         lines.append(
             "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()"
         )
-
-    # Expression function imports (sqrt, lsh, etc.)
-    if collection.used_expr_funcs:
-        expr_imports = sorted(collection.used_expr_funcs)
-        lines.append(f"from pyrung.core.expression import {', '.join(expr_imports)}")
-
-    if collection.has_system_operands:
-        lines.append("from pyrung.core.system_points import system")
 
 
 def _has_flat_tags(collection: _OperandCollection) -> bool:

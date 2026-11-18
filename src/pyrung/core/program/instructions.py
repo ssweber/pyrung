@@ -426,7 +426,7 @@ class _MathInstruction:
                 raise AttributeError(name)
             own = _PYRUNG_MATH_NAMES.get(name)
             if own is not None:
-                hint = f"for {name} in an expression, use pyrung's {own}: from pyrung.core import {own}"
+                hint = f"for {name} in an expression, use pyrung's {own}: from pyrung import {own}"
             else:
                 hint = (
                     "for the standard module, import it under another name: import math as pymath"

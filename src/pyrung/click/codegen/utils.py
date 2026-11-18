@@ -147,7 +147,7 @@ _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
 # Map Click memory-type prefix → pyrung block variable for pointer addressing
 _PREFIX_TO_BLOCK: dict[str, str] = {p: bv for p, _, bv in _OPERAND_PREFIXES}
 
-# Expression function names that require import from pyrung.core.expression
+# The expression function names that generated code imports from pyrung
 _EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {"PI"}
 
 # Regex matching Python expression-function calls (lowercase) in generated code
