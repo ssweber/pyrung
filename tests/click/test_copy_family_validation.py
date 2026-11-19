@@ -608,12 +608,12 @@ def test_a_label_spells_a_field_as_the_call_does():
 @pytest.mark.parametrize(
     "write, line, address",
     [
-        (lambda: unpack_to_bits(ds[1], x.select(1, 16)), "unpack_to_bits(DS1, X1..X16)", "X001"),
-        (lambda: fill(c[1], y.select(1, 1)), "fill(C1, Y1..Y1)", "Y001"),
+        (lambda: unpack_to_bits(ds[1], x.select(1, 16)), "unpack_to_bits(DS1, X1..X16)", "X1"),
+        (lambda: fill(c[1], y.select(1, 1)), "fill(C1, Y1..Y1)", "Y1"),
         (
             lambda: blockcopy(x.select(1, 3), txt.select(1, 3)),
             "blockcopy(X1..X3, TXT1..TXT3)",
-            "X001",
+            "X1",
         ),
         (lambda: copy(ds[1], x[1]), "copy(DS1, X001)", "X001"),
         (lambda: copy(5, xd[1]), "copy(5, XD1)", "XD1"),
@@ -621,14 +621,14 @@ def test_a_label_spells_a_field_as_the_call_does():
     ],
     ids=["X-range-under-caret", "Y-range", "X-range-elsewhere", "X-tag", "XD", "YD"],
 )
-def test_a_label_shows_a_bank_address_without_a_bracket(write, line, address):
-    # A call spells X001 as X1 in a range. That is the address, not a tag name, so
-    # laddercodec gets no name for it to show in front of the address.
+def test_a_label_shows_a_bank_address_as_the_call_spells_it(write, line, address):
+    # A call spells X001 as X1 in a range. The label spells it the same way, with no
+    # address in brackets after it.
     findings = _errors(write)
     labels = [f.display.frames[0].caret_label for f in findings]
     assert {f.display.frames[0].lines for f in findings} == {(line,)}
     assert any(address in label for label in labels)
-    assert not any(f"({address}" in label for label in labels)
+    assert not any("(" in label for label in labels)
 
 
 @pytest.mark.parametrize(
@@ -657,18 +657,23 @@ def test_a_label_shows_a_bank_address_without_a_bracket(write, line, address):
     ],
     ids=lambda operand: getattr(operand, "name", None) or f"{operand.block.name}-range",
 )
-def test_each_bank_address_in_a_call_is_named_by_itself(operand):
+def test_each_bank_address_in_a_call_is_named_as_the_call_spells_it(operand):
+    from pyclickplc.addresses import parse_address
+
     from pyrung.click.validation.fields import _call_names, declared_operands
     from pyrung.click.validation.resolve import _ResolutionCache
 
-    # A range spells X001 as X1, and a tag spells it X001. Both are the address.
+    # A range spells X001 as X1, and a tag spells it X001. laddercodec shows either with
+    # no address in brackets, because each is a spelling of the address.
     if isinstance(operand, Tag):
         instruction = CopyInstruction(operand, ds[101])
+        spelled = {operand.name}
     else:
         instruction = BlockCopyInstruction(operand, ds.select(101, 102))
+        spelled = {f"{operand.block.name}{address}" for address in operand.addresses}
     names = _call_names(declared_operands(instruction, {}), {}, _ResolutionCache(TagMap()))
-    assert names
-    assert all(name == address for address, name in names.items())
+    assert spelled <= set(names.values())
+    assert all(parse_address(name) == parse_address(address) for address, name in names.items())
 
 
 def test_a_tag_named_like_an_address_keeps_its_bracket():
@@ -678,6 +683,72 @@ def test_a_tag_named_like_an_address_keeps_its_bracket():
     mapping = TagMap([x1.map_to(ds[1])], include_system=False)
     (finding,) = validate_click_program(prog, mapping, mode="strict").errors
     assert "X1 (DS1)" in finding.display.frames[0].caret_label
+
+
+def test_a_tag_named_as_its_own_address_keeps_the_users_spelling():
+    # The tag ds1 sits on DS1. It is the user's tag, so the label shows its name.
+    ds1 = Int("ds1")
+    prog = _program(lambda: copy(ds1, c[2]))
+    mapping = TagMap([ds1.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].caret_label == "C2 can't take ds1"
+
+
+def test_a_tag_named_as_its_own_address_keeps_the_users_spelling_under_the_caret():
+    # The caret marks ds1. Its name spells its own address, so the label keeps the name.
+    ds1 = Int("ds1")
+    prog = _program(lambda: copy(c[2], ds1))
+    mapping = TagMap([ds1.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].caret_label == "ds1 can't take C2"
+
+
+def test_a_named_tag_under_the_caret_shows_its_address():
+    # The caret marks Motor, and the label gives the address of a tag under the caret.
+    motor = Int("Motor")
+    prog = _program(lambda: copy(c[2], motor))
+    mapping = TagMap([motor.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].caret_label == "DS1 can't take C2"
+
+
+def test_a_blockcopy_into_one_bank_tag_spells_the_range_as_the_call_does():
+    # blockcopy() into X001 writes X001..X003. The label spells the range from X001.
+    (finding,) = _errors(lambda: blockcopy(ds.select(1, 3), x[1]))
+    assert finding.display.frames[0].lines == ("blockcopy(DS1..DS3, X001)",)
+    assert finding.display.frames[0].caret_label == "X001..X003 is not allowed"
+
+
+@pytest.mark.parametrize(
+    "dest, label",
+    [(Bool("x1"), "x1..x3 is not allowed"), (Bool("X1"), "X1..X3 is not allowed")],
+    ids=["lower-case", "short"],
+)
+def test_a_range_label_spells_both_ends_in_the_users_form(dest, label):
+    # blockcopy() into x1 writes X001..X003. The far end takes the form of the tag's name.
+    mapping = TagMap([dest.map_to(x[1])], include_system=False)
+    prog = _program(lambda: blockcopy(ds.select(1, 3), dest))
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].caret_label == label
+
+
+@pytest.mark.parametrize(
+    "dest, label, text",
+    [
+        (Int("ds1"), "ds1 can't take X1..X3", "ds1 can't take X1..X3"),
+        (Int("Motor"), "DS1 can't take X1..X3", "Motor (DS1) can't take X1..X3"),
+    ],
+    ids=["named-as-its-address", "named"],
+)
+def test_a_blockcopy_into_one_user_tag_names_it_as_copy_does(dest, label, text):
+    # The caret marks the destination, so the label shows a name only where it spells
+    # its own address. The message names the tag, as it does for copy().
+    mapping = TagMap([dest.map_to(ds[1])], include_system=False)
+    prog = _program(lambda: blockcopy(x.select(1, 3), dest))
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].lines == (f"blockcopy(X1..X3, {dest.name})",)
+    assert finding.display.frames[0].caret_label == label
+    assert text in finding.message
 
 
 def test_a_problem_line_names_the_tags():
