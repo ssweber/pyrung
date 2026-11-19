@@ -271,6 +271,20 @@ the VS Code extension release together. [nothing, with a joint release]
   export refuses it unless the hand check allows it. Remove the unreachable indirect-dest code in
   `CalcInstruction.execute` and `_dest_type`. [nothing]
 
+- **Parse operands once, in the builder.** Four places each decide which operands are valid: each instruction's
+  `execute()`, the compiled kernel's code generator, laddercodec's CLICK rules, and the operand declarations
+  (`_operands`) that bob/build-refusals adds. Sam wants no fourth copy (2026-11-19, "parse, don't validate sounds like a
+  winner"). [nothing]
+  - Each builder turns its arguments into checked operand objects, once. `execute()`, the kernel, CircuitPython codegen
+    and the CLICK export accept only those objects, so their defensive code goes.
+  - The split, in Sam's words to the planner: "get the 80% via 20% and then let laddercodec get the long tail". pyrung's
+    parse checks the shape of each operand: its kind, its type, a range against a tag, and a count. laddercodec keeps
+    every CLICK rule (which banks, which addresses, which constants), and the export passes it the checked objects.
+  - The operand declarations become pyrung's one grammar.
+  - Why: the build-refusals branch took three review rounds and the kernel-agree branch two. Every finding was one
+    copy disagreeing with another.
+  - The orchestrator starts it after bob/build-refusals and bob/kernel-agree land.
+
 ## how(): after the recording core
 
 `how()` stays and grows. The last resort stays small. A goal reached only through it is a missed connection in the
@@ -415,6 +429,28 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **Some accepted forms never write anything.** Under Sam's fault-only ruling (2026-11-19), a form that raises or
+  only sets a fault flag on every data is refused at build. bob/build-refusals left these forms accepted, and they
+  still write nothing. Before a refusal, the builder of that change runs each form over several input values and
+  checks that none writes. Each refusal waits on "Parse operands once, in the builder", in section 5.
+  - `forloop()` with a `randint()` count whose bound is a Real.
+  - A `math()` that adds a list (`ds[1] + [ds[2], ds[3]]`) into a Bool or a Char.
+  - A `calc()` whose formula takes `sqrt()` of a text tag or a range.
+  - A copy with a converter (`convert=`) whose every data only faults.
+- **Odd forms that write something, for Sam to rule on.** They run, so refusing one is Sam's call.
+  - `math(range, Bool)` always writes True.
+  - `copy(Timer[1], txt)` stores the Timer object in the TXT.
+- **More checks show the caret under the first match only.** #103 marks the refused argument in each copy-family
+  finding. Every other check marks its token with `caret_of` (`core/validation/render.py`), which finds the first
+  place the token appears in the call. That can be the wrong argument. The callers are in `choices_violation.py`,
+  `cmp_conditions.py`, `physical_realism.py`, `math_conditions.py`, `rung_conditions.py`, `wait_escape.py` and
+  `pointer_default.py`, some through `site_frame` in `_common.py`. Each family branch that moves a check to
+  laddercodec fixes its own callers. The rest are unplanned.
+- **The kernel declines an `IntFlag` constant.** Stepping stores its number (`Fl.A | Fl.B` gives 3), so the kernel
+  could compile it as it compiles an `IntEnum`. The decline is safe and only costs speed, so this is unplanned.
+- **An aggregate outside `math()` gets one finding only.** A `.sum()` in a `copy()` source or a compare is reported as
+  `CLK_EXPR_ONLY_IN_MATH`, and the range check does not run on it. The export still refuses a scattered range there,
+  so nothing exports wrong. The Math family branch picks it up.
 - **A rung over CLICK's 32 rows can export.** pyrung's Click export counts one row for each CSV row. In CLICK many
   boxes are taller than one row. On 2026-11-18 the export of `plc_stores` wrote a rung of 17 CSV rows, a Fill and
   16 Copies. laddercodec counted 34 rows, and its `encode()` refused the rung. The bob/hw-split branch split that
