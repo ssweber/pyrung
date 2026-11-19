@@ -16,7 +16,6 @@ from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
-    CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_EXPR_ONLY_IN_MATH,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
@@ -474,7 +473,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     report = validate_click_program(prog, tag_map, mode="warn")
     codes = _codes(report)
     assert CLK_BANK_WRONG_ROLE not in codes
-    assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED not in codes
+    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" not in codes
 
 
 def test_drum_stage3_wrong_role_failures_are_reported():
@@ -605,7 +604,7 @@ def test_event_drum_literal_jump_step_reports_tag_required():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED in _codes(report)
+    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" in _codes(report)
 
 
 def test_time_drum_literal_jump_step_reports_tag_required():
@@ -643,7 +642,7 @@ def test_time_drum_literal_jump_step_reports_tag_required():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED in _codes(report)
+    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" in _codes(report)
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +928,6 @@ class TestOutVariants:
         assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
 
     def test_units_follow_the_out_dialog(self) -> None:
-        from pyrung.click.validation import CLK_OUT_UNIT_UNSUPPORTED
 
         timers = self.Timers
 
@@ -943,8 +941,8 @@ class TestOutVariants:
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
         report = self._report(body, tag_map)
-        assert _codes(report).count(CLK_OUT_UNIT_UNSUPPORTED) == 3
-        messages = [f.message for f in report.errors if f.code == CLK_OUT_UNIT_UNSUPPORTED]
+        assert _codes(report).count("CLK_OUT_UNIT_UNSUPPORTED") == 3
+        messages = [f.message for f in report.errors if f.code == "CLK_OUT_UNIT_UNSUPPORTED"]
         assert "debounce coil times in ms/sec, not min" in messages[0]
         assert "timed coil times in ms/sec/min, not day" in messages[2]
 

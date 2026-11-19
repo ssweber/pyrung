@@ -14,12 +14,6 @@ from pyrung import debounce, flasher, timed
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
-    CLK_COMPARE_HEX_MIX,
-    CLK_MATH_BIT_OPERAND,
-    CLK_MATH_DEST_BANK,
-    CLK_MATH_MODE_MIXED,
-    CLK_SEARCH_RANGE_BANK,
-    CLK_SEARCH_RESULT_NOT_DS,
     CLK_TIMER_PRESET_TOO_LOW,
     validate_click_program,
 )
@@ -132,7 +126,7 @@ def test_a_bit_in_a_math_formula_is_refused(build, bank):
         with rung(x[1]):
             math(build(bank), ds[100])
 
-    (finding,) = _found(body, CLK_MATH_BIT_OPERAND)
+    (finding,) = _found(body, "CLK_MATH_BIT_OPERAND")
     assert "reads the bit" in finding.message or "reads the bits" in finding.message
     assert bank.name in finding.message
     assert "except in a SUM over a bit range" in finding.message
@@ -144,7 +138,7 @@ def test_a_bit_in_a_math_formula_is_refused(build, bank):
         assert "select(1, 1).sum()" in finding.suggestion
         assert "0 in pyrung" in finding.suggestion
         allowed = ()
-    _export_refuses(body, CLK_MATH_BIT_OPERAND, allowed=allowed)
+    _export_refuses(body, "CLK_MATH_BIT_OPERAND", allowed=allowed)
 
 
 def test_each_bit_is_named_once():
@@ -152,7 +146,7 @@ def test_each_bit_is_named_once():
         with rung(x[1]):
             math(c[1] + c[2] * c[1], ds[100])
 
-    (finding,) = _found(body, CLK_MATH_BIT_OPERAND)
+    (finding,) = _found(body, "CLK_MATH_BIT_OPERAND")
     assert "reads the bits C1, C2;" in finding.message
 
 
@@ -180,7 +174,7 @@ def test_a_formula_without_a_bit_operand_passes(build, dest):
         with rung(x[1]):
             math(build(), dest)
 
-    assert _found(body, CLK_MATH_BIT_OPERAND) == []
+    assert _found(body, "CLK_MATH_BIT_OPERAND") == []
 
 
 def test_a_one_bit_sum_exports_as_a_range_of_one_bit():
@@ -197,7 +191,7 @@ def test_a_bit_rand_bound_is_the_rand_finding_only():
         with rung(x[1]):
             math(randint(c[1], 9), ds[100])
 
-    assert _found(body, CLK_MATH_BIT_OPERAND) == []
+    assert _found(body, "CLK_MATH_BIT_OPERAND") == []
 
 
 # --- The Math Result ----------------------------------------------------------------
@@ -213,14 +207,14 @@ def test_a_math_result_outside_the_dialogs_banks_is_refused(dest):
         with rung(x[2]):
             math(ds[1] + 1, dest)
 
-    (finding,) = _found(body, CLK_MATH_DEST_BANK)
+    (finding,) = _found(body, "CLK_MATH_DEST_BANK")
     bank = dest.name.rstrip("0123456789")
     assert f"math() into {bank} at" in finding.message
     assert "Result in DS, DD, DF, TD, CTD or SD, or DH or YD in a hex Math" in finding.message
     # X, T, CT and XD are also not writable, and XD makes a mixed-mode Math.
     report = validate_click_program(_program(body), TagMap(), mode="strict")
-    others = tuple({f.code for f in report.errors} - {CLK_MATH_DEST_BANK})
-    _export_refuses(body, CLK_MATH_DEST_BANK, allowed=others)
+    others = tuple({f.code for f in report.errors} - {"CLK_MATH_DEST_BANK"})
+    _export_refuses(body, "CLK_MATH_DEST_BANK", allowed=others)
 
 
 def test_a_math_result_in_each_bank_the_dialog_takes_passes():
@@ -233,21 +227,21 @@ def test_a_math_result_in_each_bank_the_dialog_takes_passes():
             math(ds[1] + 1, ctd[2])
             math(dh[1] + 1, dh[2])
 
-    assert _found(body, CLK_MATH_DEST_BANK) == []
+    assert _found(body, "CLK_MATH_DEST_BANK") == []
 
 
 def test_a_decimal_math_into_dh_is_refused_as_a_mixed_math():
     # The dialog refuses a decimal Math into DH (2026-11-06).  A Word destination makes the
-    # Math decimal only through a non-Word operand, which CLK_MATH_MODE_MIXED flags, so the
+    # Math decimal only through a non-Word operand, which "CLK_MATH_MODE_MIXED" flags, so the
     # destination check has nothing of its own to add.
     def body():
         with rung(x[1]):
             math(ds[1] + 1, dh[3])
 
-    assert _found(body, CLK_MATH_DEST_BANK) == []
-    (finding,) = _found(body, CLK_MATH_MODE_MIXED)
+    assert _found(body, "CLK_MATH_DEST_BANK") == []
+    (finding,) = _found(body, "CLK_MATH_MODE_MIXED")
     assert "mixes WORD" in finding.message
-    _export_refuses(body, CLK_MATH_MODE_MIXED)
+    _export_refuses(body, "CLK_MATH_MODE_MIXED")
 
 
 # --- Search banks -------------------------------------------------------------------
@@ -259,9 +253,9 @@ def test_a_search_result_must_be_a_ds(result):
         with rung(x[1]):
             search(ds.select(1, 10) == 5, result=result, found=c[1])
 
-    (finding,) = _found(body, CLK_SEARCH_RESULT_NOT_DS)
-    assert "takes a DS Result only" in finding.message
-    _export_refuses(body, CLK_SEARCH_RESULT_NOT_DS)
+    (finding,) = _found(body, "bank-not-allowed")
+    assert "Search.result takes DS" in finding.message
+    _export_refuses(body, "bank-not-allowed")
 
 
 def test_a_search_range_outside_the_dialogs_banks_is_refused():
@@ -269,10 +263,10 @@ def test_a_search_range_outside_the_dialogs_banks_is_refused():
         with rung(x[1]):
             search(sd.select(1, 10) == 5, result=ds[100], found=c[1])
 
-    (finding,) = _found(body, CLK_SEARCH_RANGE_BANK)
-    assert "range in SD" in finding.message
+    (finding,) = _found(body, "bank-not-allowed")
+    assert "SD1..SD10" in finding.message
     assert "DS, DD, DH, DF, TD, CTD, TXT" in finding.message
-    _export_refuses(body, CLK_SEARCH_RANGE_BANK)
+    _export_refuses(body, "bank-not-allowed")
 
 
 def test_a_search_over_each_bank_the_dialog_takes_passes():
@@ -286,8 +280,7 @@ def test_a_search_over_each_bank_the_dialog_takes_passes():
             search(ctd.select(1, 10) != 5, result=ds[105], found=c[6])
             search(txt.select(1, 10) == "A", result=ds[106], found=c[7])
 
-    assert _found(body, CLK_SEARCH_RANGE_BANK) == []
-    assert _found(body, CLK_SEARCH_RESULT_NOT_DS) == []
+    assert _found(body, "bank-not-allowed") == []
 
 
 # --- Constant presets ----------------------------------------------------------------
@@ -400,9 +393,9 @@ def test_a_hex_operand_against_a_decimal_one_is_refused(build):
         with rung(build(word, number)):
             copy(1, ds[9])
 
-    found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
+    found = _found(body, "CLK_COMPARE_HEX_MIX", tag_map)
     assert len(found) == 1
-    _export_refuses(body, CLK_COMPARE_HEX_MIX, tag_map)
+    _export_refuses(body, "CLK_COMPARE_HEX_MIX", tag_map)
 
 
 @pytest.mark.parametrize(
@@ -418,7 +411,7 @@ def test_a_hex_operand_through_a_pointer_against_a_decimal_one_is_flagged(build)
         with rung(build(number)):
             copy(1, ds[9])
 
-    assert len(_found(body, CLK_COMPARE_HEX_MIX, tag_map)) == 1
+    assert len(_found(body, "CLK_COMPARE_HEX_MIX", tag_map)) == 1
 
 
 def test_compares_the_dialog_takes_are_not_flagged():
@@ -431,7 +424,7 @@ def test_compares_the_dialog_takes_are_not_flagged():
         with rung(word == other, word > 255, number < 70000, ds[2] == number, dh[ds[1]] == dh[3]):
             copy(1, ds[9])
 
-    assert _found(body, CLK_COMPARE_HEX_MIX, tag_map) == []
+    assert _found(body, "CLK_COMPARE_HEX_MIX", tag_map) == []
 
 
 def test_a_hex_compare_inside_an_or_and_a_branch_is_refused():
@@ -444,7 +437,7 @@ def test_a_hex_compare_inside_an_or_and_a_branch_is_refused():
             with Branch(Or(x[2], word == number)):
                 copy(2, ds[9])
 
-    found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
+    found = _found(body, "CLK_COMPARE_HEX_MIX", tag_map)
     assert len(found) == 1
 
 
@@ -460,7 +453,7 @@ def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
         with rung(x[2]):
             count_up(cnt, 10).reset(word > number)
 
-    found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
+    found = _found(body, "CLK_COMPARE_HEX_MIX", tag_map)
     assert len(found) == 2
 
 

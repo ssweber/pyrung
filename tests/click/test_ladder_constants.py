@@ -321,6 +321,41 @@ def test_blank_text_constants_export_as_ascii_code():
     assert not any("\x00" in token for token in tokens)
 
 
+def test_a_quote_on_its_own_exports_as_its_ascii_code():
+    """Check that the export writes a text constant of one quote as ``$22``.
+
+    laddercodec can't yet read a quote inside a quoted text constant.
+    """
+    with Program() as logic:
+        with rung():
+            fill('"', txt.select(1, 2))
+        with rung():
+            copy('"', txt[3])
+        with rung(txt[1] == '"'):
+            out(c[1])
+        with rung():
+            search(txt.select(1, 4) == '"', result=ds[1], found=c[3])
+    assert _tokens(logic) == [
+        "fill($22,TXT1..TXT2)",
+        "copy($22,TXT3)",
+        "TXT1==$22",
+        "out(C1)",
+        "search(TXT1..TXT4 == $22,result=DS1,found=C3)",
+    ]
+    code, before, after = round_trip_logic(logic, TagMap())
+    assert after == before, code
+
+
+def test_a_text_constant_with_a_quote_among_other_characters_is_rejected():
+    # laddercodec can't yet read a quote inside quotes, and it reads $22 inside quotes as
+    # four characters.
+    with Program() as logic:
+        with rung(txt[1] == 'a"b'):
+            out(c[1])
+    with pytest.raises(LadderExportError, match="holds a quote among other characters"):
+        pyrung_to_ladder(logic, TagMap())
+
+
 def test_text_constant_with_embedded_nul_rejected():
     with Program() as logic:
         with rung():

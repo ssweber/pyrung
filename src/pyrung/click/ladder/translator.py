@@ -87,6 +87,9 @@ _CLICK_BANK_NAMES: frozenset[str] = frozenset(BANKS)
 #: CLICK's ASCII-code constant for the TXT blank (NUL).  ``""`` writes no TXT.
 BLANK_TEXT_CONSTANT = "$00"
 
+#: CLICK's ASCII-code constant for a quote.  laddercodec can't yet read a quote inside quotes.
+QUOTE_TEXT_CONSTANT = "$22"
+
 # ---- Expression/condition operator maps ----
 # Maps Python operator symbol → Click formula-pad symbol for binary expressions
 _BINARY_OP_CLICK: dict[str, str] = {
@@ -483,9 +486,25 @@ class _TranslatorMixin:
         ``$00``, CLICK's ASCII-code constant, is the one-character NUL.  A raw
         NUL inside quotes would end the constant early.  pyrung's ``""`` is the
         blank too (a CHAR stores it as NUL), so it exports the same way.
+
+        CLICK's editor accepts a quote inside a quoted constant, but laddercodec
+        can't yet read one.  So a quote on its own exports as ``$22``, and the
+        export refuses a text that holds a quote among other characters.
         """
         if value in ("", BLANK_CHAR):
             return BLANK_TEXT_CONSTANT
+        if value == '"':
+            return QUOTE_TEXT_CONSTANT
+        if '"' in value:
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"Text constant {value!r} holds a quote among other characters, "
+                    "which the CLICK export can't write. Write the text without the "
+                    f"quote. A quote on its own exports as {QUOTE_TEXT_CONSTANT}."
+                ),
+                source=source,
+            )
         if BLANK_CHAR in value:
             self._raise_issue(
                 path=path,

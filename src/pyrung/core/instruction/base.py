@@ -67,6 +67,23 @@ class Instruction(ABC):
     # (``pyrung.core.instruction.operands``).
     _operands: ClassVar[dict[str, Operand]] = {}
     _operand_rules: ClassVar[tuple[FitsRegister | NumberInto, ...]] = ()
+    # The call that a finding shows for the instruction (``validation.render``). Without
+    # _call_operands, the instruction shows as ``verb(target)``.
+    # - _call_operands pairs the DSL's name for each positional argument with the
+    #   attribute that holds it, in the order that the call takes them. An argument that
+    #   holds several attributes names them in a tuple. It shows as the structure that
+    #   they are the fields of, such as a timer's UDT, or as the text of the class's
+    #   ``_call_argument(name, operand_name)``.
+    # - _call_keyword_operands pairs the name of each keyword argument that holds a tag, a
+    #   range or a number with its attribute.
+    # - _call_keywords names the flags and options.
+    # - _call_chained pairs the name of each chained call, such as ``.reset()``, with the
+    #   attribute that holds its condition.
+    # The call shows a keyword or a chained call only when the instruction sets it.
+    _call_operands: tuple[tuple[str, str | tuple[str, ...]], ...] | None = None
+    _call_keyword_operands: tuple[tuple[str, str], ...] = ()
+    _call_keywords: tuple[str, ...] = ("oneshot",)
+    _call_chained: tuple[tuple[str, str], ...] = ()
     # The system fault flags (``fault.*`` tag names) that the instruction can set or
     # clear while executing, beyond its declared destinations.
     _fault_writes: tuple[str, ...] = ()

@@ -234,7 +234,7 @@ def test_a_real_into_a_bit_is_on_when_nonzero_and_finite(runner_factory, value, 
     ids=["half", "zero", "nan", "inf", "minus-inf"],
 )
 def test_a_math_result_into_a_bit_follows_the_copy_rule(runner_factory, value, on):
-    # pyrung's rule, as for a Copy: CLICK's Math takes no bit Result (CLK_MATH_DEST_BANK).
+    # pyrung's rule, as for a Copy: CLICK's Math takes no bit Result ("CLK_MATH_DEST_BANK").
     src = Real("Src")
     bit = Bool("Bit")
     with Program() as logic:

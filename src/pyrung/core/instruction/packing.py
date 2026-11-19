@@ -75,6 +75,7 @@ class PackBitsInstruction(OneShotMixin, Instruction):
 
     _reads = ("bit_block",)
     _writes = ("dest",)
+    _call_operands = (("bit_block", "bit_block"), ("dest", "dest"))
     _fault_writes = _COPY_FAULTS
     _fault_follows = _COPY_FAULTS
     _conditions = ()
@@ -132,6 +133,7 @@ class PackWordsInstruction(OneShotMixin, Instruction):
 
     _reads = ("word_block",)
     _writes = ("dest",)
+    _call_operands = (("word_block", "word_block"), ("dest", "dest"))
     _fault_writes = _COPY_FAULTS
     _fault_follows = _COPY_FAULTS
     _conditions = ()
@@ -185,6 +187,8 @@ class PackTextInstruction(OneShotMixin, Instruction):
 
     _reads = ("source_range",)
     _writes = ("dest",)
+    _call_operands = (("source_range", "source_range"), ("dest", "dest"))
+    _call_keywords = ("allow_whitespace", "oneshot")
     _fault_writes = _COPY_FAULTS
     _fault_follows = _COPY_FAULTS
     _conditions = ()
@@ -257,6 +261,7 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("bit_block",)
+    _call_operands = (("source", "source"), ("bit_block", "bit_block"))
     _fault_writes = _COPY_FAULTS
     _fault_follows = _COPY_FAULTS
     _conditions = ()
@@ -323,6 +328,7 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("word_block",)
+    _call_operands = (("source", "source"), ("word_block", "word_block"))
     _fault_writes = _COPY_FAULTS
     _fault_follows = _COPY_FAULTS
     _conditions = ()

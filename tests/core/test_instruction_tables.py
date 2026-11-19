@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -27,7 +28,8 @@ from pyrung.circuitpy.validation import _evaluate_timer_resolution
 from pyrung.click.ladder.instructions import _InstructionMixin
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
-from pyrung.click.validation import fields, hardware
+from pyrung.click.validation import legacy
+from pyrung.click.validation.families import FAMILIES
 from pyrung.core import Int
 from pyrung.core.analysis.causal.why import _INSTRUCTION_LABELS
 from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
@@ -145,37 +147,28 @@ def _hardware_keys(table: Iterable[str | tuple[str, str]]) -> frozenset[str]:
     return frozenset(key[0] if isinstance(key, tuple) else key for key in table)
 
 
+# laddercodec checks each instruction of a family in families/. pyrung's own tables leave
+# those instructions out, so that a family branch deletes its rows and edits nothing here.
+_IN_FAMILIES = frozenset(name for family in FAMILIES for name in family.classes)
+
+
+def _legacy_table(name: str, *kinds: str) -> Table:
+    return Table(
+        f"legacy {name}", _hardware_keys(legacy.table(name)), _of_kinds(*kinds) - _IN_FAMILIES
+    )
+
+
 TABLES = [
+    _legacy_table("ROLE_ASSIGNMENT_FIELDS", "timer", "out_timer", "counter", "drum"),
     Table(
-        "hardware._ROLE_ASSIGNMENT_FIELDS",
-        _hardware_keys(hardware._ROLE_ASSIGNMENT_FIELDS),
-        _of_kinds("timer", "out_timer", "counter", "drum"),
-    ),
-    Table(
-        "fields._COPY_FAMILY_FIELDS",
-        _hardware_keys(fields._COPY_FAMILY_FIELDS),
+        "the copy family's operands",
+        frozenset(next(f for f in FAMILIES if f.name == "copy").classes),
         _of_kinds("copies_data"),
     ),
-    Table(
-        "hardware._COIL_TARGET_INSTRUCTIONS",
-        _hardware_keys(hardware._COIL_TARGET_INSTRUCTIONS),
-        _of_kinds("coil"),
-    ),
-    Table(
-        "hardware._TIMER_PRESET_FIELDS",
-        _hardware_keys(hardware._TIMER_PRESET_FIELDS),
-        _of_kinds("timer", "out_timer"),
-    ),
-    Table(
-        "hardware._TIMER_PAIR_FIELDS",
-        _hardware_keys(hardware._TIMER_PAIR_FIELDS),
-        _of_kinds("timer", "out_timer", "counter"),
-    ),
-    Table(
-        "hardware._OUT_VARIANT_UNITS",
-        _hardware_keys(hardware._OUT_VARIANT_UNITS),
-        _of_kinds("out_timer"),
-    ),
+    _legacy_table("COIL_TARGET_INSTRUCTIONS", "coil"),
+    _legacy_table("TIMER_PRESET_FIELDS", "timer", "out_timer"),
+    _legacy_table("TIMER_PAIR_FIELDS", "timer", "out_timer", "counter"),
+    _legacy_table("OUT_VARIANT_UNITS", "out_timer"),
     Table(
         "circuitpy _evaluate_timer_resolution",
         _named_in_function(_evaluate_timer_resolution),
@@ -202,11 +195,11 @@ _PIN_CONDITIONS = frozenset(
     {"reset_condition", "clock_condition", "down_condition", "jump_condition", "jog_condition"}
 )
 
-# Declared writes that the two hardware tables do not check, and why that is right.
+# Declared writes that the write and role tables do not check, and why that is right.
 _WRITES_CHECKED_ELSEWHERE: dict[tuple[str, str], str] = {
-    (EventDrumInstruction.__name__, "outputs"): "_evaluate_drums checks outputs",
-    (TimeDrumInstruction.__name__, "outputs"): "_evaluate_drums checks outputs",
-    (TimeEventDrumInstruction.__name__, "outputs"): "_evaluate_drums checks outputs",
+    (EventDrumInstruction.__name__, "outputs"): "the drum family's CLICK check reads outputs",
+    (TimeDrumInstruction.__name__, "outputs"): "the drum family's CLICK check reads outputs",
+    (TimeEventDrumInstruction.__name__, "outputs"): "the drum family's CLICK check reads outputs",
     (ForLoopInstruction.__name__, "idx_tag"): "no CLICK validation or export reads a loop's index",
     (FunctionCallInstruction.__name__, "_outs"): "run_function has no CLICK form",
     (EnabledFunctionCallInstruction.__name__, "_outs"): "run_function has no CLICK form",
@@ -222,19 +215,50 @@ def _writes_to_check() -> list[object]:
     ]
 
 
-def _hardware_fields() -> list[tuple[str, str]]:
-    found = (
-        set(hardware._WRITE_TARGET_FIELDS)
-        | set(hardware._ROLE_ASSIGNMENT_FIELDS)
-        | set(hardware._MODBUS_BANKS)
+def _family_operands() -> set[tuple[str, str]]:
+    """Return each operand of each instruction of a family that laddercodec checks."""
+    found: set[tuple[str, str]] = set()
+    for family in FAMILIES:
+        for name, words in family.classes.items():
+            found.update((name, attribute) for attribute in words)
+    return found
+
+
+# How to read the fields out of a row of each table in legacy/.
+_FIELDS_OF_ROW: dict[str, Callable[[Any], Iterable[str]]] = {
+    "WRITE_TARGET_FIELDS": lambda fields: fields,
+    "ROLE_ASSIGNMENT_FIELDS": lambda roles: [field for field, _role in roles],
+    "IMMEDIATE_COIL_TARGETS": lambda field: [field],
+    "TIMER_PRESET_FIELDS": lambda fields: fields,
+    "TIMER_PAIR_FIELDS": lambda pairs: [field for pair in pairs for field in pair],
+    "CONSTANT_PRESET_FLOORS": lambda spec: spec[2],
+}
+
+
+def _legacy_fields(*names: str) -> set[tuple[str, str]]:
+    """Return each (class, field) that the tables *names* in legacy/ read."""
+    found: set[tuple[str, str]] = set()
+    for name in names:
+        for key, row in legacy.table(name).items():
+            if isinstance(key, tuple):
+                found.add(key)
+            else:
+                found.update((key, field) for field in _FIELDS_OF_ROW[name](row))
+    return found
+
+
+def _checked_writes() -> set[tuple[str, str]]:
+    # Timers, counters and drums reach the write check through a role. Send and Receive
+    # reach it through the banks that CLICK's help pages list for them. laddercodec checks
+    # every operand of an instruction in one of its families.
+    return (
+        _legacy_fields("WRITE_TARGET_FIELDS", "ROLE_ASSIGNMENT_FIELDS", "MODBUS_BANKS")
+        | _family_operands()
     )
-    for name, field_names in hardware._TIMER_PRESET_FIELDS.items():
-        found.update((name, field) for field in field_names)
-    for name, pairs in hardware._TIMER_PAIR_FIELDS.items():
-        found.update((name, field) for pair in pairs for field in pair)
-    for name, (source, dest) in fields._COPY_FAMILY_FIELDS.items():
-        found.update({(name, source), (name, dest)})
-    return sorted(found)
+
+
+def _hardware_fields() -> list[tuple[str, str]]:
+    return sorted(_legacy_fields(*_FIELDS_OF_ROW, "MODBUS_BANKS") | _family_operands())
 
 
 def _assigned_fields(cls: type) -> set[str]:
@@ -303,19 +327,9 @@ def test_every_pin_is_exported() -> None:
 
 @pytest.mark.parametrize("cls,field", _writes_to_check())
 def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None:
-    # Timers, counters and drums reach this check through a role.  Send and Receive reach
-    # it through the banks that CLICK's help pages list for them.  laddercodec checks the
-    # destination of each Copy family instruction.
-    name = cls.__name__
-    checked = (
-        hardware._WRITE_TARGET_FIELDS
-        | set(hardware._ROLE_ASSIGNMENT_FIELDS)
-        | set(hardware._MODBUS_BANKS)
-        | {(kind, dest) for kind, (_source, dest) in fields._COPY_FAMILY_FIELDS.items()}
-    )
-    assert (name, field) in checked, (
-        f"nothing checks that CLICK can write {name}.{field}: add it to a hardware table, or to "
-        "_WRITES_CHECKED_ELSEWHERE in this file with the reason"
+    assert (cls.__name__, field) in _checked_writes(), (
+        f"nothing checks that CLICK can write {cls.__name__}.{field}: add it to a table in "
+        "legacy/, or to _WRITES_CHECKED_ELSEWHERE in this file with the reason"
     )
 
 

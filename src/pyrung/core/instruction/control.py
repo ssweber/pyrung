@@ -217,6 +217,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
 
     _reads = ("count",)
     _writes = ("idx_tag",)
+    _call_operands = (("count", "count"),)
     _conditions = ()
     _structural_fields = ()
     # CLICK reads a constant count as signed 32-bit, so a count outside the span runs none.
