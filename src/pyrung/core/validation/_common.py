@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
     from pyrung.core.validation.display import Frame
+    from pyrung.core.validation.walker import ProgramLocation
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -1493,13 +1494,18 @@ def compact_location(
     return loc
 
 
+def _source_text(source_file: str | None, source_line: int | None) -> str:
+    """Codegen provenance (``file:line`` / ``line 12`` / '')."""
+    if source_file and source_line:
+        return f"{source_file}:{source_line}"
+    if source_line:
+        return f"line {source_line}"
+    return ""
+
+
 def _site_source(site: WriteSite) -> str:
     """Codegen provenance for a write site (``file:line`` / ``line 12`` / '')."""
-    if site.source_file and site.source_line:
-        return f"{site.source_file}:{site.source_line}"
-    if site.source_line:
-        return f"line {site.source_line}"
-    return ""
+    return _source_text(site.source_file, site.source_line)
 
 
 def compact_site_location(site: WriteSite) -> str:
@@ -1546,4 +1552,50 @@ def site_frame(site: WriteSite, *, caret_token: str | None = None, caret_label: 
         caret=caret,
         caret_label=caret_label if caret else "",
         source=_site_source(site),
+    )
+
+
+def location_frame(
+    location: ProgramLocation,
+    instruction: Any = None,
+    *,
+    argument: int | str | None = None,
+    caret_label: str = "",
+) -> Frame:
+    """Build a diagnostic :class:`Frame` for the instruction at *location*.
+
+    The frame prints the compact location, and *instruction* as a DSL call.  The caret
+    marks *argument*, an index or a name as :func:`~pyrung.core.validation.render.argument_span`
+    takes it, and carries *caret_label*::
+
+         --> Main:R1
+          |
+          |  copy(Count, Valve)
+          |              ^^^^^ C1 can't take Count (DS1)
+
+    With no *instruction*, the frame holds the location alone.  It does the same for an
+    instruction that the renderer cannot write with all its operands, because a bare
+    ``verb()`` would misquote the author's call.  With no *argument*, or an argument that
+    the call does not show, the frame has no caret.
+    """
+    from pyrung.core.validation.display import Frame
+    from pyrung.core.validation.render import argument_span, render_instruction, renders_in_full
+
+    where = compact_location(
+        location.scope, location.subroutine, location.rung_index, location.branch_path
+    )
+    if instruction is None or not renders_in_full(instruction):
+        return Frame(location=where)
+    if argument is None:
+        code, span = render_instruction(instruction, "")[0], None
+    else:
+        code, span = argument_span(instruction, argument)
+    return Frame(
+        location=where,
+        lines=(code,),
+        caret=None if span is None else (0, span[0], span[1]),
+        caret_label=caret_label if span else "",
+        source=_source_text(
+            getattr(instruction, "source_file", None), getattr(instruction, "source_line", None)
+        ),
     )

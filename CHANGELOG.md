@@ -13,6 +13,10 @@
 
 ## Unreleased
 
+### What's new
+
+- A CLICK finding for `copy()`, `blockcopy()`, `fill()` or a pack or unpack call now shows your call with a caret under the argument that CLICK refuses. The finding names each address by its tag, such as `Count (DS1)`. Each value that CLICK refuses has a finding of its own.
+
 ### Behaviour changes
 
 - `copy()` of a number constant into a TXT now stores the number's digits, as a CLICK does. `copy(-5, txt[1])` writes "-" into TXT1 and "5" into TXT2 (it stored the number -5 in TXT1).

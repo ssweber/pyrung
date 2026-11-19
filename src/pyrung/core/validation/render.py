@@ -9,7 +9,8 @@ renderer is neutral: it keys purely on ``Tag.name`` and never fails, so it is sa
 run over any :class:`~pyrung.core.program.Program`.
 
 The companion :func:`caret_of` turns a rendered string and an offending token into a
-``(start, length)`` span for the traceback caret.
+``(start, length)`` span for the traceback caret.  It marks the first match, so
+:func:`argument_span` marks an argument by its position or name instead.
 """
 
 from __future__ import annotations
@@ -255,6 +256,110 @@ def with_rung_line(conds: Any) -> str:
 # Instructions
 # ---------------------------------------------------------------------------
 
+# Each instruction whose operands render in place: the DSL's name for each operand, and
+# the instruction attribute that holds it, in the order the call takes them.
+_OPERANDS: dict[str, tuple[tuple[str, str], ...]] = {
+    "CopyInstruction": (("source", "source"), ("target", "dest")),
+    "BlockCopyInstruction": (("source", "source"), ("dest", "dest")),
+    "FillInstruction": (("value", "value"), ("dest", "dest")),
+    "PackBitsInstruction": (("bit_block", "bit_block"), ("dest", "dest")),
+    "PackWordsInstruction": (("word_block", "word_block"), ("dest", "dest")),
+    "PackTextInstruction": (("source_range", "source_range"), ("dest", "dest")),
+    "UnpackToBitsInstruction": (("source", "source"), ("bit_block", "bit_block")),
+    "UnpackToWordsInstruction": (("source", "source"), ("word_block", "word_block")),
+}
+
+
+def _converter_text(converter: Any) -> str:
+    """Render a ``convert=`` value as source, such as ``to_value`` or ``to_text(exponential=True)``."""
+    if converter.mode != "text":
+        return f"to_{converter.mode}"
+    options = []
+    if not converter.suppress_zero:
+        options.append("suppress_zero=False")
+    if converter.exponential:
+        options.append("exponential=True")
+    if converter.termination_code is not None:
+        options.append(f"termination_code={converter.termination_code}")
+    return f"to_text({', '.join(options)})"
+
+
+# The instructions that render with every operand, and not as ``verb(target_name)``.
+_IN_FULL = frozenset(
+    {
+        "OutInstruction",
+        "LatchInstruction",
+        "ResetInstruction",
+        "CalcInstruction",
+        "OnDelayInstruction",
+        "OffDelayInstruction",
+        "CountUpInstruction",
+        "CountDownInstruction",
+        *_OPERANDS,
+    }
+)
+
+
+def renders_in_full(instr: Any) -> bool:
+    """Return True if :func:`render_instruction` writes every operand of *instr*."""
+    return type(instr).__name__ in _IN_FULL
+
+
+def _arguments(instr: Any, target_name: str) -> tuple[str, list[tuple[str, str, bool]]]:
+    """Return the verb of *instr* and its arguments as ``(name, text, is_keyword)``."""
+    itype = type(instr).__name__
+    verb = _VERB.get(itype, itype)
+
+    if itype in ("OutInstruction", "LatchInstruction", "ResetInstruction"):
+        return verb, [("target", operand_name(instr.target), False)]
+    if itype in _OPERANDS:
+        args = [
+            (name, operand_name(getattr(instr, attr)), False) for name, attr in _OPERANDS[itype]
+        ]
+        # A copy across text runs a converter that the author may not have written.
+        converter = getattr(instr, "authored_convert", getattr(instr, "convert", None))
+        if converter is not None:
+            args.append(("convert", _converter_text(converter), True))
+        if getattr(instr, "allow_whitespace", False):
+            args.append(("allow_whitespace", "True", True))
+        return verb, args
+    if itype == "CalcInstruction":
+        written = getattr(instr, "source_expression", instr.expression)
+        return verb, [
+            ("expression", render_expr(written), False),
+            ("dest", operand_name(instr.dest), False),
+        ]
+    if itype in (
+        "OnDelayInstruction",
+        "OffDelayInstruction",
+        "CountUpInstruction",
+        "CountDownInstruction",
+    ):
+        owner = operand_name(instr.accumulator)
+        if owner.endswith(".Acc"):
+            owner = owner[:-4]
+        name = "timer" if "Delay" in itype else "counter"
+        return verb, [(name, owner, False), ("preset", operand_name(instr.preset), True)]
+    return verb, [("target", target_name, False)]
+
+
+def _call(instr: Any, target_name: str) -> tuple[str, list[tuple[str, int, int, bool]]]:
+    """Return *instr* as source, and each argument as ``(name, start, length, is_keyword)``.
+
+    A keyword argument's span covers its value, not ``name=``.
+    """
+    verb, args = _arguments(instr, target_name)
+    code = f"{verb}("
+    spans: list[tuple[str, int, int, bool]] = []
+    for index, (name, text, keyword) in enumerate(args):
+        if index:
+            code += ", "
+        if keyword:
+            code += f"{name}="
+        spans.append((name, len(code), len(text), keyword))
+        code += text
+    return f"{code})", spans
+
 
 def render_instruction(
     instr: Any,
@@ -264,44 +369,35 @@ def render_instruction(
 ) -> tuple[str, tuple[int, int] | None]:
     """Render an instruction as DSL source with a caret over the offending token.
 
-    The caret underlines *caret_token* (defaulting to *target_name*) within the
-    rendered code, or is ``None`` when the token is not found.  *target_name* is
-    also the fallback form ``verb(target_name)`` for instruction types whose full
-    operand rendering is not spelled out here.
+    The caret underlines the first match of *caret_token* (defaulting to *target_name*)
+    within the rendered code, or is ``None`` when the token is not found.  *target_name*
+    is also the fallback form ``verb(target_name)`` for instruction types whose full
+    operand rendering is not spelled out here.  To mark one argument whatever its text,
+    use :func:`argument_span`.
     """
-    itype = type(instr).__name__
-
-    if itype == "OutInstruction":
-        code = f"out({operand_name(instr.target)})"
-    elif itype == "LatchInstruction":
-        code = f"latch({operand_name(instr.target)})"
-    elif itype == "ResetInstruction":
-        code = f"reset({operand_name(instr.target)})"
-    elif itype in ("CopyInstruction", "BlockCopyInstruction"):
-        verb = _VERB[itype]
-        code = f"{verb}({operand_name(instr.source)}, {operand_name(instr.dest)})"
-    elif itype == "FillInstruction":
-        code = f"fill({operand_name(instr.value)}, {operand_name(instr.dest)})"
-    elif itype == "CalcInstruction":
-        written = getattr(instr, "source_expression", instr.expression)
-        code = f"math({render_expr(written)}, {operand_name(instr.dest)})"
-    elif itype in (
-        "OnDelayInstruction",
-        "OffDelayInstruction",
-        "CountUpInstruction",
-        "CountDownInstruction",
-    ):
-        verb = _VERB[itype]
-        owner = operand_name(instr.accumulator)
-        if owner.endswith(".Acc"):
-            owner = owner[:-4]
-        code = f"{verb}({owner}, preset={operand_name(instr.preset)})"
-    else:
-        verb = _VERB.get(itype, itype)
-        code = f"{verb}({target_name})"
-
+    code, _spans = _call(instr, target_name)
     token = caret_token if caret_token is not None else target_name
     return code, caret_of(code, token)
+
+
+def argument_span(instr: Any, argument: int | str) -> tuple[str, tuple[int, int] | None]:
+    """Render *instr* as DSL source, with the ``(start, length)`` of one of its arguments.
+
+    *argument* is the index of a positional argument, or the DSL's name for any argument.
+    For ``copy(Count, Count)``, ``1`` and ``"target"`` both mark the second ``Count``.
+    A keyword argument's span covers its value.  The span is ``None`` when the rendered
+    call has no such argument, such as ``"convert"`` on a copy that has no converter.
+    """
+    code, spans = _call(instr, "")
+    if isinstance(argument, int):
+        positional = [span for span in spans if not span[3]]
+        found = positional[argument] if 0 <= argument < len(positional) else None
+    else:
+        found = next((span for span in spans if span[0] == argument), None)
+    if found is None or not found[2]:
+        return code, None
+    _name, start, length, _keyword = found
+    return code, (start, length)
 
 
 def caret_of(code: str, token: str | None) -> tuple[int, int] | None:

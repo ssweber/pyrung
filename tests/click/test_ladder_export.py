@@ -2821,13 +2821,13 @@ def test_one_register_fill_into_text_from_a_number_register_is_still_refused():
     # laddercodec's Fill as well as its Copy.
     with pytest.raises(LadderExportError, match=r"\[copy-bank-incompatible\]") as exc_info:
         _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5)))
-    assert "CLICK refuses fill(DS1, TXT5..TXT5) at " in str(exc_info.value)
+    assert "|  fill(DS1, TXT5..TXT5)" in str(exc_info.value)
 
 
 def test_one_register_fill_keeps_the_checks_of_a_copy():
     with pytest.raises(LadderExportError, match="constant-into-bit") as exc_info:
         _single_fill_tokens(lambda: fill(1, c.select(1, 1)))
-    assert "CLICK refuses fill(1, C1..C1) at " in str(exc_info.value)
+    assert "|  fill(1, C1..C1)" in str(exc_info.value)
     with pytest.raises(LadderExportError, match="CLK_EXPR_ONLY_IN_MATH"):
         _single_fill_tokens(lambda: fill(ds[1] + 1, ds.select(5, 5)))
 
