@@ -85,6 +85,16 @@
   Write the text without the quote.
 - Validation and the CLICK export now refuse a `copy()` text that the CSV can't read back (`invalid-text-constant`), such as `'a",b'`, where a quote before a comma ends the text early (it wrote `"a"",b"`).
   Write the text without the quote.
+- CLICK validation of the timer and counter calls now reports `bank-not-allowed` for a Done bit, an Acc or a preset in a bank that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE`).
+  The calls are `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
+  Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets this finding through.
+- CLICK validation of the same four calls now reports `timer-pair-mismatch` for a Done bit and an Acc with different numbers, such as T5 with TD7 (it reported `CLK_TIMER_PAIR_MISMATCH`).
+  Pass the new code to `allow=`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets this finding through.
+- CLICK validation of `on_delay()` and `off_delay()` now reports `constant-out-of-range` for a preset above 32767 (it reported `CLK_TIMER_PRESET_OVERFLOW`).
+  Pass the new code to `allow=`. `allow=["CLK_TIMER_PRESET_OVERFLOW"]` no longer lets this finding through.
+- CLICK validation and the export now refuse these timer and counter forms, which CLICK's editor rejects (they exported them):
+  - A negative constant preset on `on_delay()` or `off_delay()`, such as `preset=-1`. Use a preset of 0 or more.
+  - A constant preset on `count_up()` or `count_down()` that does not fit 32 bits, such as `preset=2**40`. Use a preset from -2147483648 to 2147483647.
 
 ### Fixes
 

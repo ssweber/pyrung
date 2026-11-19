@@ -409,7 +409,7 @@ Common findings:
 
 ### Timer preset limits
 
-CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets. Use a larger time unit instead.
+CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. Validation reports `constant-out-of-range` for an `on_delay()` or `off_delay()` preset above 32,767. It reports `CLK_TIMER_PRESET_OVERFLOW` for a phase timer of an Out coil. Use a larger time unit instead.
 
 | Unit | Max preset | Max duration |
 |------|-----------|--------------|
@@ -429,7 +429,7 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### Out coil variants
 
-`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Map each phase timer to `T<n>` with the `TD<n>` of the same number. Map a register preset to `DS`. Validation reports `CLK_TIMER_PAIR_MISMATCH` for any timer or counter whose Done and Acc map to different numbers. This includes `on_delay` and the counters.
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Map each phase timer to `T<n>` with the `TD<n>` of the same number. Map a register preset to `DS`. Validation reports `CLK_TIMER_PAIR_MISMATCH` for a phase timer whose Done and Acc map to different numbers. It reports `timer-pair-mismatch` for the same fault in `on_delay()`, `off_delay()` and the counters.
 
 CLICK's Out dialog offers fewer units than its timers do. `debounce` and `flasher` accept `ms` or `sec`. `timed` accepts `ms`, `sec` or `min`. Validation reports any other unit as `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` accepts `immediate(...)`.
 

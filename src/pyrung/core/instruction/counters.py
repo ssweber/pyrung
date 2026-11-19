@@ -84,6 +84,10 @@ class CountUpInstruction(Instruction):
     _structural_fields = ()
     _exclusive_fields = ("accumulator",)
     _status_fields = ("cu_bit", "cd_bit")
+    _call_operands = (("counter", ("done_bit", "accumulator")),)
+    _call_keyword_operands = (("preset", "preset"),)
+    _call_keywords = ()
+    _call_chained = (("down", "down_condition"), ("reset", "reset_condition"))
 
     def __init__(
         self,
@@ -206,6 +210,10 @@ class CountDownInstruction(Instruction):
     _structural_fields = ()
     _exclusive_fields = ("accumulator",)
     _status_fields = ("cu_bit", "cd_bit")
+    _call_operands = (("counter", ("done_bit", "accumulator")),)
+    _call_keyword_operands = (("preset", "preset"),)
+    _call_keywords = ()
+    _call_chained = (("reset", "reset_condition"),)
 
     def __init__(
         self,

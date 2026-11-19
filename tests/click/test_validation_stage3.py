@@ -213,7 +213,8 @@ def test_r7_timer_role_validation():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_WRONG_ROLE in _codes(report)
+    # laddercodec's Timer reports a Done bit outside T, in place of CLK_BANK_WRONG_ROLE.
+    assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 
 def test_r8_copy_family_incompatible_pair():
@@ -1002,10 +1003,21 @@ def test_timer_done_and_acc_must_share_one_number():
         include_system=False,
     )
     report = validate_click_program(_build_program(logic), tag_map, mode="strict")
+    # The debounce is pyrung's own check, and the on_delay is laddercodec's Timer.
     mismatches = [f for f in report.errors if f.code == CLK_TIMER_PAIR_MISMATCH]
-    assert len(mismatches) == 2
-    assert "T5 and TD7" in mismatches[0].message
-    assert "T7 and TD5" in mismatches[1].message
+    assert len(mismatches) == 1
+    assert mismatches[0].message == (
+        "T5 and TD7 are different CLICK timers or counters at "
+        "main.rung[1].instruction[0](DebounceInstruction).instruction.on_acc; Done and Acc "
+        "must share one number."
+    )
+    (refused,) = [f for f in report.errors if f.code == Code.TIMER_PAIR_MISMATCH]
+    assert refused.message == (
+        "CLICK refuses on_delay(OtherTimer, preset=10) at "
+        "main.rung[1].instruction[1](OnDelayInstruction).instruction. Timer.accumulator: "
+        "OtherTimer.Acc (TD5) must be SplitTimer.Acc (TD7) to match Timer.done "
+        "OtherTimer.Done (T7)"
+    )
 
 
 @pytest.mark.parametrize(
