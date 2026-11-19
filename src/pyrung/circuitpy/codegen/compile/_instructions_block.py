@@ -55,6 +55,7 @@ from ._primitives import (
     _copy_clamp_condition,
     _range_item_read_expr,
     _range_item_write_expr,
+    _refuse,
 )
 
 
@@ -85,9 +86,10 @@ def _compile_blockcopy_instruction(
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
+    # Stepping resolves the destination range before the source range.
     enabled_body = [
-        *src_setup,
         *dst_setup,
+        *src_setup,
         f"if len({src_indices}) != len({dst_indices}):",
         f'    raise ValueError(f"blockcopy() needs ranges of the same length. The source has {{len({src_indices})}} tags, and the destination has {{len({dst_indices})}}.")',
         "_blockcopy_values = []",
@@ -122,9 +124,10 @@ def _compile_blockcopy_converter_instruction(
     mode = converter.mode
     dst_type = _range_type_name(instr.dest)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
+    # Stepping resolves the destination range before the source range.
     enabled_body: list[str] = [
-        *src_setup,
         *dst_setup,
+        *src_setup,
         f"if len({src_indices}) != len({dst_indices}):",
         f'    raise ValueError(f"blockcopy() needs ranges of the same length. The source has {{len({src_indices})}} tags, and the destination has {{len({dst_indices})}}.")',
     ]
@@ -211,7 +214,7 @@ def _compile_search_instruction(
 
     text_path = range_type == "CHAR"
     if text_path and instr.condition not in {"==", "!="}:
-        raise ValueError("Text search only supports '==' and '!=' conditions")
+        _refuse(ctx, ValueError, "Text search only supports '==' and '!=' conditions")
 
     cursor_body: list[str] = []
     if instr.continuous:
@@ -263,7 +266,7 @@ def _compile_search_instruction(
 
     if text_path:
         if isinstance(instr.value, str) and instr.value == "":
-            raise ValueError("Text search value cannot be empty")
+            _refuse(ctx, ValueError, "Text search value cannot be empty")
         fixed_window_len = len(instr.value) if isinstance(instr.value, str) else None
         len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
         match_lines = [

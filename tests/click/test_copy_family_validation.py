@@ -283,6 +283,28 @@ def test_a_reversed_range_is_refused_for_its_order(write, call):
     assert finding.suggestion == "Remove .reverse(), or reverse the data in another way."
 
 
+def test_a_block_mapped_onto_descending_addresses_gets_the_mapping_advice():
+    # The range has no .reverse(), so the advice to remove it would not help.
+    k = ClickBlocks()
+    words = Block("Words", TagType.INT, 1, 4)
+    mapping = TagMap(
+        [words[index].map_to(k.ds[5 - index]) for index in range(1, 5)], include_system=False
+    )
+    prog = Program(strict=False)
+    with prog:
+        with rung(k.x[1]):
+            blockcopy(words.select(1, 4), k.ds.select(21, 24))
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.code == CLK_COPY_RANGE_NOT_CONSECUTIVE
+    assert "Words1..Words4 maps onto [DS4,DS3,DS2,DS1]." in finding.message
+    assert finding.suggestion == (
+        "Map the tags to consecutive addresses in one bank, or write one call for each run "
+        "of consecutive addresses."
+    )
+    with pytest.raises(LadderExportError, match=CLK_COPY_RANGE_NOT_CONSECUTIVE):
+        pyrung_to_ladder(prog, mapping, allow=[CLK_COPY_RANGE_NOT_CONSECUTIVE])
+
+
 # --- Pointers ---------------------------------------------------------------------------
 
 

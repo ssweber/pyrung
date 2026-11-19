@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import math as pymath
 import re
 import sys
@@ -78,6 +79,7 @@ from pyrung.core import (
     to_text,
     to_value,
     toggle,
+    udt,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -144,6 +146,27 @@ def _namespace_list(namespace: dict[str, object], symbol: str) -> list[object]:
     value = namespace[symbol]
     assert isinstance(value, list)
     return cast(list[object], value)
+
+
+class _Mode(enum.IntEnum):
+    IDLE = 0
+    RUN = 1
+
+
+class _Name(enum.StrEnum):
+    SEVEN = "7"
+
+
+@udt()
+class _Motor:
+    speed: Int
+    run: Bool
+
+
+@named_array(Int, count=2, stride=2)
+class _Pair:
+    a = 0
+    b = 0
 
 
 class _IdleBase:
@@ -381,6 +404,65 @@ class TestGenerateCircuitPyAPI:
             generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")
         with pytest.raises(TypeError, match="tag_map"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")
+
+    @pytest.mark.parametrize(
+        ("value", "shown"),
+        [
+            (lambda: Timer[1], "Timer[1]"),
+            (lambda: Timer, "Timer"),
+            (lambda: _Motor, "_Motor"),
+            (lambda: _Motor[1], "_Motor[1]"),
+            (lambda: _Pair, "_Pair"),
+            (lambda: Block("R", TagType.INT, 1, 2), "the whole block R"),
+            (lambda: Block("R", TagType.INT, 1, 2).select(1, 2), "a range from .select()"),
+            (lambda: Block("R", TagType.INT, 1, 2).slot(1), "a .slot() view"),
+            (lambda: Block("R", TagType.INT, 1, 2).slot(1, 2), "a .slot() view"),
+            (lambda: float("inf"), "inf"),
+            (lambda: float("nan"), "nan"),
+            (lambda: b"7", "b'7'"),
+        ],
+        ids=[
+            "structure",
+            "timer",
+            "udt",
+            "udt-instance",
+            "named-array",
+            "block",
+            "range",
+            "slot",
+            "slots",
+            "inf",
+            "nan",
+            "bytes",
+        ],
+    )
+    def test_refuses_a_value_that_generated_code_cannot_hold(self, value, shown):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with rung():
+                # copy() refuses a range when the program is built, so a range goes to math().
+                (math if shown.startswith("a range") else copy)(value(), Char("Text"))
+        line = prog.rungs[0]._instructions[0].source_line
+
+        message = rf"\(\) at .*test_codegen\.py:{line}\. It reads {re.escape(shown)} as a value\."
+        with pytest.raises(NotImplementedError, match=message):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0)
+
+    def test_refuses_a_value_in_a_contact_and_names_the_rung(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        # Stepping keeps a StrEnum member as the member, so the code.py cannot hold it.
+        with Program(strict=False) as prog:
+            with rung(Char("Text") == _Name.SEVEN):
+                out(Bool("Running"))
+        line = prog.rungs[0].source_line
+
+        message = (
+            rf"the rung at .*test_codegen\.py:{line}\. It reads _Name\.SEVEN as a value\. Pass"
+        )
+        with pytest.raises(NotImplementedError, match=message):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0)
 
     def test_modbus_requires_tag_map(self):
         hw = P1AM()
@@ -1725,6 +1807,117 @@ class TestBoardPeripheralsAndRunStop:
                 {"nan": pymath.nan, "inf": pymath.inf, "-inf": -pymath.inf}[operand]
             )
             assert flag is flagged
+
+    @pytest.mark.parametrize(
+        "source,stored",
+        [
+            ("1.5", 1.5),
+            ("1e40", pymath.inf),
+            ("-1e40", -pymath.inf),
+            ("nan", pymath.nan),
+            (Char("Digit", default="7"), 7.0),
+            (Char("Seven", default="7") + Char("Two", default="2"), 72.0),
+            (Char("Seven", default="7") * 2, 77.0),
+        ],
+        ids=["1.5", "1e40", "-1e40", "nan", "Char tag", "Char plus Char", "Char times 2"],
+    )
+    def test_math_of_text_into_a_real_is_its_number_on_every_backend(
+        self, monkeypatch, source, stored
+    ):
+        """A Math of text into a Real stores what float() makes of the text, and sets no flag.
+
+        Past the REAL range the text stores +/-Inf.
+        """
+        dest = Real("Dest", default=3.0)
+        with Program(strict=False) as prog:
+            with rung():
+                math(source, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        for value, flag in results.values():
+            assert repr(value) == repr(stored)
+            assert flag is False
+
+    def test_math_of_none_writes_nothing_and_sets_the_address_error_on_every_backend(
+        self, monkeypatch
+    ):
+        dest = Int("Dest", default=7)
+        with Program(strict=False) as prog:
+            with rung():
+                math(None, dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.address_error), scans=1)
+        assert results == {name: (7, True) for name in results}
+
+    @pytest.mark.parametrize(
+        "source,convert", [(7, to_text()), (55, to_binary)], ids=["to_text", "to_binary"]
+    )
+    def test_a_conversion_to_text_into_an_int_flags_and_writes_nothing_on_every_backend(
+        self, monkeypatch, source, convert
+    ):
+        """Each source makes the text "7", which an Int could hold."""
+        dest = Int("Dest", default=9)
+        with Program(strict=False) as prog:
+            with rung():
+                copy(source, dest, convert=convert)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        assert results == {name: (9, True) for name in results}
+
+    @pytest.mark.parametrize(
+        "build,lo,hi,at,flagged",
+        [
+            (lambda b, w, d, lo, hi, at: pack_bits(b.select(lo, hi), d[at]), 0, 2, 5, False),
+            (lambda b, w, d, lo, hi, at: pack_bits(b.select(lo, hi), d[at]), 3, 1, 0, True),
+            (lambda b, w, d, lo, hi, at: unpack_to_bits(d[at], b.select(lo, hi)), 3, 1, 0, True),
+            (lambda b, w, d, lo, hi, at: unpack_to_words(d[at], w.select(lo, hi)), 1, 3, 0, True),
+            (
+                lambda b, w, d, lo, hi, at: blockcopy(w.select(lo, hi), d.select(at, hi)),
+                3,
+                1,
+                0,
+                True,
+            ),
+        ],
+        ids=[
+            "pack_bits into past the end",
+            "pack_bits of a backwards range into below",
+            "unpack_to_bits from below into a backwards range",
+            "unpack_to_words from below into three words",
+            "blockcopy of a backwards range into below",
+        ],
+    )
+    def test_a_pointer_outside_its_bank_is_checked_first_on_every_backend(
+        self, monkeypatch, build, lo, hi, at, flagged
+    ):
+        """Each backend checks the pointers in stepping's order.
+
+        The first pointer outside its bank decides the result.
+        """
+        bits = Block("Bit", TagType.BOOL, 1, 4)
+        words = Block("Word", TagType.INT, 1, 4)
+        dints = Block("Dint", TagType.DINT, 1, 4)
+        pointers = (Int("Lo", default=lo), Int("Hi", default=hi), Int("At", default=at))
+        with Program(strict=False) as prog:
+            with rung():
+                build(bits, words, dints, *pointers)
+
+        results = _on_every_backend(prog, monkeypatch, (system.fault.address_error,), scans=1)
+        assert results == {name: (flagged,) for name in results}
+
+    def test_an_int_enum_member_is_its_number_on_every_backend(self, monkeypatch):
+        mode = Int("Mode", default=1)
+        running = Bool("Running")
+        copied = Int("Copied")
+        total = Int("Total")
+        with Program(strict=False) as prog:
+            with rung(mode == _Mode.RUN):
+                out(running)
+                copy(_Mode.RUN, copied)
+                math(mode + _Mode.RUN, total)
+
+        results = _on_every_backend(prog, monkeypatch, (running, copied, total), scans=1)
+        assert results == {name: (True, 1, 2) for name in results}
 
     @pytest.mark.parametrize(
         "operand,dest_tag,stored,flagged",

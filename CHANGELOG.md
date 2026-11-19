@@ -31,6 +31,8 @@
   Write `copy(5, txt[1])`, which stores the digit "5".
 - `copy()`, `blockcopy()` and `fill()` forms that raised when their rung ran are now refused when you build the program.
   Write the form that the message names.
+- `generate_circuitpy()` now raises `NotImplementedError` for a value that a code.py cannot hold, such as `Timer[1]`, a whole block, a `.select()` range, `float("inf")` or `b"7"` (the code.py raised `NameError` or `TypeError` on the board).
+  Pass a tag, a pointer, a finite number or text in its place.
 - A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
   If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
 - The CLICK export now refuses a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`).
@@ -47,6 +49,8 @@
   Pass the new code to `allow=`. `allow=` now raises `ValueError` for a code that pyrung does not report, and names the codes that replace a removed one.
 - CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
+- The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
+  Map the tags to consecutive addresses in one bank. Drop `.reverse()`.
 - CLICK validation now refuses these forms, which the export wrote and CLICK's editor rejects:
   - A `blockcopy()` of one register, such as `blockcopy(ds.select(1, 1), ds.select(5, 5))`. Use `copy()`.
   - A `pack_bits()` or `unpack_to_bits()` of one bit, such as `pack_bits(c.select(1, 1), ds[1])`. Use a range of two or more bits.
@@ -63,11 +67,18 @@
 
 ### Fixes
 
+- `history.at()` and `fork_from()` now return an older scan of a program with one of these forms (they raised `TypeError` or `NameError` once the scan had left the recent-state cache):
+  - `math(None, ...)`.
+  - Text or a TXT in `math()` into a DF, such as `math(txt[1] + txt[2], df[1])`.
+  - A value that is not a tag, a pointer, a finite number or text, such as `copy(Timer[1], txt[1])` or `copy(float("inf"), ds[1])`.
+- `copy()` with `convert=to_text()` or `convert=to_binary` into a register that is not a TXT now sets the out-of-range flag and writes nothing in `run_for()`, `run_until()`, `history.at()` and the generated code.py, as stepping does (they wrote one digit into each register from the target on, with no flag).
 - `fill()` into two or more YD registers now exports, as a CLICK does (it was refused).
 - A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does (it raised `ValueError` on a letter or a blank TXT).
 - `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
 - `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
 - A constant that you `copy()` or `fill()` into a DH or YD now stores its value on a CLICK. `copy(14, dh[1])` exports as `copy(14,DH1)` (it exported `copy(Eh,DH1)`, and a CLICK stored 0).
+- `generate_circuitpy()` now writes an `IntEnum` member as its number. `copy(Mode.RUN, ds[1])` writes 1 (it raised `RuntimeError`).
+- `run_for()`, `history.at()` and the generated code.py now run a pack, an unpack or a `blockcopy()` with a pointer outside its bank the same way `step()` does. They set the address-error flag only when `step()` sets it (the code.py could raise `ValueError`, and `run_for()` could set the flag when `step()` did not).
 
 ## v0.17.0 (2026-11-18)
 

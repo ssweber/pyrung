@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 import operator
 import re
-from typing import Any
+from enum import IntEnum
+from typing import Any, NoReturn
 
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
@@ -155,7 +156,7 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
         )
     if isinstance(expr, LiteralExpr):
-        return repr(expr.value)
+        return _compile_constant(expr.value)
 
     if isinstance(expr, BinaryExpr):
         left = _compile_expression_impl(
@@ -1430,6 +1431,73 @@ def _past_end_keeps(value: Any) -> bool:
     return isinstance(value, (IndirectRef, IndirectExprRef)) and value.block._past_end_keeps
 
 
+def _refuse(ctx: CodegenContext, error: type[Exception], message: str) -> NoReturn:
+    """Raise *error* for an instruction that stepping raises on, or make the kernel decline.
+
+    `generate_circuitpy()` raises *error*.  Stepping raises it only when the instruction
+    reaches the check.  An instruction on a rung that does not run never reaches it.  A
+    pack or unpack with a pointer outside its bank does not reach it either.  So the
+    runner's kernel raises `NotImplementedError`, and the runner steps those scans.
+    """
+    if ctx.kernel_runtime:
+        raise NotImplementedError(message)
+    raise error(message)
+
+
+def _pointer_check_lines(ref: Any, ctx: CodegenContext, *, past_end_drops: bool) -> list[str]:
+    """Return lines that check the pointer *ref* on one side of a copy, pack or unpack.
+
+    *ref* is a copy's target, the destination of `pack_bits()` or `pack_words()`, or an
+    unpack's source.  Stepping checks this pointer before it touches the other side, so the
+    caller puts these lines first.  A pointer below its bank or in a gap sets the
+    address-error flag and raises IndexError, and the guard drops the instruction.
+
+    With *past_end_drops*, a pointer past the bank's end raises with no flag.  The
+    destination of `pack_bits()` or `pack_words()` needs this.  Without it, a pointer past
+    the end passes.  A copy's target needs that, because stepping still reads the source.
+    An unpack's source needs it too, because stepping reads past the end as the type's zero.
+
+    Return no lines for anything but a pointer.
+    """
+    if isinstance(ref, ImmediateRef):
+        ref = ref.value
+    if not isinstance(ref, (IndirectRef, IndirectExprRef)):
+        return []
+    binding = ctx.block_bindings.get(id(ref.block))
+    if binding is None:
+        raise RuntimeError(f"Missing block binding for indirect ref {ref.block.name!r}")
+    helper = ctx.use_indirect_block(binding.block_id)
+    if isinstance(ref, IndirectRef):
+        addr_expr = _compile_value(ref.pointer, ctx)
+    else:
+        addr_expr = _compile_expression_impl(ref.expr, ctx)
+    if past_end_drops:
+        return [f"{helper}(int({addr_expr}))"]
+    addr_var = f"_{ctx.next_name('ptr')}_addr"
+    return [
+        f"{addr_var} = int({addr_expr})",
+        f"if {addr_var} <= {binding.end}:",
+        f"    {helper}({addr_var})",
+    ]
+
+
+def _copy_source_past_end_test(value: Any, ctx: CodegenContext) -> str | None:
+    """Return a test that a Copy's source pointer is past the end of its bank.
+
+    Return ``None`` for a source that :func:`_past_end_keeps` does not hold.
+    """
+    if not _past_end_keeps(value):
+        return None
+    binding = ctx.block_bindings.get(id(value.block))
+    if binding is None:
+        raise RuntimeError(f"Missing block binding for indirect ref {value.block.name!r}")
+    if isinstance(value, IndirectRef):
+        addr_expr = _compile_value(value.pointer, ctx)
+    else:
+        addr_expr = _compile_expression_impl(value.expr, ctx)
+    return f"int({addr_expr}) > {binding.end}"
+
+
 def _compile_copy_source(value: Any, ctx: CodegenContext) -> str:
     """Return a Copy's source, read as :func:`_compile_value` reads it.
 
@@ -1557,4 +1625,52 @@ def _compile_value(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-    return repr(value)
+    return _compile_constant(value)
+
+
+class UnsupportedValue(NotImplementedError):
+    """Raised when generated code cannot hold a value that the program reads.
+
+    The runner treats it as a kernel it cannot build and steps the scans.
+    ``compile_instruction`` adds the call and its place to the message, and sets
+    ``located``.
+    """
+
+    located = False
+
+
+def _compile_constant(value: Any) -> str:
+    """Return *value* as a Python literal, or raise :class:`UnsupportedValue`.
+
+    Only the constants that generated code reads the way stepping does pass.  The repr()
+    of anything else, such as a range, a structure, a Block, Inf, NaN or bytes, either
+    names something that generated code does not define or computes something else.
+    """
+    if type(value) in (bool, int, str) or (type(value) is float and math.isfinite(value)):
+        return repr(value)
+    if isinstance(value, IntEnum):
+        # Stepping stores the member's number.  A StrEnum stays out, because stepping
+        # stores the member itself in a TXT.
+        return repr(int(value))
+    raise UnsupportedValue(f"It reads {_shown_value(value)} as a value.")
+
+
+def _shown_value(value: Any) -> str:
+    """Return how the program wrote *value*, as far as it can be told."""
+    from enum import Enum
+
+    from pyrung.core.memory_block import Block, RangeSlotView, SlotView
+    from pyrung.core.structure import InstanceView
+
+    if isinstance(value, Enum):
+        return f"{type(value).__name__}.{value.name}"
+    if isinstance(value, InstanceView):
+        return f"{value._owner.name}[{value._index}]"
+    if isinstance(value, (SlotView, RangeSlotView)):
+        return "a .slot() view"
+    if isinstance(value, (BlockRange, IndirectBlockRange)):
+        return "a range from .select()"
+    if isinstance(value, Block):
+        return f"the whole block {value.name}"
+    name = getattr(value, "name", None)
+    return name if isinstance(name, str) else repr(value)

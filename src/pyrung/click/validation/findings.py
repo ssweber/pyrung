@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from pyclickplc.banks import BANKS
+from pyclickplc.addresses import format_address_display, is_xd_yd_hidden_slot, parse_address
+from pyclickplc.banks import BANKS, is_valid_address
 
 from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 
@@ -224,8 +225,8 @@ def immediate_coil_not_y_text(at: str = "", found: str | None = None) -> str:
 
 RangeFault = Literal["empty", "descending", "scattered"]
 
-# One Copy family range that CLICK cannot hold as a range: its name, its fault, the
-# addresses that the export would write, and whether its tags are those CLICK addresses.
+# One Copy family or math() range that CLICK cannot hold as a range: its name, its fault,
+# the addresses that the export would write, and whether its tags are those CLICK addresses.
 RangeProblem = tuple[str, RangeFault, list[str], bool]
 
 _RANGE_RULES: dict[str, str] = {
@@ -264,6 +265,82 @@ def range_not_consecutive_text(problems: list[RangeProblem]) -> str:
 def range_not_consecutive_advice(problems: list[RangeProblem]) -> str:
     """Return the advice for each fault of the ranges, once."""
     return " ".join(dict.fromkeys(_RANGE_ADVICE[fault] for _name, fault, _a, _o in problems))
+
+
+# The Copy family's advice offers one call for each run of addresses. A SUM can be split
+# that way, but MDN and AVG of the runs differ from MDN and AVG of the whole range. So
+# this advice offers only the mapping.
+_AGGREGATE_ADVICE: dict[str, str] = {
+    "empty": _RANGE_ADVICE["empty"],
+    "descending": "Remove .reverse(). The result does not depend on the order.",
+    "scattered": "Map the tags to consecutive addresses in one bank.",
+}
+
+
+def _next_slot(bank: str, address: int) -> int:
+    """Return the MDB address of the CLICK address that follows *address* in *bank*.
+
+    X and Y skip the numbers between their slots, such as X017..X020. XD and YD run XD0,
+    XD0u, XD1, XD2 and so on, at MDB addresses 0, 1, 2, 4 and so on.
+    """
+    config = BANKS.get(bank)
+    following = address + 1
+    if config is None:
+        return following
+    while following <= config.max_addr and (
+        not is_valid_address(bank, following) or is_xd_yd_hidden_slot(bank, following)
+    ):
+        following += 1
+    return following
+
+
+def _is_run(slots: list[tuple[str, int]]) -> bool:
+    # A range aggregate reads CLICK's address space from its first address to its last.
+    # So this run may cross the gap between X or Y slots, and a run from XD0 to XD1 must
+    # hold XD0u. The Copy family judges its ranges with translator._compact_contiguous_range
+    # instead. That function needs each address number to be one more than the one before,
+    # so a Copy family range cannot cross a slot gap.
+    return all(
+        _next_slot(bank, a) == b for (bank, a), (_, b) in zip(slots, slots[1:], strict=False)
+    )
+
+
+def _display_address(name: str) -> str:
+    """Return a tag name as CLICK writes its address, such as X001 for X1."""
+    try:
+        return format_address_display(*parse_address(name))
+    except ValueError:
+        return name
+
+
+def range_aggregate_problem(
+    name: str, tag_names: list[str], addresses: list[str], *, reversed_order: bool
+) -> tuple[str, RangeProblem] | None:
+    """Return the code and the problem of a math() aggregate range that is not one CLICK range.
+
+    The export writes ``SUM ( first : last )``. CLICK reads every address from *first*
+    to *last*, so *addresses* must be one ascending run in one bank. *reversed_order* says
+    whether the author wrote ``.reverse()``. Only then does the advice name it.
+    """
+    try:
+        slots = [parse_address(address) for address in addresses]
+    except ValueError:
+        return None  # The bank checks report a tag that has no CLICK address.
+    own = [_display_address(tag_name) for tag_name in tag_names] == addresses
+    if not slots:
+        return CLK_MATH_RANGE_NOT_CONTIGUOUS, (name, "empty", [], own)
+    if len({bank for bank, _ in slots}) > 1:
+        return CLK_MATH_RANGE_MIXED_BANKS, (name, "scattered", addresses, own)
+    if _is_run(slots):
+        return None
+    descending = reversed_order and len(slots) > 1 and _is_run(slots[::-1])
+    fault: RangeFault = "descending" if descending else "scattered"
+    return CLK_MATH_RANGE_NOT_CONTIGUOUS, (name, fault, addresses, own)
+
+
+def range_aggregate_advice(problem: RangeProblem) -> str:
+    """Return the advice for a math() aggregate range that is not one CLICK range."""
+    return _AGGREGATE_ADVICE[problem[1]]
 
 
 def immediate_coil_range_gap_text(at: str = "") -> str:

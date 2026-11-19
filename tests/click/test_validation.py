@@ -899,6 +899,143 @@ class TestRangeAggregateRules:
         assert CLK_MATH_RANGE_MIXED_BANKS in codes
         assert CLK_MATH_RANGE_NOT_CONTIGUOUS not in codes
 
+    @staticmethod
+    def _scattered_program(kind: str, mapping):
+        """Return a one-rung math() of *kind* over W1..W4, and its tag map."""
+        # map_to records each mapping on the bank's own tags, so each case maps a fresh
+        # ClickBlocks().
+        fresh = ClickBlocks()
+        bank = {"ds": fresh.ds, "sd": fresh.sd, "x": fresh.x}
+        W = Block("W", TagType.BOOL if kind == "bits" else TagType.INT, 1, 4)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with rung():
+                if kind == "reverse":
+                    math(W.select(1, 4).reverse().sum(), dest)
+                else:
+                    math(getattr(W.select(1, 4), "sum" if kind == "bits" else kind)(), dest)
+
+        tags = {W[index + 1]: bank[name][address] for index, (name, address) in enumerate(mapping)}
+        tag_map = TagMap({**tags, dest: bank["ds"][100]}, include_system=False)
+        return _build_program(logic), tag_map
+
+    @pytest.mark.parametrize("kind", ["sum", "max", "min", "median", "mean"])
+    def test_scattered_mapping_is_refused_by_the_export_even_when_allowed(self, kind):
+        """The export wrote SUM ( DS1 : DS9 ), and CLICK read DS2 and the other registers
+        between them too."""
+        from pyrung.click import pyrung_to_ladder
+        from pyrung.click.ladder import LadderExportError
+
+        prog, tag_map = self._scattered_program(kind, [("ds", 1), ("ds", 3), ("ds", 7), ("ds", 9)])
+        report = validate_click_program(prog, tag_map, mode="strict")
+        [finding] = [f for f in report.errors if f.code == CLK_MATH_RANGE_NOT_CONTIGUOUS]
+        assert finding.message.startswith(f"pyrung cannot export W1..W4.{kind}() at ")
+        assert "W1..W4 maps onto [DS1,DS3,DS7,DS9]." in finding.message
+        assert finding.suggestion == "Map the tags to consecutive addresses in one bank."
+        for kwargs in ({"allow": (CLK_MATH_RANGE_NOT_CONTIGUOUS,)}, {"validate": False}):
+            with pytest.raises(LadderExportError, match=CLK_MATH_RANGE_NOT_CONTIGUOUS):
+                pyrung_to_ladder(prog, tag_map, **kwargs)
+
+    @pytest.mark.parametrize(
+        ("kind", "mapping", "code", "fact", "advice"),
+        [
+            pytest.param(
+                "reverse",
+                [("ds", 1), ("ds", 2), ("ds", 3), ("ds", 4)],
+                CLK_MATH_RANGE_NOT_CONTIGUOUS,
+                "W1..W4.reverse() runs from DS4 down to DS1.",
+                "Remove .reverse(). The result does not depend on the order.",
+                id="reversed",
+            ),
+            pytest.param(
+                "max",
+                [("ds", 4), ("ds", 3), ("ds", 2), ("ds", 1)],
+                CLK_MATH_RANGE_NOT_CONTIGUOUS,
+                "W1..W4 maps onto [DS4,DS3,DS2,DS1].",
+                "Map the tags to consecutive addresses in one bank.",
+                id="mapped-descending",
+            ),
+            pytest.param(
+                "sum",
+                [("ds", 1), ("ds", 2), ("sd", 3), ("sd", 4)],
+                CLK_MATH_RANGE_MIXED_BANKS,
+                "W1..W4 maps onto [DS1,DS2,SD3,SD4].",
+                "Map the tags to consecutive addresses in one bank.",
+                id="mixed-banks",
+            ),
+            pytest.param(
+                "bits",
+                [("x", 1), ("x", 3), ("x", 5), ("x", 7)],
+                CLK_MATH_RANGE_NOT_CONTIGUOUS,
+                "W1..W4 maps onto [X001,X003,X005,X007].",
+                "Map the tags to consecutive addresses in one bank.",
+                id="x-gap-in-a-slot",
+            ),
+            pytest.param(
+                "bits",
+                [("x", 15), ("x", 16), ("x", 101), ("x", 102)],
+                CLK_MATH_RANGE_NOT_CONTIGUOUS,
+                "W1..W4 maps onto [X015,X016,X101,X102].",
+                "Map the tags to consecutive addresses in one bank.",
+                id="x016-to-x101-skips-x021",
+            ),
+        ],
+    )
+    def test_export_refuses_each_range_that_click_reads_otherwise(
+        self, kind, mapping, code, fact, advice
+    ):
+        from pyrung.click import pyrung_to_ladder
+        from pyrung.click.ladder import LadderExportError
+
+        prog, tag_map = self._scattered_program(kind, mapping)
+        report = validate_click_program(prog, tag_map, mode="strict")
+        [finding] = [f for f in report.errors if f.code == code]
+        assert fact in finding.message
+        assert finding.suggestion == advice
+        for kwargs in ({"allow": (code,)}, {"validate": False}):
+            with pytest.raises(LadderExportError, match=code):
+                pyrung_to_ladder(prog, tag_map, **kwargs)
+
+    def test_an_x_range_across_a_slot_gap_still_exports(self):
+        """X017..X020 do not exist, so the export assumes that SUM ( X001 : X021 ) reads 17 tags.
+
+        No one has run this range on a CLICK.
+        """
+        from pyrung.click import pyrung_to_ladder
+
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with rung():
+                math(x.select(1, 21).sum(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert not [f for f in report.errors if f.code.startswith("CLK_MATH_RANGE")]
+        cells = pyrung_to_ladder(prog, tag_map).main_rows[1]
+        assert any("SUM ( X001 : X021 )" in cell for cell in cells)
+
+    def test_empty_range_is_refused(self):
+        """x.select(17, 20) holds no address. The export raised IndexError on it."""
+        from pyrung.click import pyrung_to_ladder
+        from pyrung.click.ladder import LadderExportError
+
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with rung():
+                math(x.select(17, 20).sum(), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="strict")
+        [finding] = [f for f in report.errors if f.code == CLK_MATH_RANGE_NOT_CONTIGUOUS]
+        assert "X17..X20 holds no CLICK address." in finding.message
+        with pytest.raises(LadderExportError, match=CLK_MATH_RANGE_NOT_CONTIGUOUS):
+            pyrung_to_ladder(prog, tag_map, validate=False)
+
     def test_median_range_over_1024_bytes_gives_finding(self):
         """OBJ-1013: MDN accepts at most 1024 bytes (512 DS, 256 DD/DF)."""
         dest = Tag("Dest", TagType.DINT)

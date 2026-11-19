@@ -64,7 +64,9 @@ from ._primitives import (
     _copy_clamp_condition,
     _copy_converter_target_info,
     _copy_converter_write_lines,
+    _copy_source_past_end_test,
     _past_end_keeps,
+    _pointer_check_lines,
 )
 
 
@@ -422,6 +424,11 @@ def _compile_copy_instruction(
             f"if {clamp_cond}:",
             *_indent_body(fault_body, 4),
         ]
+    if _past_end_keeps(instr.source):
+        # A source pointer past its bank's end drops the copy with no flag, but stepping
+        # flags a target pointer below its bank first.
+        target_check = _pointer_check_lines(instr.target, ctx, past_end_drops=False)
+        enabled_body = [*target_check, *enabled_body]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -464,6 +471,14 @@ def _compile_copy_converter_instruction(
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
         target, ctx, stem
     )
+    if mode in {"text", "binary"} and target_type != "CHAR":
+        # Only a TXT holds text, so stepping sets the out-of-range flag and writes nothing.
+        # It reads no source, but a source pointer past its bank's end drops the copy.
+        past_end = _copy_source_past_end_test(instr.source, ctx)
+        body = [*setup, *fault_body]
+        if past_end is not None:
+            body = [*setup, f"if not ({past_end}):", *_indent_body(fault_body, 4)]
+        return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
     values_var = f"_{stem}_values"
     target_name = target.name if isinstance(target, Tag) else None
     fit = block_room(target) if isinstance(target, Tag) else None
@@ -490,7 +505,9 @@ def _compile_copy_converter_instruction(
         following_names=following_names,
     )
 
-    enabled_body: list[str] = [*source_read, *setup]
+    # Stepping resolves the target first, and a target pointer past its bank drops the
+    # copy before the source is read.
+    enabled_body: list[str] = [*setup, *source_read]
     if mode == "fanout":
         enabled_body.extend(
             [
