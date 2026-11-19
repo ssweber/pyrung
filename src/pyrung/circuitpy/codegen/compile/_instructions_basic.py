@@ -66,7 +66,7 @@ from ._primitives import (
     _copy_converter_write_lines,
     _copy_source_past_end_test,
     _past_end_keeps,
-    _target_address_error_lines,
+    _pointer_check_lines,
 )
 
 
@@ -427,7 +427,8 @@ def _compile_copy_instruction(
     if _past_end_keeps(instr.source):
         # A source pointer past its bank's end drops the copy with no flag, but stepping
         # flags a target pointer below its bank first.
-        enabled_body = [*_target_address_error_lines(instr.target, ctx), *enabled_body]
+        target_check = _pointer_check_lines(instr.target, ctx, past_end_drops=False)
+        enabled_body = [*target_check, *enabled_body]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 

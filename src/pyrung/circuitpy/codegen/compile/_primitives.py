@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 import operator
 import re
-from typing import Any
+from enum import IntEnum
+from typing import Any, NoReturn
 
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
@@ -1430,29 +1431,53 @@ def _past_end_keeps(value: Any) -> bool:
     return isinstance(value, (IndirectRef, IndirectExprRef)) and value.block._past_end_keeps
 
 
-def _target_address_error_lines(target: Any, ctx: CodegenContext) -> list[str]:
-    """Return lines that raise IndexError for a target pointer below its bank or in a gap.
+def _refuse(ctx: CodegenContext, error: type[Exception], message: str) -> NoReturn:
+    """Raise *error* for an instruction that stepping raises on, or make the kernel decline.
 
-    The index helper sets the address-error flag before it raises, and the guard drops
-    the copy.  A pointer past the bank's end passes, so the source is still read.
-    Stepping checks the target this way before it reads the source.
+    `generate_circuitpy()` raises *error*.  Stepping raises it only when the instruction
+    reaches the check.  An instruction on a rung that does not run never reaches it.  A
+    pack or unpack with a pointer outside its bank does not reach it either.  So the
+    runner's kernel raises `NotImplementedError`, and the runner steps those scans.
     """
-    if isinstance(target, ImmediateRef):
-        target = target.tag
-    if not isinstance(target, (IndirectRef, IndirectExprRef)):
+    if ctx.kernel_runtime:
+        raise NotImplementedError(message)
+    raise error(message)
+
+
+def _pointer_check_lines(ref: Any, ctx: CodegenContext, *, past_end_drops: bool) -> list[str]:
+    """Return lines that check the pointer *ref* on one side of a copy, pack or unpack.
+
+    *ref* is a copy's target, the destination of `pack_bits()` or `pack_words()`, or an
+    unpack's source.  Stepping checks this pointer before it touches the other side, so the
+    caller puts these lines first.  A pointer below its bank or in a gap sets the
+    address-error flag and raises IndexError, and the guard drops the instruction.
+
+    With *past_end_drops*, a pointer past the bank's end raises with no flag.  The
+    destination of `pack_bits()` or `pack_words()` needs this.  Without it, a pointer past
+    the end passes.  A copy's target needs that, because stepping still reads the source.
+    An unpack's source needs it too, because stepping reads past the end as the type's zero.
+
+    Return no lines for anything but a pointer.
+    """
+    if isinstance(ref, ImmediateRef):
+        ref = ref.value
+    if not isinstance(ref, (IndirectRef, IndirectExprRef)):
         return []
-    binding = ctx.block_bindings.get(id(target.block))
+    binding = ctx.block_bindings.get(id(ref.block))
     if binding is None:
-        raise RuntimeError(f"Missing block binding for indirect target {target.block.name!r}")
+        raise RuntimeError(f"Missing block binding for indirect ref {ref.block.name!r}")
     helper = ctx.use_indirect_block(binding.block_id)
-    if isinstance(target, IndirectRef):
-        addr_expr = _compile_value(target.pointer, ctx)
+    if isinstance(ref, IndirectRef):
+        addr_expr = _compile_value(ref.pointer, ctx)
     else:
-        addr_expr = _compile_expression_impl(target.expr, ctx)
+        addr_expr = _compile_expression_impl(ref.expr, ctx)
+    if past_end_drops:
+        return [f"{helper}(int({addr_expr}))"]
+    addr_var = f"_{ctx.next_name('ptr')}_addr"
     return [
-        f"_copy_target_addr = int({addr_expr})",
-        f"if _copy_target_addr <= {binding.end}:",
-        f"    {helper}(_copy_target_addr)",
+        f"{addr_var} = int({addr_expr})",
+        f"if {addr_var} <= {binding.end}:",
+        f"    {helper}({addr_var})",
     ]
 
 
@@ -1623,6 +1648,10 @@ def _compile_constant(value: Any) -> str:
     """
     if type(value) in (bool, int, str) or (type(value) is float and math.isfinite(value)):
         return repr(value)
+    if isinstance(value, IntEnum):
+        # Stepping stores the member's number.  A StrEnum stays out, because stepping
+        # stores the member itself in a TXT.
+        return repr(int(value))
     raise UnsupportedValue(f"It reads {_shown_value(value)} as a value.")
 
 

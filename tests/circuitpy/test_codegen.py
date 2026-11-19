@@ -153,6 +153,10 @@ class _Mode(enum.IntEnum):
     RUN = 1
 
 
+class _Name(enum.StrEnum):
+    SEVEN = "7"
+
+
 @udt()
 class _Motor:
     speed: Int
@@ -448,13 +452,15 @@ class TestGenerateCircuitPyAPI:
     def test_refuses_a_value_in_a_contact_and_names_the_rung(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
-        mode = Int("Mode")
+        # Stepping keeps a StrEnum member as the member, so the code.py cannot hold it.
         with Program(strict=False) as prog:
-            with rung(mode == _Mode.RUN):
+            with rung(Char("Text") == _Name.SEVEN):
                 out(Bool("Running"))
         line = prog.rungs[0].source_line
 
-        message = rf"the rung at .*test_codegen\.py:{line}\. It reads _Mode\.RUN as a value\. Pass"
+        message = (
+            rf"the rung at .*test_codegen\.py:{line}\. It reads _Name\.SEVEN as a value\. Pass"
+        )
         with pytest.raises(NotImplementedError, match=message):
             generate_circuitpy(prog, hw, target_scan_ms=10.0)
 
@@ -1857,6 +1863,61 @@ class TestBoardPeripheralsAndRunStop:
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
         assert results == {name: (9, True) for name in results}
+
+    @pytest.mark.parametrize(
+        "build,lo,hi,at,flagged",
+        [
+            (lambda b, w, d, lo, hi, at: pack_bits(b.select(lo, hi), d[at]), 0, 2, 5, False),
+            (lambda b, w, d, lo, hi, at: pack_bits(b.select(lo, hi), d[at]), 3, 1, 0, True),
+            (lambda b, w, d, lo, hi, at: unpack_to_bits(d[at], b.select(lo, hi)), 3, 1, 0, True),
+            (lambda b, w, d, lo, hi, at: unpack_to_words(d[at], w.select(lo, hi)), 1, 3, 0, True),
+            (
+                lambda b, w, d, lo, hi, at: blockcopy(w.select(lo, hi), d.select(at, hi)),
+                3,
+                1,
+                0,
+                True,
+            ),
+        ],
+        ids=[
+            "pack_bits into past the end",
+            "pack_bits of a backwards range into below",
+            "unpack_to_bits from below into a backwards range",
+            "unpack_to_words from below into three words",
+            "blockcopy of a backwards range into below",
+        ],
+    )
+    def test_a_pointer_outside_its_bank_is_checked_first_on_every_backend(
+        self, monkeypatch, build, lo, hi, at, flagged
+    ):
+        """Each backend checks the pointers in stepping's order.
+
+        The first pointer outside its bank decides the result.
+        """
+        bits = Block("Bit", TagType.BOOL, 1, 4)
+        words = Block("Word", TagType.INT, 1, 4)
+        dints = Block("Dint", TagType.DINT, 1, 4)
+        pointers = (Int("Lo", default=lo), Int("Hi", default=hi), Int("At", default=at))
+        with Program(strict=False) as prog:
+            with rung():
+                build(bits, words, dints, *pointers)
+
+        results = _on_every_backend(prog, monkeypatch, (system.fault.address_error,), scans=1)
+        assert results == {name: (flagged,) for name in results}
+
+    def test_an_int_enum_member_is_its_number_on_every_backend(self, monkeypatch):
+        mode = Int("Mode", default=1)
+        running = Bool("Running")
+        copied = Int("Copied")
+        total = Int("Total")
+        with Program(strict=False) as prog:
+            with rung(mode == _Mode.RUN):
+                out(running)
+                copy(_Mode.RUN, copied)
+                math(mode + _Mode.RUN, total)
+
+        results = _on_every_backend(prog, monkeypatch, (running, copied, total), scans=1)
+        assert results == {name: (True, 1, 2) for name in results}
 
     @pytest.mark.parametrize(
         "operand,dest_tag,stored,flagged",
