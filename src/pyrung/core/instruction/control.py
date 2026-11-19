@@ -22,6 +22,7 @@ from .base import (
 from .conversions import (
     _store_copy_value_to_tag_type,
 )
+from .operands import EachOperand, NumberOperand
 from .resolvers import (
     _fn_name,
     _set_fault_address_error,
@@ -46,6 +47,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     _writes = ("_outs",)
     _conditions = ()
     _structural_fields = ("_fn",)
+    _operands = {"_outs": EachOperand(arg="outs")}
 
     def __init__(
         self,
@@ -90,6 +92,7 @@ class EnabledFunctionCallInstruction(Instruction):
     _writes = ("_outs",)
     _conditions = ("_enable_condition",)
     _structural_fields = ("_fn",)
+    _operands = {"_outs": EachOperand(arg="outs")}
 
     def __init__(
         self,
@@ -216,6 +219,8 @@ class ForLoopInstruction(OneShotMixin, Instruction):
     _writes = ("idx_tag",)
     _conditions = ()
     _structural_fields = ()
+    # CLICK reads a constant count as signed 32-bit, so a count outside the span runs none.
+    _operands = {"count": NumberOperand(whole=True, span=(1, FOR_COUNT_MAX_32))}
     _executor_kind = _EXECUTOR_FOR_LOOP
 
     def __init__(

@@ -111,6 +111,7 @@ def operand_name(value: Any) -> str:
         IndirectExprRef,
         IndirectRef,
     )
+    from pyrung.core.structure import InstanceView
 
     if isinstance(value, ImmediateRef):
         return operand_name(value.value)
@@ -126,16 +127,23 @@ def operand_name(value: Any) -> str:
                 return f"{structure}[{index}].{field}"
         return value.name
     if isinstance(value, BlockRange):
-        text = f"{value.block.name}{value.start}..{value.block.name}{value.end}"
+        if hasattr(value, "_instance_start"):
+            # A named_array's instance() or instance_select() prints the call.
+            text = repr(value)
+        else:
+            text = f"{value.block.name}{value.start}..{value.block.name}{value.end}"
         return f"{text}.reverse()" if value.reverse_order else text
     if isinstance(value, IndirectRef):
         return f"{value.block.name}[{value.pointer.name}]"
     if isinstance(value, IndirectBlockRange):
-        return f"{value.block.name}[{value.start_expr}..{value.end_expr}]"
+        start, end = operand_name(value.start_expr), operand_name(value.end_expr)
+        return f"{value.block.name}[{start}..{end}]"
     if isinstance(value, IndirectExprRef):
         return f"{value.block.name}[{render_expr(value.expr)}]"
     if isinstance(value, Expression):
         return render_expr(value)
+    if isinstance(value, InstanceView):
+        return f"{value._owner.name}[{value._index}]"
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, str):
@@ -157,6 +165,7 @@ def render_expr(expr: Any) -> str:
         BinaryExpr,
         LiteralExpr,
         MathFuncExpr,
+        RandIntExpr,
         RangeAggregateExpr,
         ShiftFuncExpr,
         SumExpr,
@@ -168,7 +177,10 @@ def render_expr(expr: Any) -> str:
     if isinstance(expr, TagExpr):
         return operand_name(expr.tag)
     if isinstance(expr, LiteralExpr):
-        return str(expr.value)
+        value = expr.value
+        if isinstance(value, ImmediateRef):
+            return f"immediate({operand_name(value.value)})"
+        return operand_name(value)
     if isinstance(expr, BinaryExpr):
         return f"({render_expr(expr.left)} {expr.symbol} {render_expr(expr.right)})"
     if isinstance(expr, UnaryExpr):
@@ -181,6 +193,8 @@ def render_expr(expr: Any) -> str:
         return f"{expr.name}({render_expr(expr.value)}, {render_expr(expr.count)})"
     if isinstance(expr, (SumExpr, RangeAggregateExpr)):
         return format_expr(expr)
+    if isinstance(expr, RandIntExpr):
+        return f"randint({render_expr(expr.lo)}, {render_expr(expr.hi)})"
     return type(expr).__name__
 
 

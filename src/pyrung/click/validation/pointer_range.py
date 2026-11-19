@@ -75,12 +75,12 @@ class _PointerBounds:
         for instruction in instructions:
             count = getattr(instruction, "count", None)
             if isinstance(instruction, ForLoopInstruction) and type(count) is int:
+                # forloop() refuses a constant count that runs no iteration.
                 runs = for_loop_iterations(count, for_count_mask(count))
-                if runs:
-                    # No bank holds 65536 addresses, so the first one past its end still shows.
-                    self._lookup[instruction.idx_tag.name] = frozenset(
-                        range(min(runs, FOR_COUNT_MASK_16 + 1))
-                    )
+                # No bank holds 65536 addresses, so the first one past its end still shows.
+                self._lookup[instruction.idx_tag.name] = frozenset(
+                    range(min(runs, FOR_COUNT_MASK_16 + 1))
+                )
         return sets
 
     def reach(self, ref: Any) -> frozenset[int] | None:

@@ -210,7 +210,7 @@ def test_forloop_idx_supports_indirect_addressing():
 
 @pytest.mark.parametrize("count", [0, -5, 2**31])
 def test_forloop_literal_count_outside_signed_32_bit_raises(count):
-    with pytest.raises(ValueError, match=r"forloop count must be 1\.\.2147483647"):
+    with pytest.raises(ValueError, match=r"Pass a whole number from 1 to 2147483647, or a tag"):
         forloop(count)
 
 

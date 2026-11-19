@@ -30,6 +30,7 @@ from .conversions import (
     _math_out_of_range_for_dest,
     _truncate_to_tag_type,
 )
+from .operands import TAG, NumberInto, ValueOperand
 from .resolvers import (
     _raise_fault,
     _set_fault_address_error,
@@ -361,6 +362,16 @@ class CalcInstruction(OneShotMixin, Instruction):
     _fault_settles_idle = True
     _conditions = ()
     _structural_fields = ("mode",)
+    # A pointer or a constant has no tag type for the mode to read.
+    _operands = {
+        "source_expression": ValueOperand(arg="expression"),
+        "dest": TAG.of(
+            pointers=False,
+            immediate=False,
+            pointer_hint="Write into a tag, then copy() that tag to the pointer.",
+        ),
+    }
+    _operand_rules = (NumberInto(value="source_expression", dest="dest", text=True),)
 
     def __init__(
         self,
@@ -369,11 +380,6 @@ class CalcInstruction(OneShotMixin, Instruction):
         *,
         oneshot: bool = False,
     ):
-        if isinstance(dest, (IndirectRef, IndirectExprRef)):
-            raise TypeError(
-                "math() writes a tag, not a pointer address: "
-                "math() into a tag, then copy() it to the pointer destination"
-            )
         OneShotMixin.__init__(self, oneshot)
         check_float_literals(expression)
         self.source_expression = expression

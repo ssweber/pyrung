@@ -262,14 +262,8 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
         with rung(DataBit):
             shift(C.select(2, 7)).clock(ClockBit).reset(ResetBit)
     """
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-    if not isinstance(bit_range, (BlockRange, IndirectBlockRange)):
-        raise TypeError(
-            f"shift() expects a BlockRange or IndirectBlockRange from .select(), "
-            f"got {type(bit_range).__name__}"
-        )
-
+    # Refuse a wrong range here, before .clock() and .reset() build the instruction.
+    ShiftInstruction.check_values("shift()", {"bit_range": bit_range})
     data_condition, source_file, source_line = _capture_rung_condition_and_source("shift")
     return ShiftBuilder(bit_range, data_condition, source_file, source_line)
 

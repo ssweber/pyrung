@@ -328,11 +328,7 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
     only on its rung's rising edge.  The bodies of these two kinds of loop map
     to ``None``.
     """
-    from pyrung.core.instruction.control import (
-        ForLoopInstruction,
-        for_count_mask,
-        for_loop_iterations,
-    )
+    from pyrung.core.instruction.control import ForLoopInstruction
 
     def _loop_only(instr: Any) -> list[tuple[str, str]]:
         return [("", "ForLoop")] if isinstance(instr, ForLoopInstruction) else []
@@ -350,10 +346,8 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
     for site in _collect_write_sites(program, target_extractor=_loop_only):
         loop = site.instruction
         count = loop.count
-        literal = isinstance(count, int) and not isinstance(count, bool)
-        runs = (
-            literal and for_loop_iterations(count, for_count_mask(count)) > 0 and not loop._oneshot
-        )
+        # A constant count always runs the body, because forloop() refuses one below 1.
+        runs = isinstance(count, int) and not isinstance(count, bool) and not loop._oneshot
         for instr in _flat(loop):
             outer = run.get(id(loop), ())
             run[id(instr)] = None if outer is None or not runs else site.conditions

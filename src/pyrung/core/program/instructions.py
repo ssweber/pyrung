@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import (
@@ -19,6 +19,7 @@ from pyrung.core.instruction import (
     EnabledFunctionCallInstruction,
     FillInstruction,
     FunctionCallInstruction,
+    Instruction,
     LatchInstruction,
     OutInstruction,
     PackBitsInstruction,
@@ -54,11 +55,16 @@ def _iter_coil_tags(target: Tag | BlockRange | ImmediateRef) -> list[Tag]:
 
 
 def _attach_instruction(
-    ctx: Any, instruction: Any, source_file: str | None, source_line: int | None
+    ctx: Any,
+    instruction: Any,
+    source_file: str | None,
+    source_line: int | None,
+    *,
+    call: str | None = None,
 ) -> None:
     """Attach source metadata and append an instruction to the current rung."""
     instruction.source_file, instruction.source_line = source_file, source_line
-    ctx._rung.add_instruction(instruction)
+    ctx._rung.add_instruction(instruction, call=call)
 
 
 def _capture_instruction_context(
@@ -75,18 +81,27 @@ def _capture_instruction_context(
 
 def _add_instruction(
     func_name: str,
-    instruction_cls: type,
+    instruction_cls: type[Instruction],
     *args: Any,
     source_depth: int = 4,
+    operands: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
-    """Build an instruction, capture source metadata, and append it to the rung."""
+    """Build an instruction, capture source metadata, and append it to the rung.
+
+    *operands* maps field names to the values to check before the instruction is built.
+    Pass it when ``__init__`` reads something from an operand, such as the type of a
+    destination.  The check then refuses a wrong operand before ``__init__`` raises
+    ``AttributeError``.
+    """
     ctx, source_file, source_line = _capture_instruction_context(
         func_name,
         source_depth=source_depth,
     )
+    if operands is not None:
+        instruction_cls.check_values(f"{func_name}()", operands)
     instruction = instruction_cls(*args, **kwargs)
-    _attach_instruction(ctx, instruction, source_file, source_line)
+    _attach_instruction(ctx, instruction, source_file, source_line, call=f"{func_name}()")
     return instruction
 
 
@@ -407,7 +422,14 @@ class _MathInstruction:
     __name__ = "math"
 
     def __call__(self, expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
-        _add_instruction("math", CalcInstruction, expression, dest, oneshot=oneshot)
+        _add_instruction(
+            "math",
+            CalcInstruction,
+            expression,
+            dest,
+            oneshot=oneshot,
+            operands={"source_expression": expression, "dest": dest},
+        )
         return dest
 
     def __repr__(self) -> str:
@@ -454,7 +476,14 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
         FutureWarning,
         stacklevel=2,
     )
-    _add_instruction("calc", CalcInstruction, expression, dest, oneshot=oneshot)
+    _add_instruction(
+        "calc",
+        CalcInstruction,
+        expression,
+        dest,
+        oneshot=oneshot,
+        operands={"source_expression": expression, "dest": dest},
+    )
     return dest
 
 
@@ -481,11 +510,6 @@ def search(
             "search() expects a comparison expression, "
             f"e.g. DS.select(1, 10) >= 100, got {type(comparison).__name__}"
         )
-    if found.type != TagType.BOOL:
-        raise TypeError(f"search() found must be BOOL, got {found.type.name}")
-    if result.type not in {TagType.INT, TagType.DINT}:
-        raise TypeError(f"search() result must be INT or DINT, got {result.type.name}")
-
     _add_instruction(
         "search",
         SearchInstruction,
@@ -494,6 +518,7 @@ def search(
         found=found,
         continuous=continuous,
         oneshot=oneshot,
+        operands={"found": found, "result": result},
     )
     return result
 

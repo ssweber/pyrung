@@ -357,8 +357,8 @@ def _dint_count_is_small(tag: Tag) -> bool:
     return small(tag.min) and small(tag.max)
 
 
-def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | None:
-    """Return what a forloop's count says about its body running, or None if the body never runs.
+def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool]:
+    """Return what a forloop's count says about its body running.
 
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
     no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
@@ -371,21 +371,16 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     verifier refuses the loop past the cap.  A REAL count is inexact because 0.5
     truncates to 0.  An expression count is inexact for its own reasons.
 
-    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  For a
-    constant count that runs no iteration, this returns None.
+    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  A
+    constant count always runs it, because ``forloop()`` refuses a constant below 1 and
+    a Real constant.
     """
     from pyrung.core.condition import IndirectCompareNe
-    from pyrung.core.instruction.control import (
-        FOR_ZERO_COUNT_ITERATIONS,
-        for_count_mask,
-        for_loop_iterations,
-    )
+    from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     count = loop.count
-    if isinstance(count, (bool, int, float)):
-        return None if for_loop_iterations(count, for_count_mask(count)) == 0 else ((), True)
-    if FOR_ZERO_COUNT_ITERATIONS:
+    if isinstance(count, int) or FOR_ZERO_COUNT_ITERATIONS:
         return ((), True)
     if isinstance(count, Tag):
         type_name = count.type.name
@@ -695,10 +690,7 @@ def _iter_rung_calls(
             if isinstance(instr, CallInstruction):
                 yield instr.subroutine_name, extra, exact
             elif isinstance(instr, ForLoopInstruction):
-                count = _loop_count_conditions(instr)
-                if count is None:
-                    continue
-                count_conditions, count_exact = count
+                count_conditions, count_exact = _loop_count_conditions(instr)
                 loop_exact = exact and count_exact and not instr._oneshot and not _has_exit(instr)
                 loop_outermost = instr if outermost is None else outermost
                 for child, local in instr.iter_body():
