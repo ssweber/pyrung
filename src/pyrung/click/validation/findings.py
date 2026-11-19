@@ -10,6 +10,8 @@ from pyclickplc.banks import BANKS
 from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import OperandFact
 
@@ -46,9 +48,6 @@ CLK_NICKNAME_TOO_LONG = "CLK_NICKNAME_TOO_LONG"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
 CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
 CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
-CLK_COPY_BANK_INCOMPATIBLE = "CLK_COPY_BANK_INCOMPATIBLE"
-CLK_COPY_CONVERTER_INCOMPATIBLE = "CLK_COPY_CONVERTER_INCOMPATIBLE"
-CLK_PACK_TEXT_BANK_INCOMPATIBLE = "CLK_PACK_TEXT_BANK_INCOMPATIBLE"
 CLK_DRUM_JUMP_STEP_TAG_REQUIRED = "CLK_DRUM_JUMP_STEP_TAG_REQUIRED"
 CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
 CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
@@ -73,8 +72,8 @@ CLK_TEXT_ORDER_COMPARE = "CLK_TEXT_ORDER_COMPARE"
 CLK_TEXT_PAST_BANK = "CLK_TEXT_PAST_BANK"
 CLK_TEXT_PAST_BLOCK = "CLK_TEXT_PAST_BLOCK"
 CLK_TEXT_WINDOW_NOT_CONTIGUOUS = "CLK_TEXT_WINDOW_NOT_CONTIGUOUS"
-CLK_COPY_CONSTANT_INTO_BIT = "CLK_COPY_CONSTANT_INTO_BIT"
 CLK_COPY_WIDE_CONSTANT = "CLK_COPY_WIDE_CONSTANT"
+CLK_COPY_RANGE_NOT_CONSECUTIVE = "CLK_COPY_RANGE_NOT_CONSECUTIVE"
 CLK_MATH_BIT_OPERAND = "CLK_MATH_BIT_OPERAND"
 CLK_MATH_DEST_BANK = "CLK_MATH_DEST_BANK"
 CLK_SEARCH_RANGE_BANK = "CLK_SEARCH_RANGE_BANK"
@@ -157,7 +156,9 @@ class ClickValidationReport:
 def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
     if mode == "strict":
         return "error"
-    if code in (CLK_PROFILE_UNAVAILABLE, CLK_NOP_NO_COIL):
+    # The export refuses a Copy whose text runs past TXT1000 in every mode, so warn mode
+    # reports it as a warning, not a hint.
+    if code in (CLK_PROFILE_UNAVAILABLE, CLK_NOP_NO_COIL, "text-past-bank"):
         return "warning"
     return "hint"
 
@@ -219,6 +220,50 @@ def immediate_coil_not_y_text(at: str = "", found: str | None = None) -> str:
     if found is None:
         return f"immediate() on a coil{at} needs a Y output."
     return f"immediate() on a coil{at} needs a Y output, but it is mapped to {found}."
+
+
+RangeFault = Literal["empty", "descending", "scattered"]
+
+# One Copy family range that CLICK cannot hold as a range: its name, its fault, the
+# addresses that the export would write, and whether its tags are those CLICK addresses.
+RangeProblem = tuple[str, RangeFault, list[str], bool]
+
+_RANGE_RULES: dict[str, str] = {
+    "descending": "CLICK takes a range only in ascending order.",
+    "scattered": "CLICK takes a range only as consecutive addresses in one bank.",
+}
+
+_RANGE_ADVICE: dict[str, str] = {
+    "empty": "Select a range that holds CLICK addresses.",
+    "descending": "Remove .reverse(), or reverse the data in another way.",
+    "scattered": (
+        "Map the tags to consecutive addresses in one bank, or write one call for each run "
+        "of consecutive addresses."
+    ),
+}
+
+
+def _range_fact(name: str, fault: RangeFault, addresses: list[str], own: bool) -> str:
+    if fault == "empty":
+        return f"{name} holds no CLICK address."
+    if fault == "descending":
+        return f"{name} runs from {addresses[0]} down to {addresses[-1]}."
+    verb = "holds" if own else "maps onto"
+    return f"{name} {verb} [{','.join(addresses)}]."
+
+
+def range_not_consecutive_text(problems: list[RangeProblem]) -> str:
+    """Return what is wrong with each range, then each CLICK rule that it breaks, once."""
+    facts = [_range_fact(*problem) for problem in problems]
+    rules = dict.fromkeys(
+        _RANGE_RULES[fault] for _name, fault, _addresses, _own in problems if fault in _RANGE_RULES
+    )
+    return " ".join([*facts, *rules])
+
+
+def range_not_consecutive_advice(problems: list[RangeProblem]) -> str:
+    """Return the advice for each fault of the ranges, once."""
+    return " ".join(dict.fromkeys(_RANGE_ADVICE[fault] for _name, fault, _a, _o in problems))
 
 
 def immediate_coil_range_gap_text(at: str = "") -> str:
@@ -369,13 +414,6 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
             "Break the expression into intermediate math() steps with temporary tags."
         )
 
-    if code == CLK_COPY_CONVERTER_INCOMPATIBLE:
-        return (
-            "Converters require specific bank types: "
-            "to_text/to_binary need a numeric source and TXT destination; "
-            "to_value/to_ascii need a TXT source and numeric destination."
-        )
-
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
         return (
             "Use immediate() only on a contact, or on the target of out(), latch(), reset() "
@@ -407,6 +445,42 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     return ""
 
 
+# The CLK_ codes that laddercodec's codes replaced, and the codes that took their place.
+_REPLACED_CODES: dict[str, str] = {
+    "CLK_COPY_BANK_INCOMPATIBLE": "copy-bank-incompatible or bank-not-allowed",
+    "CLK_COPY_CONVERTER_INCOMPATIBLE": (
+        "copy-converter-bank, copy-txt-needs-convert or option-not-offered"
+    ),
+    "CLK_COPY_CONSTANT_INTO_BIT": "constant-into-bit or bank-not-allowed",
+    "CLK_PACK_TEXT_BANK_INCOMPATIBLE": "pack-kind-mismatch or copy-bank-incompatible",
+}
+
+
+def check_allowed_codes(allow: Collection[str]) -> None:
+    """Raise ``ValueError`` for a name in *allow* that no finding can have.
+
+    Otherwise a misspelt or removed code lets nothing through, and the caller is not told.
+    """
+    from laddercodec import Code
+
+    if isinstance(allow, str):
+        # A string is a collection of its letters, so no letter would match a code.
+        raise ValueError(f"allow= is the string {allow!r}. Pass allow= a list of codes.")
+    known = {value for name, value in globals().items() if name.startswith("CLK_")}
+    known |= {code.value for code in Code}
+    for name in allow:
+        if name in known:
+            continue
+        if name in _REPLACED_CODES:
+            raise ValueError(
+                f"pyrung no longer reports {name}. Pass {_REPLACED_CODES[name]} to allow= instead."
+            )
+        raise ValueError(
+            f"allow= names {name!r}. It is neither a pyrung code nor a laddercodec code. "
+            "Pass the code that the finding names."
+        )
+
+
 __all__ = [
     "ValidationMode",
     "FindingSeverity",
@@ -434,15 +508,13 @@ __all__ = [
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
     "CLK_BANK_WRONG_ROLE",
-    "CLK_COPY_BANK_INCOMPATIBLE",
-    "CLK_COPY_CONVERTER_INCOMPATIBLE",
-    "CLK_PACK_TEXT_BANK_INCOMPATIBLE",
     "CLK_DRUM_JUMP_STEP_TAG_REQUIRED",
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_CONTACT_MUST_BE_X",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
+    "CLK_COPY_RANGE_NOT_CONSECUTIVE",
     "CLK_TIMER_PRESET_OVERFLOW",
     "CLK_OUT_UNIT_UNSUPPORTED",
     "CLK_TIMER_PAIR_MISMATCH",
@@ -461,7 +533,6 @@ __all__ = [
     "CLK_TEXT_PAST_BANK",
     "CLK_TEXT_PAST_BLOCK",
     "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
-    "CLK_COPY_CONSTANT_INTO_BIT",
     "CLK_COPY_WIDE_CONSTANT",
     "CLK_MATH_BIT_OPERAND",
     "CLK_MATH_DEST_BANK",

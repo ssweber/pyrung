@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from laddercodec import Code
 
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
@@ -15,11 +16,8 @@ from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
-    CLK_COPY_BANK_INCOMPATIBLE,
-    CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_EXPR_ONLY_IN_MATH,
-    CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
@@ -230,7 +228,7 @@ def test_r8_copy_family_incompatible_pair():
     tag_map = TagMap([source.map_to(x[1]), dest.map_to(ds[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_COPY_BANK_INCOMPATIBLE in _codes(report)
+    assert Code.COPY_BANK_INCOMPATIBLE in _codes(report)
 
 
 def test_r8_copy_family_compatible_pair():
@@ -245,7 +243,7 @@ def test_r8_copy_family_compatible_pair():
     tag_map = TagMap([source.map_to(x[1]), dest.map_to(y[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_COPY_BANK_INCOMPATIBLE not in _codes(report)
+    assert Code.COPY_BANK_INCOMPATIBLE not in _codes(report)
 
 
 def test_r8_blockcopy_reports_each_incompatible_bank_pair_once():
@@ -258,7 +256,7 @@ def test_r8_blockcopy_reports_each_incompatible_bank_pair_once():
     findings = [
         finding
         for finding in (*report.errors, *report.warnings, *report.hints)
-        if finding.code == CLK_COPY_BANK_INCOMPATIBLE
+        if finding.code == Code.COPY_BANK_INCOMPATIBLE
     ]
 
     assert len(findings) == 1
@@ -316,7 +314,7 @@ def test_stage3_recurses_into_forloop_children_for_r8():
     tag_map = TagMap([source.map_to(x[1]), dest.map_to(ds[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_COPY_BANK_INCOMPATIBLE in _codes(report)
+    assert Code.COPY_BANK_INCOMPATIBLE in _codes(report)
 
 
 def test_unmapped_target_emits_bank_unresolved():
@@ -379,7 +377,7 @@ def test_pack_text_stage3_compatible_banks():
     tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_PACK_TEXT_BANK_INCOMPATIBLE not in _codes(report)
+    assert not {Code.PACK_KIND_MISMATCH, Code.COPY_BANK_INCOMPATIBLE} & set(_codes(report))
 
 
 def test_pack_text_stage3_incompatible_source_bank():
@@ -396,7 +394,7 @@ def test_pack_text_stage3_incompatible_source_bank():
     findings = [
         finding
         for finding in (*report.errors, *report.warnings, *report.hints)
-        if finding.code == CLK_PACK_TEXT_BANK_INCOMPATIBLE
+        if finding.code == Code.PACK_KIND_MISMATCH
     ]
     assert len(findings) == 1
 
@@ -661,7 +659,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(txt[1])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+        assert Code.COPY_CONVERTER_BANK not in _codes(report)
 
     def test_to_text_rejects_txt_source(self):
         source = Char("Source")
@@ -674,7 +672,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        assert Code.COPY_CONVERTER_BANK in _codes(report)
 
     def test_to_text_rejects_numeric_dest(self):
         source = Int("Source")
@@ -687,7 +685,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        assert Code.COPY_CONVERTER_BANK in _codes(report)
 
     def test_to_binary_valid(self):
         source = Int("Source")
@@ -700,7 +698,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(txt[1])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+        assert Code.COPY_CONVERTER_BANK not in _codes(report)
 
     def test_to_binary_rejects_txt_source(self):
         source = Char("Source")
@@ -713,7 +711,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        assert Code.COPY_CONVERTER_BANK in _codes(report)
 
     def test_to_value_valid_txt_source_numeric_dest(self):
         source = Char("Source")
@@ -726,7 +724,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(txt[1]), dest.map_to(ds[1])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+        assert Code.COPY_CONVERTER_BANK not in _codes(report)
 
     def test_to_value_rejects_numeric_source(self):
         source = Int("Source")
@@ -739,7 +737,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        assert Code.COPY_CONVERTER_BANK in _codes(report)
 
     def test_to_value_rejects_txt_dest(self):
         source = Char("Source")
@@ -752,7 +750,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        assert Code.COPY_CONVERTER_BANK in _codes(report)
 
     def test_to_ascii_valid(self):
         source = Char("Source")
@@ -765,7 +763,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(txt[1]), dest.map_to(ds[1])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+        assert Code.COPY_CONVERTER_BANK not in _codes(report)
 
     def test_to_ascii_rejects_numeric_source(self):
         source = Int("Source")
@@ -778,7 +776,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+        assert Code.COPY_CONVERTER_BANK in _codes(report)
 
     def test_copy_without_converter_no_converter_finding(self):
         """Plain copy (no convert=) should not emit converter findings."""
@@ -792,7 +790,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+        assert Code.COPY_CONVERTER_BANK not in _codes(report)
 
     def test_blockcopy_to_value_valid(self):
         dest = Block("Dest", TagType.INT, 1, 3)
@@ -804,7 +802,7 @@ class TestConverterBankCompatibility:
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds.select(1, 3))], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+        assert Code.COPY_CONVERTER_BANK not in _codes(report)
 
     def test_blockcopy_to_value_rejects_numeric_source(self):
         dest = Block("Dest", TagType.INT, 1, 3)
@@ -819,7 +817,7 @@ class TestConverterBankCompatibility:
         findings = [
             finding
             for finding in (*report.errors, *report.warnings, *report.hints)
-            if finding.code == CLK_COPY_CONVERTER_INCOMPATIBLE
+            if finding.code == Code.COPY_CONVERTER_BANK
         ]
         assert len(findings) == 1
 
@@ -837,7 +835,7 @@ class TestConverterBankCompatibility:
         converter_findings = [
             f
             for f in (*report.errors, *report.warnings, *report.hints)
-            if f.code == CLK_COPY_CONVERTER_INCOMPATIBLE
+            if f.code == Code.COPY_CONVERTER_BANK
         ]
         assert converter_findings
         assert all(f.suggestion for f in converter_findings)
@@ -854,8 +852,7 @@ class TestConverterBankCompatibility:
         tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="strict")
         assert any(
-            f.code == CLK_COPY_CONVERTER_INCOMPATIBLE and f.severity == "error"
-            for f in report.errors
+            f.code == Code.COPY_CONVERTER_BANK and f.severity == "error" for f in report.errors
         )
 
 

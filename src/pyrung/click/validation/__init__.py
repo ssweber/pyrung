@@ -6,19 +6,19 @@ profile data for Stage 3 (R6-R8).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.validation.walker import ProgramLocation, walk_program
 
+from .fields import evaluate_copy_family
 from .findings import (
     CLK_ADDRESS_IDENTITY_CONFLICT,
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_COMPARE_HEX_MIX,
-    CLK_COPY_BANK_INCOMPATIBLE,
-    CLK_COPY_CONSTANT_INTO_BIT,
-    CLK_COPY_CONVERTER_INCOMPATIBLE,
+    CLK_COPY_RANGE_NOT_CONSECUTIVE,
     CLK_COPY_WIDE_CONSTANT,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_EXPR_ONLY_IN_MATH,
@@ -51,7 +51,6 @@ from .findings import (
     CLK_NICKNAME_TOO_LONG,
     CLK_NOP_NO_COIL,
     CLK_OUT_UNIT_UNSUPPORTED,
-    CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     CLK_PTR_BLOCK_OFFSET,
     CLK_PTR_CONTEXT_ONLY_COPY,
@@ -81,18 +80,17 @@ from .findings import (
 )
 from .hardware import (
     _evaluate_coil_targets,
-    _evaluate_copy_compatibility,
     _evaluate_drums,
     _evaluate_math_dest_bank,
     _evaluate_modbus_banks,
     _evaluate_out_variant_unit,
-    _evaluate_pack_text,
     _evaluate_role_assignments,
     _evaluate_search_banks,
     _evaluate_text_past_bank,
     _evaluate_timer_pairs,
     _evaluate_timer_preset_floor,
     _evaluate_timer_preset_overflow,
+    _evaluate_wide_copy_constant,
     _evaluate_write_targets,
 )
 from .hardware import (
@@ -212,6 +210,25 @@ def _export_bundle(program: Program, tag_map: TagMap) -> Any:
         return None  # Not exportable: the export says why.
 
 
+def _field_renderer(program: Program, tag_map: TagMap) -> Any:
+    """Return the export's renderer, which spells each operand as the export writes it."""
+    from pyrung.click.ladder._exporter import _LadderExporter
+
+    return _LadderExporter(tag_map=tag_map, program=program)
+
+
+def _site_key(location: ProgramLocation) -> ProgramLocation:
+    """Return the location of the instruction that *location* is in."""
+    return replace(location, arg_path="")
+
+
+# pyrung's pointer codes, and the laddercodec code for the same fault.
+_POINTER_FACT_CODES = {
+    CLK_PTR_POINTER_MUST_BE_DS: "pointer-not-ds",
+    CLK_PTR_CONTEXT_ONLY_COPY: "pointer-outside-copy",
+}
+
+
 def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding]:
     """Return a CLK_STEP_LIMIT finding if the estimated steps exceed or near CLICK's 8000."""
     from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
@@ -255,8 +272,30 @@ def validate_click_program(
     findings: list[ClickFinding] = []
     findings.extend(_evaluate_address_identity_conflicts(program, facts, tag_map, mode))
     findings.extend(_evaluate_nickname_lengths(program, facts, tag_map, mode))
+    # laddercodec judges the Copy family. Where it raised a pointer code, pyrung's own
+    # pointer finding for that instruction would report the same fault twice. pyrung
+    # reports one finding for each laddercodec code, so that finding takes the advice of
+    # every pyrung finding that it replaces. That advice names each pointer that the tag
+    # map maps.
+    exporter = _field_renderer(program, tag_map)
+    copy_family = {
+        _site_key(base_location): evaluate_copy_family(
+            instruction, base_location, exporter, mode, resolver
+        )
+        for instruction, base_location in instruction_sites
+    }
+    pointer_advice: dict[tuple[ProgramLocation, str], list[str]] = {}
     for fact in facts.operands:
-        findings.extend(_evaluate_fact(fact, tag_map, mode, resolver))
+        key = _site_key(fact.location)
+        judged = copy_family.get(key)
+        for finding in _evaluate_fact(fact, tag_map, mode, resolver):
+            code = _POINTER_FACT_CODES.get(finding.code)
+            if judged is not None and code is not None and code in judged.codes:
+                advice = pointer_advice.setdefault((key, code), [])
+                if finding.suggestion and finding.suggestion not in advice:
+                    advice.append(finding.suggestion)
+                continue
+            findings.append(finding)
 
     findings.extend(
         _evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode, resolver)
@@ -288,7 +327,13 @@ def validate_click_program(
         findings.extend(_evaluate_rand_bounds(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_math_bit_operands(instruction, base_location, mode))
         findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
+        key = _site_key(base_location)
+        judged = copy_family[key]
         findings.extend(_evaluate_text_past_bank(instruction, base_location, mode, resolver))
+        findings.extend(_evaluate_wide_copy_constant(instruction, base_location, mode, resolver))
+        for finding in judged.findings:
+            advice = pointer_advice.get((key, finding.code))
+            findings.append(replace(finding, suggestion=" ".join(advice)) if advice else finding)
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -318,14 +363,6 @@ def validate_click_program(
             )
             findings.extend(
                 _evaluate_coil_targets(instruction, base_location, active_profile, mode, resolver)
-            )
-            findings.extend(
-                _evaluate_copy_compatibility(
-                    instruction, base_location, tag_map, active_profile, mode, resolver
-                )
-            )
-            findings.extend(
-                _evaluate_pack_text(instruction, base_location, tag_map, mode, resolver)
             )
             findings.extend(
                 _evaluate_drums(instruction, base_location, tag_map, active_profile, mode, resolver)
@@ -384,14 +421,12 @@ __all__ = [
     "CLK_COMPARE_HEX_MIX",
     "CLK_NOP_NO_COIL",
     "CLK_BANK_WRONG_ROLE",
-    "CLK_COPY_BANK_INCOMPATIBLE",
-    "CLK_COPY_CONVERTER_INCOMPATIBLE",
-    "CLK_PACK_TEXT_BANK_INCOMPATIBLE",
     "CLK_DRUM_JUMP_STEP_TAG_REQUIRED",
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_CONTACT_MUST_BE_X",
+    "CLK_COPY_RANGE_NOT_CONSECUTIVE",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
     "CLK_OUT_UNIT_UNSUPPORTED",
@@ -411,7 +446,6 @@ __all__ = [
     "CLK_TEXT_PAST_BANK",
     "CLK_TEXT_PAST_BLOCK",
     "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
-    "CLK_COPY_CONSTANT_INTO_BIT",
     "CLK_COPY_WIDE_CONSTANT",
     "CLK_MATH_BIT_OPERAND",
     "CLK_MATH_DEST_BANK",

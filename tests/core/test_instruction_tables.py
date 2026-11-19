@@ -27,7 +27,7 @@ from pyrung.circuitpy.validation import _evaluate_timer_resolution
 from pyrung.click.ladder.instructions import _InstructionMixin
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
-from pyrung.click.validation import hardware
+from pyrung.click.validation import fields, hardware
 from pyrung.core import Int
 from pyrung.core.analysis.causal.why import _INSTRUCTION_LABELS
 from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
@@ -100,7 +100,7 @@ KIND: dict[type, str] = {
     PackWordsInstruction: "copies_data",
     UnpackToBitsInstruction: "copies_data",
     UnpackToWordsInstruction: "copies_data",
-    PackTextInstruction: "pack_text",  # Has its own check, _evaluate_pack_text.
+    PackTextInstruction: "copies_data",
     CalcInstruction: "other_writer",
     SearchInstruction: "other_writer",
     ShiftInstruction: "other_writer",
@@ -152,8 +152,8 @@ TABLES = [
         _of_kinds("timer", "out_timer", "counter", "drum"),
     ),
     Table(
-        "hardware._COPY_COMPATIBILITY_FIELDS",
-        _hardware_keys(hardware._COPY_COMPATIBILITY_FIELDS),
+        "fields._COPY_FAMILY_FIELDS",
+        _hardware_keys(fields._COPY_FAMILY_FIELDS),
         _of_kinds("copies_data"),
     ),
     Table(
@@ -204,7 +204,6 @@ _PIN_CONDITIONS = frozenset(
 
 # Declared writes that the two hardware tables do not check, and why that is right.
 _WRITES_CHECKED_ELSEWHERE: dict[tuple[str, str], str] = {
-    (CopyInstruction.__name__, "dest"): "the table names it target, a property on dest",
     (EventDrumInstruction.__name__, "outputs"): "_evaluate_drums checks outputs",
     (TimeDrumInstruction.__name__, "outputs"): "_evaluate_drums checks outputs",
     (TimeEventDrumInstruction.__name__, "outputs"): "_evaluate_drums checks outputs",
@@ -224,18 +223,18 @@ def _writes_to_check() -> list[object]:
 
 
 def _hardware_fields() -> list[tuple[str, str]]:
-    fields = (
+    found = (
         set(hardware._WRITE_TARGET_FIELDS)
         | set(hardware._ROLE_ASSIGNMENT_FIELDS)
         | set(hardware._MODBUS_BANKS)
     )
     for name, field_names in hardware._TIMER_PRESET_FIELDS.items():
-        fields.update((name, field) for field in field_names)
+        found.update((name, field) for field in field_names)
     for name, pairs in hardware._TIMER_PAIR_FIELDS.items():
-        fields.update((name, field) for pair in pairs for field in pair)
-    for name, (_form, source, dest) in hardware._COPY_COMPATIBILITY_FIELDS.items():
-        fields.update({(name, source), (name, dest)})
-    return sorted(fields)
+        found.update((name, field) for pair in pairs for field in pair)
+    for name, (source, dest) in fields._COPY_FAMILY_FIELDS.items():
+        found.update({(name, source), (name, dest)})
+    return sorted(found)
 
 
 def _assigned_fields(cls: type) -> set[str]:
@@ -305,12 +304,14 @@ def test_every_pin_is_exported() -> None:
 @pytest.mark.parametrize("cls,field", _writes_to_check())
 def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None:
     # Timers, counters and drums reach this check through a role.  Send and Receive reach
-    # it through the banks that CLICK's help pages list for them.
+    # it through the banks that CLICK's help pages list for them.  laddercodec checks the
+    # destination of each Copy family instruction.
     name = cls.__name__
     checked = (
         hardware._WRITE_TARGET_FIELDS
         | set(hardware._ROLE_ASSIGNMENT_FIELDS)
         | set(hardware._MODBUS_BANKS)
+        | {(kind, dest) for kind, (_source, dest) in fields._COPY_FAMILY_FIELDS.items()}
     )
     assert (name, field) in checked, (
         f"nothing checks that CLICK can write {name}.{field}: add it to a hardware table, or to "

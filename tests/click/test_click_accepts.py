@@ -15,18 +15,17 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from laddercodec import Code
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
-    CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_WIDE_CONSTANT,
     CLK_MATH_MODE_MIXED,
     CLK_MATH_RANGE_NOT_CONTIGUOUS,
     CLK_MATH_WIDE_CONSTANT,
     CLK_RAND_BOUND_TYPE,
-    CLK_TEXT_PAST_BANK,
     validate_click_program,
 )
 from pyrung.core import Word, randint, to_ascii, to_value
@@ -94,14 +93,9 @@ def _not_writable_messages(write) -> list[str]:
     [
         (lambda: latch(sc[162]), "latch()", "Only out() can write it."),
         (lambda: reset(sc[162]), "reset()", "Only out() can write it."),
-        (
-            lambda: blockcopy(ds.select(1, 2), yd.select(1, 2)),
-            "blockcopy()",
-            "Use copy() or math() instead.",
-        ),
         (lambda: out(sc[1]), "out()", "Write to another address."),
     ],
-    ids=["latch-sc", "reset-sc", "blockcopy-yd", "out-sc1"],
+    ids=["latch-sc", "reset-sc", "out-sc1"],
 )
 def test_a_refused_write_names_the_call_and_the_calls_that_can_write_there(write, call, advice):
     messages = _not_writable_messages(write)
@@ -109,6 +103,11 @@ def test_a_refused_write_names_the_call_and_the_calls_that_can_write_there(write
     for message in messages:
         assert message.startswith(f"CLICK does not let {call} write ")
         assert message.endswith(f". {advice}")
+
+
+def test_a_block_copy_into_yd_is_refused():
+    # rule-decisions B1: CLICK refuses a Block copy from DS into YD (OBJ-004).
+    _refused(lambda: blockcopy(ds.select(1, 2), yd.select(1, 2)), "bank-not-allowed")
 
 
 # --- Math into SD and YD ----------------------------------------------------------------
@@ -155,7 +154,7 @@ def test_a_copy_of_text_into_yd_exports(convert, token):
 
 def test_a_copy_of_a_bit_into_yd_is_still_refused():
     # copy_single.answers.json: "single C1 -> YD0" is refused (OBJ-024).
-    _refused(lambda: copy(c[1], yd[1]), CLK_COPY_BANK_INCOMPATIBLE)
+    _refused(lambda: copy(c[1], yd[1]), "copy-bank-incompatible")
 
 
 # --- Block copy into SD and between TXT -------------------------------------------------
@@ -174,7 +173,7 @@ def test_a_block_copy_into_sd31_exports(bank):
 
 def test_a_block_copy_onto_a_read_only_sd_is_still_refused():
     # editor-answers A7: DS1..DS2 into SD29 is refused (OBJ-018), since SD30 is read-only.
-    _refused(lambda: blockcopy(ds.select(1, 2), sd.select(29, 30)), CLK_BANK_NOT_WRITABLE)
+    _refused(lambda: blockcopy(ds.select(1, 2), sd.select(29, 30)), "not-writable")
 
 
 def test_a_block_copy_between_txt_exports():
@@ -270,9 +269,11 @@ def test_a_fill_of_one_yd_exports_as_the_copy_click_accepts():
     _exports_as(lambda: fill(5, yd.select(1, 1)), "copy(5h,YD1)")
 
 
-def test_a_fill_of_several_yd_is_still_refused():
-    # CLICK's Fill was not asked about YD, so the Fill rule stays.
-    _refused(lambda: fill(5, yd.select(1, 2)), CLK_BANK_NOT_WRITABLE)
+@pytest.mark.parametrize("start, end", [(0, 1), (1, 2), (1, 8)])
+def test_a_fill_of_several_yd_exports(start, end):
+    # rule-decisions N6: CLICK accepts a Fill of 5 into every range from YD0..YD1 to
+    # YD1..YD8. It refuses YD0..YD9 (OBJ-003), which pyrung's yd block cannot name.
+    _exports_as(lambda: fill(5, yd.select(start, end)), f"fill(5h,YD{start}..YD{end})")
 
 
 # --- Copy of a number into text ---------------------------------------------------------
@@ -374,9 +375,14 @@ def test_an_imported_plain_copy_across_text_exports_its_converter():
 
 def test_a_number_constant_past_txt1000_is_refused():
     # CLICK saves -5 as two characters, so its Copy into TXT1000 refuses it (OBJ-003).
-    assert CLK_TEXT_PAST_BANK in _codes(lambda: copy(-5, txt[1000]))
-    with pytest.raises(LadderExportError, match=r"2-character constant, which runs past TXT1000"):
+    assert Code.TEXT_PAST_BANK in _codes(lambda: copy(-5, txt[1000]))
+    with pytest.raises(LadderExportError, match=Code.TEXT_PAST_BANK):
         pyrung_to_ladder(_program(lambda: copy(-5, txt[1000])), TagMap())
+    # With laddercodec's code allowed, the export's own refusal is reached.
+    with pytest.raises(LadderExportError, match=r"2-character constant, which runs past TXT1000"):
+        pyrung_to_ladder(
+            _program(lambda: copy(-5, txt[1000])), TagMap(), allow=(Code.TEXT_PAST_BANK,)
+        )
 
 
 def test_a_fill_of_one_txt_with_a_number_is_refused():
@@ -436,8 +442,7 @@ def test_a_constant_that_fits_in_16_bits_exports_into_a_word(write, token):
         (lambda: copy(-32769, dh[1]), -32769, ()),
         (lambda: copy(70000.5, dh[1]), 70000.5, ()),
         (lambda: fill(70000, dh.select(1, 1)), 70000, ()),
-        # A Fill into several YD is refused for the bank too.
-        (lambda: fill(70000, yd.select(1, 2)), 70000, (CLK_BANK_NOT_WRITABLE,)),
+        (lambda: fill(70000, yd.select(1, 2)), 70000, ()),
     ],
     ids=[
         "copy-70000-into-DH",

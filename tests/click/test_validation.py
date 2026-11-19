@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from laddercodec import Code
 
 from pyrung.click import ClickBlocks, TagMap
 
@@ -126,6 +127,8 @@ class TestAllowedCopyWithDSPointer:
             in {
                 CLK_PTR_CONTEXT_ONLY_COPY,
                 CLK_PTR_POINTER_MUST_BE_DS,
+                Code.POINTER_NOT_DS,
+                Code.POINTER_OUTSIDE_COPY,
                 CLK_PTR_EXPR_NOT_ALLOWED,
                 CLK_EXPR_ONLY_IN_MATH,
                 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
@@ -148,6 +151,7 @@ class TestAllowedCopyWithDSPointer:
 
         assert CLK_PTR_DS_UNVERIFIED not in codes
         assert CLK_PTR_POINTER_MUST_BE_DS not in codes
+        assert Code.POINTER_NOT_DS not in codes
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +175,7 @@ class TestNonDSPointer:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_PTR_POINTER_MUST_BE_DS for f in report.hints)
+        assert any(f.code == Code.POINTER_NOT_DS for f in report.hints)
         assert not report.errors
 
     def test_named_dd_block_slot_is_rejected_without_tag_map_entry(self):
@@ -186,7 +190,7 @@ class TestNonDSPointer:
         report = validate_click_program(prog, TagMap(include_system=False), mode="strict")
         codes = _finding_codes(report)
 
-        assert CLK_PTR_POINTER_MUST_BE_DS in codes
+        assert Code.POINTER_NOT_DS in codes
         assert CLK_PTR_DS_UNVERIFIED not in codes
 
     def test_strict_mode_gives_error(self):
@@ -204,7 +208,7 @@ class TestNonDSPointer:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_PTR_POINTER_MUST_BE_DS for f in report.errors)
+        assert any(f.code == Code.POINTER_NOT_DS for f in report.errors)
         assert not report.hints
 
 
@@ -1401,7 +1405,7 @@ class TestSuggestionContent:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        r2_findings = [f for f in report.hints if f.code == CLK_PTR_POINTER_MUST_BE_DS]
+        r2_findings = [f for f in report.hints if f.code == Code.POINTER_NOT_DS]
         assert r2_findings
         suggestion = r2_findings[0].suggestion
         assert suggestion is not None

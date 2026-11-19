@@ -6,7 +6,16 @@ import re
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
+from pyclickplc.addresses import format_address_display, parse_address
+
 from pyrung.click.capabilities import single_register_fill_dest
+from pyrung.click.validation.findings import (
+    CLK_COPY_RANGE_NOT_CONSECUTIVE,
+    RangeFault,
+    RangeProblem,
+    range_not_consecutive_advice,
+    range_not_consecutive_text,
+)
 from pyrung.click.validation.hardware import constant_text_past_txt
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
@@ -14,10 +23,19 @@ from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.validation.render import operand_name
 
 from ._loop_items import is_own_rung, loop_item_rung
-from .translator import _quote
+from .translator import _compact_contiguous_range, _quote
+
+
+def _display_address(name: str) -> str:
+    """Return a tag name as CLICK writes its address, such as Y001 for Y1."""
+    try:
+        return format_address_display(*parse_address(name))
+    except ValueError:
+        return name
 
 
 def _exported_converter(instruction: Any) -> CopyConverter | None:
@@ -287,6 +305,48 @@ class _InstructionMixin:
             source = self._render_operand(value, path=f"{path}.value", source=instruction)
         return self._fn("copy", source, dest, **oneshot_kw)
 
+    def _range_text(
+        self, value: Any, *, path: str, instruction: Any
+    ) -> tuple[str, RangeProblem | None]:
+        """Return a Copy family range as the export writes it, and its problem, if any.
+
+        The render writes a range that is not consecutive ascending addresses as a list,
+        such as ``[DS1,DS5]``. CLICK has no list form.
+        """
+        text = self._render_operand(value, path=path, source=instruction)
+        if not text.startswith("["):
+            return text, None
+        addresses = [address for address in text[1:-1].split(",") if address]
+        fault: RangeFault
+        if not addresses:
+            fault = "empty"
+        elif len(addresses) > 1 and _compact_contiguous_range(addresses[::-1]) is not None:
+            fault = "descending"
+        else:
+            fault = "scattered"
+        block_range = value.value if isinstance(value, ImmediateRef) else value
+        own = [_display_address(tag.name) for tag in block_range.tags()] == addresses
+        return text, (operand_name(value), fault, addresses, own)
+
+    def _render_run(self, value: Any, *, path: str, instruction: Any) -> str:
+        """Render a Copy family range, and refuse one that CLICK cannot hold as a range.
+
+        The export refuses it even when CLK_COPY_RANGE_NOT_CONSECUTIVE is allowed, so it
+        never writes a list.
+        """
+        text, problem = self._range_text(value, path=path, instruction=instruction)
+        if problem is not None:
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"{CLK_COPY_RANGE_NOT_CONSECUTIVE}: "
+                    f"{range_not_consecutive_text([problem])} "
+                    f"{range_not_consecutive_advice([problem])}"
+                ),
+                source=instruction,
+            )
+        return text
+
     def _refuse_constant_text_past_txt(self, instruction: Any, dest: str, *, path: str) -> None:
         # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it,
         # even when CLK_TEXT_PAST_BANK is allowed.
@@ -374,8 +434,8 @@ class _InstructionMixin:
             return self._fn("copy", copy_source, dest, **convert_kw, **oneshot_kw)
         if instruction_type == "BlockCopyInstruction":
             convert_kw = {}
-            block_source = self._render_operand(
-                instruction.source, path=f"{path}.source", source=instruction
+            block_source = self._render_run(
+                instruction.source, path=f"{path}.source", instruction=instruction
             )
             if instruction.convert is not None:
                 convert_kw["convert"] = self._render_converter(
@@ -384,7 +444,7 @@ class _InstructionMixin:
             return self._fn(
                 "blockcopy",
                 block_source,
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                self._render_run(instruction.dest, path=f"{path}.dest", instruction=instruction),
                 **convert_kw,
                 **oneshot_kw,
             )
@@ -394,7 +454,7 @@ class _InstructionMixin:
                 return self._single_register_fill_token(
                     instruction, single, path=path, oneshot_kw=oneshot_kw
                 )
-            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
+            dest = self._render_run(instruction.dest, path=f"{path}.dest", instruction=instruction)
             with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
                 fill_value = self._render_operand(
                     instruction.value, path=f"{path}.value", source=instruction
@@ -446,10 +506,10 @@ class _InstructionMixin:
         if instruction_type == "PackBitsInstruction":
             return self._fn(
                 "pack_bits",
-                self._render_operand(
+                self._render_run(
                     instruction.bit_block,
                     path=f"{path}.bit_block",
-                    source=instruction,
+                    instruction=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 **oneshot_kw,
@@ -457,10 +517,10 @@ class _InstructionMixin:
         if instruction_type == "PackWordsInstruction":
             return self._fn(
                 "pack_words",
-                self._render_operand(
+                self._render_run(
                     instruction.word_block,
                     path=f"{path}.word_block",
-                    source=instruction,
+                    instruction=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 **oneshot_kw,
@@ -472,10 +532,10 @@ class _InstructionMixin:
             pt_kw.update(oneshot_kw)
             return self._fn(
                 "pack_text",
-                self._render_operand(
+                self._render_run(
                     instruction.source_range,
                     path=f"{path}.source_range",
-                    source=instruction,
+                    instruction=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 **pt_kw,
@@ -484,10 +544,10 @@ class _InstructionMixin:
             return self._fn(
                 "unpack_to_bits",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
-                self._render_operand(
+                self._render_run(
                     instruction.bit_block,
                     path=f"{path}.bit_block",
-                    source=instruction,
+                    instruction=instruction,
                 ),
                 **oneshot_kw,
             )
@@ -495,10 +555,10 @@ class _InstructionMixin:
             return self._fn(
                 "unpack_to_words",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
-                self._render_operand(
+                self._render_run(
                     instruction.word_block,
                     path=f"{path}.word_block",
-                    source=instruction,
+                    instruction=instruction,
                 ),
                 **oneshot_kw,
             )

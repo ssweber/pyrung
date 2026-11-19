@@ -44,6 +44,7 @@ dependencies = [
     "pymodbus>=3.12,<4",
     "executing>=2.2.0",
     "tomlkit>=0.13.3",
+    "laddercodec",
 ]
 
 
@@ -99,6 +100,12 @@ packages = ["src/pyrung"]
 required-version = ">=0.13.8"
 exclude-newer = "7 days"
 exclude-newer-package = { pyclickplc = "0 days", ty = "0 days" }
+
+[tool.uv.sources]
+# uv builds laddercodec from its main branch until pyrung and laddercodec release together.
+# A built wheel drops this source and names `laddercodec` with no version. Pin a released
+# version before you publish.
+laddercodec = { git = "https://github.com/ssweber/laddercodec", branch = "main" }
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
