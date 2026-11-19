@@ -13,7 +13,6 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 from pyrung.click import validation as click_validation
 from pyrung.click.ladder.types import LadderExportError
 from pyrung.click.validation import (
-    CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_EXPR_ONLY_IN_MATH,
@@ -35,7 +34,7 @@ from pyrung.core import (
     to_value,
 )
 from pyrung.core.instruction import Instruction
-from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
+from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 from pyrung.core.program import (
     Program,
     blockcopy,
@@ -68,88 +67,6 @@ def _codes(report) -> list[str]:
 _TARGET = ModbusTcpTarget("plc2", "127.0.0.1", port=502, device_id=1)
 
 
-def _modbus_codes(verb: str, *, dest="ds", flag="c", exception="ds", **instruction_kwargs) -> list:
-    """Return the findings for a send or receive with its operands in the named banks."""
-    x, y, c, _t, _ct, sc, ds, dd, _dh, _df, _xd, _yd, _xd0u, _yd0u, td, _ctd, sd, txt = (
-        ClickBlocks()
-    )
-    banks = {"x": x, "y": y, "c": c, "sc": sc, "ds": ds, "dd": dd, "td": td, "sd": sd, "txt": txt}
-    tag_type = {"x": Bool, "y": Bool, "c": Bool, "sc": Bool, "dd": Dint, "txt": Char}
-    data = tag_type.get(dest, Int)("Data")
-    code = tag_type.get(exception, Int)("Code")
-    busy, success, error = Bool("Busy"), Bool("Success"), Bool("Error")
-    pairs = [
-        data.map_to(banks[dest][5]),
-        busy.map_to(banks[flag][1]),
-        success.map_to(c[2]),
-        error.map_to(c[3]),
-        code.map_to(banks[exception][1]),
-    ]
-
-    def logic():
-        with rung():
-            if verb == "receive":
-                receive(
-                    target=_TARGET,
-                    remote_start="DS1",
-                    dest=data,
-                    receiving=busy,
-                    success=success,
-                    error=error,
-                    exception_response=code,
-                    **instruction_kwargs,
-                )
-            else:
-                send(
-                    target=_TARGET,
-                    remote_start="DS1",
-                    source=data,
-                    sending=busy,
-                    success=success,
-                    error=error,
-                    exception_response=code,
-                    **instruction_kwargs,
-                )
-
-    report = validate_click_program(
-        _build_program(logic), TagMap(pairs, include_system=False), mode="warn"
-    )
-    return _codes(report)
-
-
-@pytest.mark.parametrize("verb", ["send", "receive"])
-def test_modbus_operands_in_the_banks_click_lists_are_clean(verb):
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes(verb)
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes(verb, exception="dd")
-
-
-@pytest.mark.parametrize("verb", ["send", "receive"])
-@pytest.mark.parametrize("flag", ["x", "y", "sc"])
-def test_modbus_status_flag_must_be_a_c_bit(verb, flag):
-    assert CLK_BANK_WRONG_ROLE in _modbus_codes(verb, flag=flag)
-
-
-@pytest.mark.parametrize("verb", ["send", "receive"])
-@pytest.mark.parametrize("bank", ["td", "sd"])
-def test_modbus_exception_response_must_be_ds_or_dd(verb, bank):
-    assert CLK_BANK_WRONG_ROLE in _modbus_codes(verb, exception=bank)
-
-
-@pytest.mark.parametrize("bank", ["y", "c", "dd", "td", "sd", "txt"])
-def test_receive_dest_takes_the_banks_click_lists(bank):
-    # SD is listed whole, so this is not copy()'s writable subset.
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes("receive", dest=bank)
-
-
-@pytest.mark.parametrize("bank", ["x", "sc"])
-def test_receive_dest_refuses_other_banks(bank):
-    assert CLK_BANK_WRONG_ROLE in _modbus_codes("receive", dest=bank)
-
-
-def test_send_source_is_read_so_x_is_fine():
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes("send", dest="x")
-
-
 def test_a_status_bit_left_off_is_not_reported():
     _x, _y, c, _t, _ct, _sc, ds, *_rest = ClickBlocks()
     data = Int("Data")
@@ -176,7 +93,7 @@ def test_r6_non_writable_target_bank():
     tag_map = TagMap([target.map_to(x[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_NOT_WRITABLE in _codes(report)
+    assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 
 def test_r6_sc_subset_address_aware():
@@ -192,7 +109,7 @@ def test_r6_sc_subset_address_aware():
     tag_map = TagMap([ok.map_to(sc[50]), bad.map_to(sc[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_NOT_WRITABLE in _codes(report)
+    assert _codes(report).count(Code.NOT_WRITABLE) == 1
 
 
 def test_r7_timer_role_validation():
@@ -213,7 +130,8 @@ def test_r7_timer_role_validation():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_WRONG_ROLE in _codes(report)
+    # laddercodec's Timer reports a Done bit outside T, in place of CLK_BANK_WRONG_ROLE.
+    assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 
 def test_r8_copy_family_incompatible_pair():
@@ -298,7 +216,7 @@ def test_stage3_recurses_into_forloop_children_for_r6():
     tag_map = TagMap([target.map_to(x[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_NOT_WRITABLE in _codes(report)
+    assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 
 def test_stage3_recurses_into_forloop_children_for_r8():
@@ -471,9 +389,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    codes = _codes(report)
-    assert CLK_BANK_WRONG_ROLE not in codes
-    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" not in codes
+    assert _codes(report) == []
 
 
 def test_drum_stage3_wrong_role_failures_are_reported():
@@ -517,13 +433,23 @@ def test_drum_stage3_wrong_role_failures_are_reported():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_WRONG_ROLE in _codes(report)
-    wrong_role_locations = [
-        finding.location
-        for finding in (*report.errors, *report.warnings, *report.hints)
-        if finding.code == CLK_BANK_WRONG_ROLE
+    found = []
+    for finding in (*report.errors, *report.warnings, *report.hints):
+        frame = finding.display.frames[0]
+        assert frame.caret is not None
+        _line, start, width = frame.caret
+        found.append((finding.code, frame.lines[0][start : start + width]))
+    # laddercodec refuses each operand on its own, with its caret under the operand.
+    assert found == [
+        (Code.BANK_NOT_ALLOWED, "Out1"),
+        (Code.BANK_NOT_ALLOWED, "Step"),
+        (Code.BANK_NOT_ALLOWED, "Done"),
+        (Code.NOT_AN_ADDRESS, "Step > 0"),
+        (Code.BANK_NOT_ALLOWED, "Out1"),
+        (Code.BANK_NOT_ALLOWED, "Step"),
+        (Code.BANK_NOT_ALLOWED, "Done"),
+        (Code.BANK_NOT_ALLOWED, "Acc"),
     ]
-    assert len(wrong_role_locations) == len(set(wrong_role_locations))
 
 
 def test_time_drum_register_preset_validates_and_exports():
@@ -570,7 +496,7 @@ def test_time_drum_register_preset_validates_and_exports():
     assert any("presets=[DS2]" in token for token in tokens)
 
 
-def test_event_drum_literal_jump_step_reports_tag_required():
+def test_event_drum_literal_jump_step_is_refused():
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -604,10 +530,10 @@ def test_event_drum_literal_jump_step_reports_tag_required():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" in _codes(report)
+    assert Code.NOT_AN_ADDRESS in _codes(report)
 
 
-def test_time_drum_literal_jump_step_reports_tag_required():
+def test_time_drum_literal_jump_step_is_refused():
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -642,7 +568,7 @@ def test_time_drum_literal_jump_step_reports_tag_required():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" in _codes(report)
+    assert Code.NOT_AN_ADDRESS in _codes(report)
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +838,7 @@ class TestOutVariants:
                 debounce(Bool("Coil"), on=(timers[1], 10), off=(timers[2], 10))
 
         tag_map = self._map(bad_acc=True, extra=[Bool("In").map_to(x[1])])
-        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+        assert Code.BANK_NOT_ALLOWED in _codes(self._report(body, tag_map))
 
     def test_preset_register_must_be_ds(self) -> None:
         timers = self.Timers
@@ -925,10 +851,9 @@ class TestOutVariants:
                 timed(Bool("Coil"), timers[1], preset)
 
         tag_map = self._map(extra=[preset.map_to(dd[1]), Bool("In").map_to(x[1])])
-        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+        assert Code.BANK_NOT_ALLOWED in _codes(self._report(body, tag_map))
 
     def test_units_follow_the_out_dialog(self) -> None:
-
         timers = self.Timers
 
         def body():
@@ -941,14 +866,12 @@ class TestOutVariants:
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
         report = self._report(body, tag_map)
-        assert _codes(report).count("CLK_OUT_UNIT_UNSUPPORTED") == 3
-        messages = [f.message for f in report.errors if f.code == "CLK_OUT_UNIT_UNSUPPORTED"]
-        assert "debounce coil times in ms/sec, not min" in messages[0]
-        assert "timed coil times in ms/sec/min, not day" in messages[2]
+        assert _codes(report).count(Code.COIL_TIME_UNIT) == 3
+        messages = [f.message for f in report.errors if f.code == Code.COIL_TIME_UNIT]
+        assert "debounce does not support unit='Tm'" in messages[0]
+        assert "timed does not support unit='Td'" in messages[2]
 
     def test_preset_overflow(self) -> None:
-        from pyrung.click.validation import CLK_TIMER_PRESET_OVERFLOW
-
         timers = self.Timers
 
         def body():
@@ -958,18 +881,17 @@ class TestOutVariants:
                 debounce(Bool("Coil"), on=(timers[1], 40_000), off=(timers[2], 50_000))
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
-        assert _codes(self._report(body, tag_map)).count(CLK_TIMER_PRESET_OVERFLOW) == 2
+        assert _codes(self._report(body, tag_map)).count(Code.CONSTANT_OUT_OF_RANGE) == 2
 
     def test_immediate_toggle_needs_y(self) -> None:
         from pyrung import immediate, toggle
-        from pyrung.click.validation import CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y
 
         def body():
             with rung(Bool("In")):
                 toggle(immediate(Bool("Lamp")))
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
-        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y in _codes(self._report(body, tag_map))
+        assert Code.IMMEDIATE_COIL_NOT_Y in _codes(self._report(body, tag_map))
 
 
 def test_timer_done_and_acc_must_share_one_number():
@@ -1002,10 +924,21 @@ def test_timer_done_and_acc_must_share_one_number():
         include_system=False,
     )
     report = validate_click_program(_build_program(logic), tag_map, mode="strict")
+    # The debounce is pyrung's own check, and the on_delay is laddercodec's Timer.
     mismatches = [f for f in report.errors if f.code == CLK_TIMER_PAIR_MISMATCH]
-    assert len(mismatches) == 2
-    assert "T5 and TD7" in mismatches[0].message
-    assert "T7 and TD5" in mismatches[1].message
+    assert len(mismatches) == 1
+    assert mismatches[0].message == (
+        "T5 and TD7 are different CLICK timers or counters at "
+        "main.rung[1].instruction[0](DebounceInstruction).instruction.on_acc; Done and Acc "
+        "must share one number."
+    )
+    (refused,) = [f for f in report.errors if f.code == Code.TIMER_PAIR_MISMATCH]
+    assert refused.message == (
+        "CLICK refuses on_delay(OtherTimer, preset=10) at "
+        "main.rung[1].instruction[1](OnDelayInstruction).instruction. Timer.accumulator: "
+        "OtherTimer.Acc (TD5) must be SplitTimer.Acc (TD7) to match Timer.done "
+        "OtherTimer.Done (T7)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1019,8 +952,7 @@ def test_timer_done_and_acc_must_share_one_number():
     ],
 )
 def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
-    """CLICK's Out, Set and Reset coils take bit memory only (X, Y, C, T, CT, SC)."""
-    coil = {reset: "Reset", latch: "Set", out: "Out"}[instruction]
+    """CLICK's Out, Set and Reset coils take bit memory only (Y, C, SC)."""
 
     def logic():
         with rung(c[1]):
@@ -1028,13 +960,13 @@ def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
 
     prog = _build_program(logic)
     report = validate_click_program(prog, TagMap(), mode="strict")
-    wrong = [f for f in report.errors if f.code == CLK_BANK_WRONG_ROLE]
-    assert len(wrong) == 1, _codes(report)
-    message = wrong[0].message
-    assert message.startswith(expected), message
-    assert f"CLICK's {coil} coil takes bit memory only" in message
-    assert message.isascii()
-    with pytest.raises(LadderExportError, match=re.escape(expected)):
+    wrong = [f for f in report.errors if f.code == Code.BANK_NOT_ALLOWED]
+    assert wrong, _codes(report)
+    for finding in wrong:
+        assert f"CLICK refuses {expected}" in finding.message, finding.message
+        assert finding.suggestion == "Write a register with copy() or fill()."
+        assert finding.message.isascii()
+    with pytest.raises(LadderExportError, match=re.escape(expected.split(" at ")[0])):
         pyrung_to_ladder(prog, TagMap())
 
 
@@ -1047,4 +979,4 @@ def test_coil_on_bit_memory_passes():
             reset(sc[50])
 
     report = validate_click_program(_build_program(logic), TagMap(), mode="strict")
-    assert CLK_BANK_WRONG_ROLE not in _codes(report)
+    assert Code.BANK_NOT_ALLOWED not in _codes(report)

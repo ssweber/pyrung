@@ -396,7 +396,7 @@ Common findings:
 |-------|--------------|----------------|
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
-| `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Bit memory only: X, Y, C, T, CT, SC (`CLK_BANK_WRONG_ROLE`); clear a register with `copy()` or `fill()` |
+| `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Y, C or an SC bit that CLICK writes. `out`, `latch` and `reset` all take the same SC bits. A range that spans read-only SC bits passes as typed (`bank-not-allowed`, `not-writable`). Clear a register with `copy()` or `fill()` |
 | Whole-number constant in `math()` | Any. Hex mode cuts it to 16 bits, as a CLICK does | −2147483648..2147483647, and 0..65535 in hex mode (`CLK_MATH_WIDE_CONSTANT`). In hex mode the export writes −32768..−1 as its 16 bits. It rejects any other hex constant, even when allowed |
 | Constant in `copy()` or `fill()` into a `Word` | Any | 0..65535 into DH, XD or YD (`CLK_COPY_WIDE_CONSTANT`). The export writes −32768..−1 as its 16 bits. A `copy()` may have a fraction, and a CLICK drops it (`copy(1.5, DH1)` stores 1). A `fill()` of several registers must be a whole number. The export rejects any other constant, even with `allow=` |
 | A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK. In pyrung it is 0, because the `sc` block does not follow the system points |
@@ -409,7 +409,7 @@ Common findings:
 
 ### Timer preset limits
 
-CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets. Use a larger time unit instead.
+CLICK timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. Validation reports `constant-out-of-range` for a preset above 32,767 in `on_delay()`, `off_delay()`, `debounce()`, `flasher()` and `timed()`. Use a larger time unit instead.
 
 | Unit | Max preset | Max duration |
 |------|-----------|--------------|
@@ -429,9 +429,9 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### Out coil variants
 
-`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Map each phase timer to `T<n>` with the `TD<n>` of the same number. Map a register preset to `DS`. Validation reports `CLK_TIMER_PAIR_MISMATCH` for any timer or counter whose Done and Acc map to different numbers. This includes `on_delay` and the counters.
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Map each phase timer to `T<n>` with the `TD<n>` of the same number. Map a register preset to `DS`. Validation reports a Done bit that has no address (`CLK_BANK_UNRESOLVED`) or sits in a wrong bank (`bank-not-allowed`). It reports a Done and an Acc with different numbers as `CLK_TIMER_PAIR_MISMATCH` for `debounce`, `flasher` and `timed`. It reports the same fault as `timer-pair-mismatch` for `on_delay()`, `off_delay()` and the counters.
 
-CLICK's Out dialog offers fewer units than its timers do. `debounce` and `flasher` accept `ms` or `sec`. `timed` accepts `ms`, `sec` or `min`. Validation reports any other unit as `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` accepts `immediate(...)`.
+CLICK's Out dialog offers fewer units than its timers do. `debounce` and `flasher` accept `ms` or `sec`. `timed` accepts `ms`, `sec` or `min`. Validation reports any other unit as `coil-time-unit`. Only `toggle` accepts `immediate(...)`.
 
 ### For/Next
 

@@ -84,6 +84,10 @@ class Family:
     # that CLICK cannot hold as a range with CLK_COPY_RANGE_NOT_CONSECUTIVE before it asks
     # laddercodec.
     ranges: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # The (Done, accumulator) attributes of each timer that a class names. A timer is one
+    # number on CLICK, so CLK_TIMER_PAIR_MISMATCH reports a Done and an accumulator that
+    # the tag map puts on different numbers. A class's rows go in legacy/ until it moves.
+    timer_pairs: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     # Each CLK_ code that the family's move removed, with the codes that replace it.
     # ``allow=`` names them when a caller passes the old code.
     replaced_codes: Mapping[str, str] = field(default_factory=dict)
@@ -306,6 +310,9 @@ def _broken_ranges(instruction: Any, exporter: Any, family: Family) -> list[Rang
     problems: list[RangeProblem] = []
     for attribute in family.ranges.get(type(instruction).__name__, ()):
         value = getattr(instruction, attribute)
+        if isinstance(value, ImmediateRef):
+            # An immediate() range has the same list form, and the export refuses it too.
+            value = value.value
         try:
             _text, problem = _range_text(exporter, value, f"instruction.{attribute}", instruction)
         except Unbuildable:

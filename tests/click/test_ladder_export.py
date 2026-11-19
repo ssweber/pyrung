@@ -1339,21 +1339,14 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
     with pytest.raises(LadderExportError) as exc_info:
         pyrung_to_ladder(logic, mapping)
 
-    assert list(exc_info.value.issues) == [
-        {
-            "path": "main.rung[1].instruction[0](OutInstruction).instruction.target",
-            "message": (
-                "[CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS] error\n"
-                "  immediate() on a coil range at "
-                "main.rung[1].instruction[0](OutInstruction).instruction.target needs "
-                "consecutive Y addresses.\n"
-                " --> main.rung[1].instruction[0](OutInstruction).instruction.target\n"
-                "  = hint: Map the range to consecutive Y addresses, such as Y001..Y004."
-            ),
-            "source_file": None,
-            "source_line": None,
-        }
-    ]
+    (issue,) = exc_info.value.issues
+    assert issue["path"] == "main.rung[1].instruction[0](OutInstruction).instruction"
+    assert issue["message"].startswith(
+        "[CLK_COPY_RANGE_NOT_CONSECUTIVE] error\n"
+        "  CLICK refuses out(immediate(Outputs1..Outputs4)) at "
+        "main.rung[1].instruction[0](OutInstruction).instruction. "
+        "Outputs1..Outputs4 maps onto [Y001,Y003,Y004,Y006]."
+    )
 
 
 def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
@@ -2360,7 +2353,7 @@ def test_device_id_outside_ds_is_refused(register):
                         remote_start="DS1", dest=DS1)
         """
     )
-    with pytest.raises(LadderExportError, match="invalid for device_id.*CLICK takes DS"):
+    with pytest.raises(LadderExportError, match="device_id: must be a number or a DS address"):
         pyrung_to_ladder(logic, mapping)
 
 

@@ -58,6 +58,7 @@ class OutInstruction(OneShotMixin, Instruction):
     _writes = ("target",)
     _conditions = ()
     _structural_fields = ()
+    _call_operands = (("target", "target"),)
 
     def __init__(
         self,
@@ -102,6 +103,8 @@ class LatchInstruction(Instruction):
     _writes = ("target",)
     _conditions = ()
     _structural_fields = ()
+    _call_operands = (("target", "target"),)
+    _call_keywords = ()
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
@@ -128,6 +131,8 @@ class ResetInstruction(Instruction):
     _writes = ("target",)
     _conditions = ()
     _structural_fields = ()
+    _call_operands = (("target", "target"),)
+    _call_keywords = ()
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target

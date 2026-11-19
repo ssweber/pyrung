@@ -291,6 +291,7 @@ class _TranslatorMixin:
 
         def _fn(self, name: str, *args: str, **kwargs: str) -> str: ...
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
+        def _render_run(self, value: Any, *, path: str, instruction: Any) -> str: ...
 
     def _condition_leaf_token(self, condition: Condition, *, path: str) -> str:
         if isinstance(condition, BitCondition):
@@ -838,6 +839,8 @@ class _TranslatorMixin:
             descending = _compact_contiguous_range(addresses[::-1])
             if len(addresses) > 1 and descending is not None:
                 return f"{addresses[0]}..{addresses[-1]}"
+            # CLICK has no list form, so a scattered range is refused even under allow=.
+            return self._render_run(bit_range, path=path, instruction=source)
         return self._render_operand(bit_range, path=path, source=source)
 
     def _render_block_range(self, block_range: BlockRange, *, path: str, source: Any) -> str:

@@ -228,7 +228,7 @@ class _InstructionMixin:
         """Render a debounce, flasher or timed coil, with each phase as its Timer's TD and preset.
 
         CLICK's coil names only the TD of the phase. The T of the same number comes with
-        it. Validation reports a Timer whose Done is not that T.
+        it.
         """
         if instruction_type == "TimedInstruction":
             phases = [("on", instruction.timer_acc, instruction.on_preset)]
@@ -308,6 +308,13 @@ class _InstructionMixin:
         if not text.startswith("["):
             return text, None
         addresses = [address for address in text[1:-1].split(",") if address]
+        if (
+            type(instruction).__name__ == "ShiftInstruction"
+            and len(addresses) > 1
+            and _compact_contiguous_range(addresses[::-1]) is not None
+        ):
+            # A shift runs down a descending run of addresses, so only a scattered range is a fault.
+            return text, None
         block_range = value.value if isinstance(value, ImmediateRef) else value
         fault: RangeFault
         if not addresses:
