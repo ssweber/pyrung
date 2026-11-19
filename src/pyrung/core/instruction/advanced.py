@@ -310,6 +310,9 @@ class ShiftInstruction(Instruction):
     _conditions = ("data_condition", "clock_condition", "reset_condition")
     _structural_fields = ()
     _operands = {"bit_range": RANGE.of(TagType.BOOL, immediate=False)}
+    _call_operands = (("bit_range", "bit_range"),)
+    _call_keywords = ()
+    _call_chained = (("clock", "clock_condition"), ("reset", "reset_condition"))
 
     def __init__(
         self,

@@ -390,9 +390,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    codes = _codes(report)
-    assert CLK_BANK_WRONG_ROLE not in codes
-    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" not in codes
+    assert _codes(report) == []
 
 
 def test_drum_stage3_wrong_role_failures_are_reported():
@@ -436,13 +434,23 @@ def test_drum_stage3_wrong_role_failures_are_reported():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_WRONG_ROLE in _codes(report)
-    wrong_role_locations = [
-        finding.location
-        for finding in (*report.errors, *report.warnings, *report.hints)
-        if finding.code == CLK_BANK_WRONG_ROLE
+    found = []
+    for finding in (*report.errors, *report.warnings, *report.hints):
+        frame = finding.display.frames[0]
+        assert frame.caret is not None
+        _line, start, width = frame.caret
+        found.append((finding.code, frame.lines[0][start : start + width]))
+    # laddercodec refuses each operand on its own, with its caret under the operand.
+    assert found == [
+        (Code.BANK_NOT_ALLOWED, "Out1"),
+        (Code.BANK_NOT_ALLOWED, "Step"),
+        (Code.BANK_NOT_ALLOWED, "Done"),
+        (Code.NOT_AN_ADDRESS, "Step > 0"),
+        (Code.BANK_NOT_ALLOWED, "Out1"),
+        (Code.BANK_NOT_ALLOWED, "Step"),
+        (Code.BANK_NOT_ALLOWED, "Done"),
+        (Code.BANK_NOT_ALLOWED, "Acc"),
     ]
-    assert len(wrong_role_locations) == len(set(wrong_role_locations))
 
 
 def test_time_drum_register_preset_validates_and_exports():
@@ -489,7 +497,7 @@ def test_time_drum_register_preset_validates_and_exports():
     assert any("presets=[DS2]" in token for token in tokens)
 
 
-def test_event_drum_literal_jump_step_reports_tag_required():
+def test_event_drum_literal_jump_step_is_refused():
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -523,10 +531,10 @@ def test_event_drum_literal_jump_step_reports_tag_required():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" in _codes(report)
+    assert Code.NOT_AN_ADDRESS in _codes(report)
 
 
-def test_time_drum_literal_jump_step_reports_tag_required():
+def test_time_drum_literal_jump_step_is_refused():
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -561,7 +569,7 @@ def test_time_drum_literal_jump_step_reports_tag_required():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert "CLK_DRUM_JUMP_STEP_TAG_REQUIRED" in _codes(report)
+    assert Code.NOT_AN_ADDRESS in _codes(report)
 
 
 # ---------------------------------------------------------------------------
@@ -847,7 +855,6 @@ class TestOutVariants:
         assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
 
     def test_units_follow_the_out_dialog(self) -> None:
-
         timers = self.Timers
 
         def body():
