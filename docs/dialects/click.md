@@ -505,11 +505,15 @@ To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen]
 A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing. CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL. `$00` imports back as the blank.
 
 ```python
-copy('"', txt[1])        # exports as copy($22,TXT1)
-copy('say "hi"', txt[1])  # the export refuses it
+copy('say "hi"', txt[1])  # exports as copy("say "hi"",TXT1)
+copy('"', txt[1])         # exports as copy($22,TXT1)
+copy('a",b', txt[1])      # the export refuses it
+txt[1] == 'a"b'           # the export refuses it
 ```
 
-A text constant of one quote exports as `$22`, the ASCII code for a quote. laddercodec, which writes the CSV, can't yet read a quote inside a quoted text constant. So the export refuses a text that holds a quote among other characters. Write the text without the quote.
+A Copy writes its text as typed, with no escape for a quote. So `copy('say "hi"', txt[1])` fills TXT1..TXT8. A text constant of one quote exports as `$22`, the ASCII code for a quote.
+
+Validation and the export refuse a `copy()` text that the CSV can't read back (`invalid-text-constant`), such as `'a",b'`, where a quote before a comma ends the text early. The export also refuses a quote among other characters in a comparison, `fill()` or `search()`. Write the text without the quote.
 
 ### Empty and comment-only rungs
 

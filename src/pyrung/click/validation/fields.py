@@ -253,8 +253,12 @@ def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) 
         return exporter._render_operand(value, path=f"instruction.{attribute}", source=instruction)
     except _RenderError as exc:
         if isinstance(value, str) and '"' in value:
-            # The export refuses a text that holds a quote among other characters. laddercodec
-            # refuses the quote with its own text, so validation hands it the quote doubled.
+            # The export refused the text. Fill and search hand laddercodec the quote doubled,
+            # which it refuses in its own words. A Copy hands it the text as typed, so
+            # laddercodec judges the rest of the text. A pyrung check in hardware.py reports a
+            # quote that the CSV can't hold.
+            if type(instruction).__name__ == "CopyInstruction":
+                return f'"{value}"'
             return '"{}"'.format(value.replace('"', '""'))
         raise Unbuildable from exc
 
