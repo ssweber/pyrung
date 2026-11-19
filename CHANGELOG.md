@@ -79,6 +79,25 @@
   - A range of one address, such as `ds.select(5, 5)`. Search two or more addresses.
   - A quote inside the text, such as `'sub"name'`. Write the text without it.
   - A constant outside its range, such as `2147483648` or text of more than 128 characters. Use a constant that fits.
+- CLICK validation of `shift()` now reports `bank-not-allowed` for a range outside C (it reported `CLK_BANK_NOT_WRITABLE`).
+  Pass the new code to `allow=`. `allow=["CLK_BANK_NOT_WRITABLE"]` no longer lets this finding through.
+- CLICK validation and the export now refuse these `shift()` forms, which CLICK's editor rejects (they exported them):
+  - A range in Y, such as `y.select(1, 8)`. Shift over C bits.
+  - A range of one address, such as `c.select(2, 2)`. Use two or more bits.
+  - A range that is not one run of addresses, such as a block mapped to C1, C5 and C9 or to C1, Y2 and C3. Map the block to consecutive C addresses. Validation reports `CLK_COPY_RANGE_NOT_CONSECUTIVE`.
+- CLICK validation of `event_drum()`, `time_drum()` and `time_event_drum()` now reports `bank-not-allowed` for an output, completion flag, current step, accumulator, jump step or register preset in a bank that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE` or `CLK_BANK_NOT_WRITABLE`).
+  Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` and `allow=["CLK_BANK_NOT_WRITABLE"]` no longer let this finding through.
+- CLICK validation of the drums now reports `not-an-address` for a constant jump step, such as `.jump(Found, step=2)` (it reported `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`).
+  Pass the new code to `allow=`.
+- CLICK validation of `time_drum()` and `time_event_drum()` now reports `constant-out-of-range` for a constant preset below 0 (it reported `CLK_TIMER_PRESET_TOO_LOW`).
+  Pass the new code to `allow=`. `allow=["CLK_TIMER_PRESET_TOO_LOW"]` no longer lets this finding through.
+- CLICK validation and the export now refuse these drum forms, which CLICK's editor rejects (they exported them):
+  - A constant preset above 32767, such as `presets=[40000]`. Use a preset from 0 to 32767.
+  - A register preset in a bank other than DS, such as `presets=[dd[7]]`. Copy it into a DS first.
+  - An event that is not a single bit, such as `~C5`, `rise(C5)` or `Or(C5, C6)`. Copy the condition into a C bit, and use that bit as the event.
+  - An output that is also the completion flag, such as `outputs=[y[1], c[9]], completion_flag=c[9]`. Use a different bit for the flag.
+- CLICK validation of a drum event that compares a register, such as `DS5 > 3`, now reports `not-an-address` (it reported `CLK_BANK_WRONG_ROLE`).
+  Copy the condition into a C bit and use that bit as the event. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets this finding through.
 - `pyrung.click.validation` no longer exports the `CLK_` codes of its checks of `math()`, the drums, contacts, `debounce()`, `flasher()` and `timed()`, such as `CLK_MATH_MODE_MIXED`, except `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS`. Validation still reports them.
   Write the code as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`.
 - The CLICK export now refuses a text constant that holds a quote among other characters in a comparison, `fill()` or `search()`, such as `txt[1] == 'a"b'` (it wrote `"a""b"`).

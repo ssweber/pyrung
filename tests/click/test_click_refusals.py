@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 
 import pytest
+from laddercodec import Code
 
 from pyrung import debounce, flasher, timed
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
@@ -363,10 +364,15 @@ def test_a_negative_constant_drum_step_is_refused_and_zero_passes():
                 completion_flag=c[2],
             ).reset(x[2])
 
-    found = _found(body, CLK_TIMER_PRESET_TOO_LOW, tag_map)
-    assert [f.location.rsplit(".", 1)[-1] for f in found] == ["presets[1]", "presets[0]"]
-    assert "time_drum() preset -1" in found[0].message
-    assert "time_event_drum() preset -2" in found[1].message
+    report = validate_click_program(_program(body), tag_map, mode="strict")
+    found = []
+    for finding in report.errors:
+        frame = finding.display.frames[0]
+        assert frame.caret is not None
+        _line, start, width = frame.caret
+        found.append((finding.code, frame.lines[0][start : start + width]))
+    # laddercodec refuses the negative presets, and each caret marks its item.
+    assert found == [(Code.CONSTANT_OUT_OF_RANGE, "-1"), (Code.CONSTANT_OUT_OF_RANGE, "-2")]
 
 
 # --- Compare: hex with decimal ---------------------------------------------------------
