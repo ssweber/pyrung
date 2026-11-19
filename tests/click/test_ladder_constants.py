@@ -386,3 +386,87 @@ def test_csv_ascii_code_constant_imports_as_its_character():
     body = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
     assert r'copy("\r", TXT1)' in body
     assert 'TXT1 == "A"' in body
+
+
+# ---------------------------------------------------------------------------
+# Hex spellings that CLICK reads as a REAL (Eh, 1Eh)
+# ---------------------------------------------------------------------------
+
+
+def _copy_token(value: int, dest) -> str:
+    with Program() as logic:
+        with rung():
+            copy(value, dest)
+    (token,) = _tokens(logic)
+    return token
+
+
+@pytest.mark.parametrize("value", [14, 0x1E])
+@pytest.mark.parametrize(("bank", "dest"), [("DH", dh[1]), ("YD", yd[0])])
+def test_copy_of_a_constant_that_hex_spells_with_an_e_exports_a_decimal(value, bank, dest):
+    """CLICK stores Eh as the REAL 0.0 and 1Eh as 1.0, so the export writes decimal."""
+    address = "DH1" if bank == "DH" else "YD0"
+    assert _copy_token(value, dest) == f"copy({value},{address})"
+
+
+@pytest.mark.parametrize(
+    ("value", "token"),
+    [
+        (255, "copy(FFh,DH1)"),
+        (0xFFFF, "copy(FFFFh,DH1)"),
+        (0xABC, "copy(ABCh,DH1)"),
+        (0xE1, "copy(225,DH1)"),
+        (0xFE, "copy(254,DH1)"),
+        (0xFFFE, "copy(65534,DH1)"),
+        (0xAE, "copy(174,DH1)"),
+        (0x80DE, "copy(32990,DH1)"),
+        (0x2E5A, "copy(11866,DH1)"),
+        (-1, "copy(FFFFh,DH1)"),
+        (-0x2000, "copy(57344,DH1)"),
+    ],
+)
+def test_copy_into_dh_keeps_hex_unless_clicks_reads_it_as_a_real(value, token):
+    assert _copy_token(value, dh[1]) == token
+
+
+def test_fill_of_a_constant_that_hex_spells_with_an_e_exports_a_decimal():
+    with Program() as logic:
+        with rung():
+            fill(0x1E, dh.select(1, 3))
+        with rung():
+            fill(0x1F, dh.select(5, 6))
+    assert _tokens(logic) == ["fill(30,DH1..DH3)", "fill(1Fh,DH5..DH6)"]
+
+
+def test_single_register_fill_of_such_a_constant_exports_a_decimal():
+    with Program() as logic:
+        with rung():
+            fill(14, dh.select(1, 1))
+    assert _tokens(logic) == ["copy(14,DH1)"]
+
+
+def test_decimal_copy_of_14_stays_decimal():
+    assert _copy_token(14, ds[1]) == "copy(14,DS1)"
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [(0x1E, "1Eh"), (0x2E5A, "2E5Ah"), (0x9E, "9Eh")],
+)
+def test_hex_math_refuses_a_constant_that_clicks_formula_reads_as_a_real(value, text):
+    with Program() as logic:
+        with rung():
+            math(dh[1] + value, dh[2])
+    with pytest.raises(LadderExportError, match=f"written {text} in a hex Math"):
+        pyrung_to_ladder(logic, TagMap())
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [(14, "Eh"), (0x1E3, "1E3h"), (0xE1, "E1h"), (0x1F, "1Fh")],
+)
+def test_hex_math_keeps_a_constant_that_clicks_formula_reads_as_hex(value, text):
+    with Program() as logic:
+        with rung():
+            math(dh[1] + value, dh[2])
+    assert _tokens(logic) == [f"math(DH1 + {text},DH2,mode=hex)"]

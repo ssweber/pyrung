@@ -162,22 +162,29 @@ class _TranslatorMixin:
 
     # How integer constants are spelled right now (see _hex_constants).
     # - None: decimal.
-    # - "word": hex, for a Copy, Fill or Math into a Word, with -32768..-1 written as its
-    #   16 bits.  Any other value outside 0..FFFFh is an export error, since no CLICK hex
+    # - "word": hex, for a Fill into a Word, with -32768..-1 written as its 16 bits.  Any other value outside 0..FFFFh is an export error, since no CLICK hex
     #   constant holds it.
     # - "copy": as "word", for a Copy into a Word.  A constant with a fraction is written
     #   as a REAL constant.  CLICK's Copy accepts it, and copy(1.5,DH1) stores 1.
+    # - "math": as "word", for a hex Math.  CLICK's formula check refuses a constant such as
+    #   1Eh, so that is an export error.
     # - "exact": hex.  A value outside 0..FFFFh is an export error.
-    _hex_constant_mode: Literal["word", "copy", "exact"] | None = None
+    # A Copy or Fill writes a decimal integer for a value whose hex spelling holds an E.
+    # CLICK is recorded reading Eh as the REAL 0.0 and 1Eh as 1.0.  No other spelling with
+    # an E is on record, so every one is written in decimal.
+    _hex_constant_mode: Literal["word", "copy", "math", "exact"] | None = None
 
     @contextmanager
-    def _hex_constants(self, mode: Literal["word", "copy", "exact"] | None) -> Iterator[None]:
+    def _hex_constants(
+        self, mode: Literal["word", "copy", "math", "exact"] | None
+    ) -> Iterator[None]:
         """Spell the integer constants rendered inside the block in CLICK hex.
 
-        CLICK reads digits typed into a hex context as hex and appends ``h``.
-        Typing ``255`` gives ``255h``, which is 0x255.  A pasted rung gets no
-        such fix-up, so a bare decimal there is an error.  pyrung literals stay
-        decimal, so pyrung ``255`` exports as ``FFh``.
+        CLICK appends ``h`` to digits typed into a hex Math, so ``255`` becomes
+        ``255h``, which is 0x255.  A compare refuses a bare decimal (OBJ-007).  A
+        Copy or Fill reads a bare number as a decimal integer and keeps ``h`` for
+        hex.  pyrung literals stay decimal, so pyrung ``255`` exports as ``FFh``.
+        A Copy or Fill constant whose hex holds an E is written in decimal.
         """
         previous = self._hex_constant_mode
         self._hex_constant_mode = mode
@@ -232,7 +239,7 @@ class _TranslatorMixin:
                     ),
                     source=source,
                 )
-            if mode in ("word", "copy") and not -0x8000 <= value <= 0xFFFF:
+            if mode in ("word", "copy", "math") and not -0x8000 <= value <= 0xFFFF:
                 self._raise_issue(
                     path=path,
                     message=(
@@ -243,7 +250,22 @@ class _TranslatorMixin:
                 )
             # Write it unpadded, as CLICK's Math normalizes it (000Ah -> Ah).  Copy and
             # Compare keep either spelling.
-            return f"{value & 0xFFFF:X}h"
+            text = f"{value & 0xFFFF:X}h"
+            if mode == "math" and _math_reads_hex_as_real(text):
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"Constant {value} is written {text} in a hex Math, and CLICK reads "
+                        "the digits before the E as a real number. Copy the value into a DH, "
+                        "and use that DH in the formula."
+                    ),
+                    source=source,
+                )
+            if mode in ("word", "copy") and _COPY_HEX_AS_REAL.match(text):
+                # CLICK stores Eh as the REAL 0.0 and 1Eh as 1.0.  A bare decimal integer
+                # is read as a decimal, so it holds the same value.
+                return str(value & 0xFFFF)
+            return text
         if isinstance(value, float):
             text = click_real_literal(value)
             if text is None:
@@ -897,6 +919,25 @@ def _float32(value: float) -> float | None:
         return struct.unpack("<f", struct.pack("<f", value))[0]
     except OverflowError:
         return None
+
+
+# A hex spelling with an E.  CLICK's Copy reads Eh and 1Eh as REALs.
+_COPY_HEX_AS_REAL = re.compile(r".*E")
+
+
+def _math_reads_hex_as_real(text: str) -> bool:
+    """Return True when CLICK's hex Math splits *text* (``1Eh``) at a real number.
+
+    The tokenizer reads the longest real number at the start of a word.  Digits then
+    ``E`` and more digits are one real (``1E3h`` keeps its ``h`` and stays hex).  Digits
+    then ``E`` and a letter are a real ``1`` and the word ``Eh``, which CLICK refuses.
+    ``Eh`` has no digit before the ``E`` and stays hex.
+    """
+    if re.match(r"[0-9]+E", text) is None:
+        return False
+    match = re.match(r"[0-9]+(E[0-9]+)?", text)
+    assert match is not None
+    return text[match.end() :] != "h"
 
 
 def click_real_literal(value: float) -> str | None:

@@ -27,12 +27,15 @@
   Write the form that the message names.
 - A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
   If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
+- The CLICK export now refuses a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`).
+  Copy the value into a DH and use that DH in the formula.
 
 ### Fixes
 
 - A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does (it raised `ValueError` on a letter or a blank TXT).
 - `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
 - `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
+- A constant that you `copy()` or `fill()` into a DH or YD now stores its value on a CLICK. `copy(14, dh[1])` exports as `copy(14,DH1)` (it exported `copy(Eh,DH1)`, and a CLICK stored 0).
 
 ## v0.17.0 (2026-11-18)
 
