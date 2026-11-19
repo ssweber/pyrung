@@ -432,15 +432,25 @@ def _call_names(
     """Return *names*, with each address in the call named as the call spells it.
 
     laddercodec quotes every address when it gets no names, so each address of the call
-    has an entry. An address that the call spells as an address is named by itself.
+    has an entry. An address that the call spells as an address, such as ``X1`` for
+    ``X001``, is named by itself. laddercodec would show any other name with the address
+    after it in brackets.
     """
     call = dict(names)
     for attribute in _COPY_FAMILY_FIELDS[type(instruction).__name__]:
         for tag, name in _operand_tags(getattr(instruction, attribute)):
             address = _tag_address(tag, resolver)
             if address is not None:
-                call[address] = name
+                call[address] = address if _spells(name, address) else name
     return call
+
+
+def _spells(name: str, address: str) -> bool:
+    """Return True if *name* is a spelling of the CLICK address *address*."""
+    try:
+        return parse_address(name) == parse_address(address)
+    except ValueError:
+        return False
 
 
 def _sentence(text: str) -> str:
@@ -556,8 +566,8 @@ def _refusal(
     frame = instruction_frame(base_location, instruction, argument=argument)
     call_names = _call_names(instruction, names, resolver)
     text = refusal.message(call_names)
-    # A refusal of a family that laddercodec has not converted has no detail. Its short
-    # text is then the whole message, so the message stays as the problem line.
+    # laddercodec gives no detail for an instruction it has no rules for yet. The short
+    # text is then the whole message, so it stays as the problem line.
     detail = refusal.detail(call_names) if frame.caret is not None else ""
     if detail:
         # The caret marks the operand, so the label gives the operand's addresses and not

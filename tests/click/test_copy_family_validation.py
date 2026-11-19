@@ -20,8 +20,9 @@ from pyrung.click.validation import (
     CLK_PTR_CONTEXT_ONLY_COPY,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Dint, Int, TagType, udt
+from pyrung.core import Block, Bool, Dint, Int, Tag, TagType, udt
 from pyrung.core.copy_converters import to_value
+from pyrung.core.instruction import BlockCopyInstruction, CopyInstruction
 from pyrung.core.program import (
     Program,
     blockcopy,
@@ -581,9 +582,79 @@ def test_a_label_spells_a_field_as_the_call_does():
     assert "Motor.speed (DS1)" in finding.display.frames[0].caret_label
 
 
-def test_a_label_spells_a_range_as_the_call_does():
-    (finding,) = _named_errors(lambda count, valve: pack_bits(x.select(1, 16), count))
-    assert "X1..X16" in finding.display.frames[0].caret_label
+@pytest.mark.parametrize(
+    "write, line, address",
+    [
+        (lambda: unpack_to_bits(ds[1], x.select(1, 16)), "unpack_to_bits(DS1, X1..X16)", "X001"),
+        (lambda: fill(c[1], y.select(1, 1)), "fill(C1, Y1..Y1)", "Y001"),
+        (
+            lambda: blockcopy(x.select(1, 3), txt.select(1, 3)),
+            "blockcopy(X1..X3, TXT1..TXT3)",
+            "X001",
+        ),
+        (lambda: copy(ds[1], x[1]), "copy(DS1, X001)", "X001"),
+        (lambda: copy(5, xd[1]), "copy(5, XD1)", "XD1"),
+        (lambda: copy(yd[3], c[1]), "copy(YD3, C1)", "YD3"),
+    ],
+    ids=["X-range-under-caret", "Y-range", "X-range-elsewhere", "X-tag", "XD", "YD"],
+)
+def test_a_label_shows_a_bank_address_without_a_bracket(write, line, address):
+    # A call spells X001 as X1 in a range. That is the address, not a tag name, so
+    # laddercodec gets no name for it to show in front of the address.
+    findings = _errors(write)
+    labels = [f.display.frames[0].caret_label for f in findings]
+    assert {f.display.frames[0].lines for f in findings} == {(line,)}
+    assert any(address in label for label in labels)
+    assert not any(f"({address}" in label for label in labels)
+
+
+@pytest.mark.parametrize(
+    "operand",
+    [
+        x.select(1, 2),
+        y.select(1, 2),
+        x[1],
+        y[1],
+        c.select(1, 2),
+        t[1],
+        ct[1],
+        sc[1],
+        ds.select(1, 2),
+        dd[1],
+        dh[1],
+        df[1],
+        xd.select(0, 1),
+        yd.select(0, 1),
+        xd0u,
+        yd0u,
+        td[1],
+        ctd[1],
+        sd[1],
+        txt.select(1, 2),
+    ],
+    ids=lambda operand: getattr(operand, "name", None) or f"{operand.block.name}-range",
+)
+def test_each_bank_address_in_a_call_is_named_by_itself(operand):
+    from pyrung.click.validation.fields import _call_names
+    from pyrung.click.validation.resolve import _ResolutionCache
+
+    # A range spells X001 as X1, and a tag spells it X001. Both are the address.
+    if isinstance(operand, Tag):
+        instruction = CopyInstruction(operand, ds[101])
+    else:
+        instruction = BlockCopyInstruction(operand, ds.select(101, 102))
+    names = _call_names(instruction, {}, _ResolutionCache(TagMap()))
+    assert names
+    assert all(name == address for address, name in names.items())
+
+
+def test_a_tag_named_like_an_address_keeps_its_bracket():
+    # The tag X1 sits on DS1, so its name is not a spelling of its address.
+    x1 = Int("X1")
+    prog = _program(lambda: copy(x1, c[2]))
+    mapping = TagMap([x1.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert "X1 (DS1)" in finding.display.frames[0].caret_label
 
 
 def test_a_problem_line_names_the_tags():
