@@ -15,7 +15,6 @@ from pyrung import debounce, flasher, timed
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
-    CLK_TIMER_PRESET_TOO_LOW,
     validate_click_program,
 )
 from pyrung.core import Bool, Counter, Int, Or, Timer, Word, forloop, randint
