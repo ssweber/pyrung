@@ -125,7 +125,8 @@ def operand_name(value: Any) -> str:
                 return f"{structure}[{index}].{field}"
         return value.name
     if isinstance(value, BlockRange):
-        return f"{value.block.name}{value.start}..{value.block.name}{value.end}"
+        text = f"{value.block.name}{value.start}..{value.block.name}{value.end}"
+        return f"{text}.reverse()" if value.reverse_order else text
     if isinstance(value, IndirectRef):
         return f"{value.block.name}[{value.pointer.name}]"
     if isinstance(value, IndirectBlockRange):
@@ -140,6 +141,12 @@ def operand_name(value: Any) -> str:
         return repr(value)
     if isinstance(value, (int, float)):
         return str(value)
+    # copy() and fill() still build with a list of tags, so a finding can name one.
+    if isinstance(value, list):
+        return f"[{', '.join(operand_name(item) for item in value)}]"
+    if isinstance(value, tuple):
+        items = [operand_name(item) for item in value]
+        return f"({items[0]},)" if len(items) == 1 else f"({', '.join(items)})"
     return str(value)
 
 

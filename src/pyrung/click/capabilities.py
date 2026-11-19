@@ -28,16 +28,6 @@ InstructionRole = Literal[
     "coil_target",
 ]
 
-CopyOperation = Literal[
-    "single",
-    "block",
-    "fill",
-    "pack_bits",
-    "pack_words",
-    "unpack_bits",
-    "unpack_words",
-]
-
 CompareConstantKind = Literal["int1", "int2", "float", "hex", "text"]
 
 
@@ -96,10 +86,9 @@ OUT_COIL_WRITABLE_SC: frozenset[int] = LADDER_WRITABLE_SC | frozenset(
 
 # Write fields that take more of a bank than LADDER_BANK_CAPABILITIES allows. Each maps
 # (instruction, field) -> {bank: the addresses it takes, or None for all of them}.
-# CLICK's Copy and its hex Math write YD. Its Block copy and Fill do not.
+# CLICK's hex Math writes YD.
 FIELD_WRITABLE: dict[tuple[str, str], dict[str, frozenset[int] | None]] = {
     ("OutInstruction", "target"): {"SC": OUT_COIL_WRITABLE_SC},
-    ("CopyInstruction", "target"): {"YD": None},
     ("CalcInstruction", "dest"): {"YD": None},
 }
 
@@ -138,86 +127,6 @@ INSTRUCTION_ROLE_COMPATIBILITY: dict[InstructionRole, frozenset[str]] = {
     "copy_pointer": frozenset({"DS"}),
     # CLICK's Out, Set and Reset coils take bit memory only.
     "coil_target": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
-}
-
-_BIT_SOURCES: frozenset[str] = frozenset({"X", "Y", "C", "T", "CT", "SC"})
-_BIT_DESTS: frozenset[str] = frozenset({"Y", "C"})
-
-_REGISTER_SOURCES: frozenset[str] = frozenset(
-    {"DS", "DD", "DH", "DF", "XD", "YD", "TD", "CTD", "SD", "TXT"}
-)
-_SINGLE_REGISTER_DESTS: frozenset[str] = frozenset(
-    {"DS", "DD", "DH", "DF", "YD", "TD", "CTD", "SD", "TXT"}
-)
-
-_BLOCK_REGISTER_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "YD", "TD", "CTD", "SD"})
-_BLOCK_TXT_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "TXT"})
-
-_FILL_REGISTER_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "YD", "TD", "CTD", "SD"})
-
-_PACK_BITS_16_SOURCES: frozenset[str] = frozenset({"X", "Y", "T", "CT", "SC"})
-_PACK_BITS_16_DESTS: frozenset[str] = frozenset({"DS", "DH"})
-_PACK_BITS_32_SOURCES: frozenset[str] = frozenset({"C"})
-_PACK_BITS_32_DESTS: frozenset[str] = frozenset({"DD", "DF"})
-
-PACK_WORDS_COMPATIBILITY: frozenset[tuple[str, str]] = frozenset(
-    (source, dest) for source in ("DS", "DH") for dest in ("DD", "DF")
-)
-
-UNPACK_BITS_COMPATIBILITY: frozenset[tuple[str, str]] = frozenset(
-    (source, dest) for source in ("DS", "DH", "DD", "DF") for dest in ("Y", "C")
-)
-
-UNPACK_WORDS_COMPATIBILITY: frozenset[tuple[str, str]] = frozenset(
-    (source, dest) for source in ("DD", "DF") for dest in ("DS", "DH")
-)
-
-COPY_COMPATIBILITY: dict[CopyOperation, frozenset[tuple[str, str]]] = {
-    "single": frozenset(
-        [(source, dest) for source in _BIT_SOURCES for dest in _BIT_DESTS]
-        + [(source, dest) for source in _REGISTER_SOURCES for dest in _SINGLE_REGISTER_DESTS]
-    ),
-    "block": frozenset(
-        [(source, dest) for source in _BIT_SOURCES for dest in _BIT_DESTS]
-        + [
-            (source, dest)
-            for source in ("DS", "DD", "DH", "DF", "SD")
-            for dest in _BLOCK_REGISTER_DESTS
-        ]
-        + [("TXT", dest) for dest in _BLOCK_TXT_DESTS]
-    ),
-    "fill": frozenset(
-        [
-            (source, dest)
-            for source in ("DS", "DD", "DH", "DF", "XD", "YD", "TD", "CTD", "SD")
-            for dest in _FILL_REGISTER_DESTS
-        ]
-        + [("TXT", "TXT")]
-    ),
-    "pack_bits": frozenset(
-        [(source, dest) for source in _PACK_BITS_16_SOURCES for dest in _PACK_BITS_16_DESTS]
-        + [(source, dest) for source in _PACK_BITS_32_SOURCES for dest in _PACK_BITS_16_DESTS]
-        + [(source, dest) for source in _PACK_BITS_32_SOURCES for dest in _PACK_BITS_32_DESTS]
-    ),
-    "pack_words": PACK_WORDS_COMPATIBILITY,
-    "unpack_bits": UNPACK_BITS_COMPATIBILITY,
-    "unpack_words": UNPACK_WORDS_COMPATIBILITY,
-}
-
-# ---------------------------------------------------------------------------
-# Converter compatibility — which bank types are valid source/dest per mode
-# ---------------------------------------------------------------------------
-
-# Numeric banks that can be a source for numeric→text conversion or dest for text→numeric.
-_NUMERIC_BANKS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "TD", "CTD", "SD", "XD", "YD"})
-
-CONVERTER_COMPATIBILITY: dict[str, tuple[frozenset[str], frozenset[str]]] = {
-    # to_text / to_binary: source must be numeric, dest must be TXT
-    "text": (_NUMERIC_BANKS, frozenset({"TXT"})),
-    "binary": (_NUMERIC_BANKS, frozenset({"TXT"})),
-    # to_value / to_ascii: source must be TXT, dest must be numeric
-    "value": (frozenset({"TXT"}), _NUMERIC_BANKS),
-    "ascii": (frozenset({"TXT"}), _NUMERIC_BANKS),
 }
 
 _HEX_COMPARE_BANKS: frozenset[str] = frozenset({"XD", "YD", "DH"})
@@ -305,21 +214,6 @@ class ClickHardwareProfile:
             raise KeyError(f"Unknown instruction role: {role!r}")
         return memory_type in allowed
 
-    def copy_compatible(
-        self,
-        operation: CopyOperation,
-        source_type: str,
-        dest_type: str,
-    ) -> bool:
-        if source_type not in BANKS:
-            raise KeyError(f"Unknown source bank: {source_type!r}")
-        if dest_type not in BANKS:
-            raise KeyError(f"Unknown destination bank: {dest_type!r}")
-        compatibility = COPY_COMPATIBILITY.get(operation)
-        if compatibility is None:
-            raise KeyError(f"Unknown copy operation: {operation!r}")
-        return (source_type, dest_type) in compatibility
-
     def compare_compatible(self, left_bank: str, right_bank: str) -> bool:
         if left_bank not in BANKS:
             raise KeyError(f"Unknown left bank: {left_bank!r}")
@@ -346,7 +240,6 @@ assert set(LADDER_BANK_CAPABILITIES) == set(BANKS), (
 
 __all__ = [
     "InstructionRole",
-    "CopyOperation",
     "CompareConstantKind",
     "BankCapability",
     "LADDER_WRITABLE_SC",
@@ -355,8 +248,6 @@ __all__ = [
     "FIELD_WRITABLE",
     "LADDER_BANK_CAPABILITIES",
     "INSTRUCTION_ROLE_COMPATIBILITY",
-    "CONVERTER_COMPATIBILITY",
-    "COPY_COMPATIBILITY",
     "COMPARE_COMPATIBILITY",
     "COMPARE_CONSTANT_COMPATIBILITY",
     "HEX_CONSTANT_BANKS",

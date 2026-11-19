@@ -19,6 +19,8 @@
   If a test expects the number in the TXT, expect the digits.
 - The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, which CLICK cannot hold).
   Export the program again before you paste it into CLICK.
+- A pack or unpack given a list, a tuple or one tag in place of a range is now refused when you build the program (it raised on its first scan).
+  Pass a `.select()` range, such as `c.select(1, 16)`.
 - `fill()` of a TXT into number registers is now refused when you build the program (it raised on a blank TXT and could not be exported).
   Copy the TXT into a number register with `convert=to_value`, then fill from that register.
 - The CLICK export now refuses `fill()` of a number into one TXT, such as `fill(5, txt.select(1, 1))` (it exported `copy(5,TXT1)`, which a CLICK runs as a conversion to digits).
@@ -29,9 +31,35 @@
   If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
 - The CLICK export now refuses a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`).
   Copy the value into a DH and use that DH in the formula.
+- CLICK validation of `copy()`, `blockcopy()`, `fill()` and the pack and unpack calls now reports laddercodec's codes. The old codes change like this:
+  - `CLK_COPY_BANK_INCOMPATIBLE` becomes `copy-bank-incompatible` or `bank-not-allowed`.
+  - `CLK_COPY_CONSTANT_INTO_BIT` becomes `constant-into-bit` or `bank-not-allowed`.
+  - `CLK_COPY_CONVERTER_INCOMPATIBLE` becomes `copy-converter-bank`, `copy-txt-needs-convert` or `option-not-offered`.
+  - `CLK_PACK_TEXT_BANK_INCOMPATIBLE` becomes `pack-kind-mismatch` or `copy-bank-incompatible`.
+  - `CLK_BANK_NOT_WRITABLE` becomes `not-writable` or `bank-not-allowed`.
+  - `CLK_BANK_UNRESOLVED` becomes `pointer-bank-not-allowed` for a pointer into SD as the destination.
+  - In these calls, `CLK_PTR_POINTER_MUST_BE_DS` becomes `pointer-not-ds` and `CLK_PTR_CONTEXT_ONLY_COPY` becomes `pointer-outside-copy`.
+
+  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a code that pyrung does not report, and names the codes that replace a removed one.
+- CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
+  Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
+- CLICK validation now refuses these forms, which the export wrote and CLICK's editor rejects:
+  - A `blockcopy()` of one register, such as `blockcopy(ds.select(1, 1), ds.select(5, 5))`. Use `copy()`.
+  - A `pack_bits()` or `unpack_to_bits()` of one bit, such as `pack_bits(c.select(1, 1), ds[1])`. Use a range of two or more bits.
+  - Text into a number register, such as `copy("AB", ds[1])`. Copy text into TXT.
+  - A `blockcopy()` of TXT into DF, such as `blockcopy(txt.select(1, 3), df.select(1, 3))`. Copy each TXT into its DF with `copy()`.
+  - A `fill()` into TXT of more than one character, such as `fill("AB", txt.select(2, 3))` or `fill(123, txt.select(1, 3))`. CLICK refuses the value, or saves a number in place of the text. Fill one character.
+  - A `copy()` of text into TXT with `convert=to_text()` or `convert=to_binary`, such as `copy("AB", txt[1], convert=to_text())`. Drop the converter.
+  - A `copy()` of `True` or `False` into TXT, such as `copy(True, txt[1])`. Copy the text or the number that you want the TXT to hold.
+  - A pointer into X, Y or T, such as `copy(x[ds[1]], c[5])` or `copy(c[1], y[ds[1]])`. CLICK's pointer does not reach these banks. Point into a bank that it reaches, such as C or DS.
+  - A pack or unpack of more bits than the register holds, such as `pack_bits(c.select(1, 33), dd[1])`. A DS or DH holds 16 bits, and a DD or DF holds 32.
+  - `pack_bits()` of X, Y, T, CT or SC into DS, DD or DF, and `unpack_to_bits()` of DS, DD or DF into Y. Pack into a DH, or unpack from one.
+  - A constant outside its register's range, such as `copy(99999999999, dd[1])`. Use a constant that fits.
+  - A `blockcopy()` into X or Y that crosses a 16-point slot, such as `blockcopy(c.select(1, 20), y.select(1, 20))`. Split it at the end of the slot, Y016. 0.17.0 exported this example into Y001..Y016, which is not what the program does. Export such a program again after you split it.
 
 ### Fixes
 
+- `fill()` into two or more YD registers now exports, as a CLICK does (it was refused).
 - A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does (it raised `ValueError` on a letter or a blank TXT).
 - `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
 - `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).

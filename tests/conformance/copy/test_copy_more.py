@@ -7,7 +7,7 @@ A NUL reads 0.
 ``copy_more``:
 
 - ``across_types``: 2.7 into an Int (ErrorCode): 2 truncated, 3 rounded.  The exporter
-  refuses a DS or DF into a C and a C into a DS or DF (``CLK_COPY_BANK_INCOMPATIBLE``), so those
+  refuses a DS or DF into a C and a C into a DS or DF (``copy-bank-incompatible``), so those
   are not asked.  A Copy of a constant into a C bit is refused by CLICK's editor and by the
   export, so it is not asked either.
 - ``pointer_limits``: ``faults/pointer_past_bank`` reads a DD past its bank.  The others, by

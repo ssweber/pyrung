@@ -15,7 +15,6 @@ from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
     CLK_COMPARE_HEX_MIX,
-    CLK_COPY_CONSTANT_INTO_BIT,
     CLK_MATH_BIT_OPERAND,
     CLK_MATH_DEST_BANK,
     CLK_MATH_MODE_MIXED,
@@ -85,10 +84,9 @@ def test_a_constant_copied_into_a_bit_is_refused(value, bit):
         pytest.warns(UserWarning, match="use reset") if value is False else contextlib.nullcontext()
     )
     with warned:
-        (finding,) = _found(body, CLK_COPY_CONSTANT_INTO_BIT)
-        _export_refuses(body, CLK_COPY_CONSTANT_INTO_BIT)
-    assert f"copy({value!r}, ...) into {bit.name.rstrip('0123456789')}" in finding.message
-    assert "takes no constant into bit memory" in finding.message
+        (finding,) = _found(body, "constant-into-bit")
+        _export_refuses(body, "constant-into-bit")
+    assert finding.message.startswith(f"CLICK refuses copy({value!r}, {bit.name}) at ")
 
 
 @pytest.mark.parametrize("value", [2, True, 0, False])
@@ -97,9 +95,10 @@ def test_a_constant_filled_into_bits_is_refused(value):
         with rung(x[1]):
             fill(value, c.select(1, 4))
 
-    (finding,) = _found(body, CLK_COPY_CONSTANT_INTO_BIT)
-    assert "CLICK's Fill" in finding.message
-    _export_refuses(body, CLK_COPY_CONSTANT_INTO_BIT)
+    # CLICK's Fill takes no bit range as its destination, whatever the value.
+    (finding,) = _found(body, "bank-not-allowed")
+    assert finding.message.startswith(f"CLICK refuses fill({value!r}, C1..C4) at ")
+    _export_refuses(body, "bank-not-allowed")
 
 
 def test_a_constant_into_a_register_and_a_bit_into_a_bit_pass():
@@ -111,7 +110,7 @@ def test_a_constant_into_a_register_and_a_bit_into_a_bit_pass():
             fill(0, ds.select(10, 14))
             fill(7, dd.select(1, 2))
 
-    assert _found(body, CLK_COPY_CONSTANT_INTO_BIT) == []
+    assert _found(body, "constant-into-bit") == []
 
 
 # --- A bit in a Math formula --------------------------------------------------------

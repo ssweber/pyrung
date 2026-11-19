@@ -9,13 +9,11 @@ from typing import TYPE_CHECKING, Any
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import (
-    CONVERTER_COMPATIBILITY,
     FIELD_WRITABLE,
     HEX_CONSTANT_BANKS,
     single_register_fill_dest,
 )
 from pyrung.core.condition import Condition
-from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.conversions import (
     LITERAL,
     _render_text_from_numeric,
@@ -31,14 +29,10 @@ from pyrung.core.validation.walker import ProgramLocation, _condition_children
 from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_WRONG_ROLE,
-    CLK_COPY_BANK_INCOMPATIBLE,
-    CLK_COPY_CONSTANT_INTO_BIT,
-    CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_COPY_WIDE_CONSTANT,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_MATH_DEST_BANK,
     CLK_OUT_UNIT_UNSUPPORTED,
-    CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_SEARCH_RANGE_BANK,
     CLK_SEARCH_RESULT_NOT_DS,
     CLK_TEXT_PAST_BANK,
@@ -73,18 +67,10 @@ _WRITE_TARGET_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("OutInstruction", "target"),
         ("LatchInstruction", "target"),
         ("ResetInstruction", "target"),
-        ("CopyInstruction", "target"),
-        ("BlockCopyInstruction", "dest"),
-        ("FillInstruction", "dest"),
         ("CalcInstruction", "dest"),
         ("SearchInstruction", "result"),
         ("SearchInstruction", "found"),
         ("ShiftInstruction", "bit_range"),
-        ("PackBitsInstruction", "dest"),
-        ("PackWordsInstruction", "dest"),
-        ("UnpackToBitsInstruction", "bit_block"),
-        ("UnpackToWordsInstruction", "word_block"),
-        ("PackTextInstruction", "dest"),
         ("EventDrumInstruction", "current_step"),
         ("EventDrumInstruction", "completion_flag"),
         ("TimeDrumInstruction", "current_step"),
@@ -142,16 +128,6 @@ _ROLE_ASSIGNMENT_FIELDS: dict[tuple[str, str], str] = {
     ("TimedInstruction", "on_preset"): "timer_preset",
 }
 
-_COPY_COMPATIBILITY_FIELDS: dict[str, tuple[str, str, str]] = {
-    "CopyInstruction": ("single", "source", "target"),
-    "BlockCopyInstruction": ("block", "source", "dest"),
-    "FillInstruction": ("fill", "value", "dest"),
-    "PackBitsInstruction": ("pack_bits", "bit_block", "dest"),
-    "PackWordsInstruction": ("pack_words", "word_block", "dest"),
-    "UnpackToBitsInstruction": ("unpack_bits", "source", "bit_block"),
-    "UnpackToWordsInstruction": ("unpack_words", "source", "word_block"),
-}
-
 
 def _load_default_profile() -> HardwareProfile | None:
     from pyrung.click.profile import load_default_profile
@@ -176,13 +152,7 @@ def _evaluate_write_targets(
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
         resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
-        # A Fill of one register exports as a Copy, so the Copy's write rules apply.
         written_by = (instruction_type, field_name)
-        if (
-            instruction_type == "FillInstruction"
-            and single_register_fill_dest(instruction.dest) is not None
-        ):
-            written_by = ("CopyInstruction", "target")
 
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "operand"))
@@ -344,92 +314,6 @@ def _evaluate_coil_targets(
     ]
 
 
-_BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
-# The copy operations whose source may be a constant, with the CLICK instruction's name.
-_CONSTANT_COPY_VERBS = {"single": ("copy", "Copy"), "fill": ("fill", "Fill")}
-
-
-def _constant_into_bit(
-    operation: str,
-    value: Any,
-    dest_memory_types: tuple[str, ...],
-    dest_location: ProgramLocation,
-    mode: ValidationMode,
-) -> list[ClickFinding]:
-    """Report CLK_COPY_CONSTANT_INTO_BIT, a constant copied or filled into bit memory.
-
-    CLICK's Copy and Fill dialogs refuse it (checked in the v4 editor, 2026-11-06).
-    """
-    bits = [memory_type for memory_type in dest_memory_types if memory_type in _BIT_BANKS]
-    if not bits:
-        return []
-    verb, box = _CONSTANT_COPY_VERBS[operation]
-    if isinstance(value, ImmediateRef):
-        value = value.value
-    location_text = _format_location(dest_location)
-    return [
-        ClickFinding(
-            code=CLK_COPY_CONSTANT_INTO_BIT,
-            severity=_route_severity(CLK_COPY_CONSTANT_INTO_BIT, mode),
-            message=(
-                f"{verb}({value!r}, ...) into {', '.join(bits)} at {location_text}: CLICK's "
-                f"{box} takes no constant into bit memory."
-            ),
-            location=location_text,
-            suggestion=(
-                "Set or clear the bit with out(), latch() or reset(), or copy a bit into it."
-                if operation == "single"
-                else "Set or clear the bits with latch() or reset() on the range."
-            ),
-        )
-    ]
-
-
-def _exponential_from_an_integer(
-    instruction: Any,
-    source: Any,
-    source_resolution: Any,
-    source_location: ProgramLocation,
-    mode: ValidationMode,
-) -> list[ClickFinding]:
-    """Report Exponential Numbering on a Copy whose source is not a Real.
-
-    CLICK offers Exponential Numbering only for a Real source. A DF, a DF pointer and a
-    Real constant are Real sources. This check runs before the early return for a
-    constant, so it also refuses an integer constant.
-    """
-    converter = getattr(instruction, "authored_convert", getattr(instruction, "convert", None))
-    if not (
-        isinstance(converter, CopyConverter) and converter.mode == "text" and converter.exponential
-    ):
-        return []
-    if copy_source_kind(source) == LITERAL:
-        value = source.value if isinstance(source, ImmediateRef) else source
-        if isinstance(value, float):
-            return []
-        got = [f"the constant {value!r}"]
-    else:
-        got = [
-            memory_type
-            for memory_type in dict.fromkeys(slot.memory_type for slot in source_resolution.slots)
-            if memory_type != "DF"
-        ]
-    location_text = _format_location(source_location)
-    return [
-        ClickFinding(
-            code=CLK_COPY_CONVERTER_INCOMPATIBLE,
-            severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
-            message=(
-                "to_text(exponential=True) needs a Real source, such as a DF or a Real "
-                f"constant. The source here is {item} at {location_text}."
-            ),
-            location=location_text,
-            suggestion="Remove exponential=True, or use suppress_zero for an integer source.",
-        )
-        for item in got
-    ]
-
-
 def _wide_constant_into_hex(
     instruction_type: str,
     value: Any,
@@ -487,185 +371,36 @@ def _wide_constant_into_hex(
     ]
 
 
-def _evaluate_copy_compatibility(
+def _evaluate_wide_copy_constant(
     instruction: Any,
     base_location: ProgramLocation,
-    tag_map: TagMap,
-    profile: HardwareProfile,
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    findings: list[ClickFinding] = []
+    """Report a copy() or fill() constant that the export has no hex constant for."""
     instruction_type = type(instruction).__name__
-    mapping = _COPY_COMPATIBILITY_FIELDS.get(instruction_type)
-    if mapping is None:
-        return findings
-
-    operation, source_field, dest_field = mapping
-    # CLICK has no Fill of one register, so the export is a Copy. It must also pass the
-    # Fill table, so a Fill that CLICK refuses is never accepted this way.
-    operations = (operation,)
-    if operation == "fill" and single_register_fill_dest(instruction.dest) is not None:
-        operations = ("fill", "single")
-        operation = "single"
-    source_location = _instruction_location(base_location, f"instruction.{source_field}")
-    dest_location = _instruction_location(base_location, f"instruction.{dest_field}")
-
-    source_resolution = resolver.resolve_operand_slots(getattr(instruction, source_field))
-    dest_resolution = resolver.resolve_operand_slots(getattr(instruction, dest_field))
-
-    if source_resolution.unresolved:
-        findings.append(_unresolved_finding(source_location, mode, "source"))
-    if dest_resolution.unresolved:
-        findings.append(_unresolved_finding(dest_location, mode, "destination"))
-    if source_resolution.unresolved or dest_resolution.unresolved:
-        return findings
-
-    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
-    source = getattr(instruction, source_field)
-    if operation in _CONSTANT_COPY_VERBS and copy_source_kind(source) == LITERAL:
-        findings.extend(
-            _constant_into_bit(operation, source, dest_memory_types, dest_location, mode)
-        )
-        findings.extend(
-            _wide_constant_into_hex(
-                instruction_type,
-                source,
-                dest_memory_types,
-                dest_location,
-                mode,
-                range_fill=operation == "fill",
-            )
-        )
-    findings.extend(
-        _exponential_from_an_integer(instruction, source, source_resolution, source_location, mode)
-    )
-
-    if not source_resolution.slots or not dest_resolution.slots:
-        return findings
-
-    source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
-
-    for source_memory_type in source_memory_types:
-        for dest_memory_type in dest_memory_types:
-            refused = next(
-                (
-                    op
-                    for op in operations
-                    if not profile.copy_compatible(op, source_memory_type, dest_memory_type)
-                ),
-                None,
-            )
-            if refused is not None:
-                location_text = _format_location(dest_location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_COPY_BANK_INCOMPATIBLE,
-                        severity=_route_severity(CLK_COPY_BANK_INCOMPATIBLE, mode),
-                        message=(
-                            f"CLICK cannot {dsl_call(instruction)} from "
-                            f"{source_memory_type} to {dest_memory_type}, at {location_text}."
-                        ),
-                        location=location_text,
-                    )
-                )
-
-    # --- Converter / bank compatibility ---
-    # A plain Copy across text converts on its own; the bank check above covers it.
-    converter = getattr(instruction, "authored_convert", getattr(instruction, "convert", None))
-    if isinstance(converter, CopyConverter):
-        compat = CONVERTER_COMPATIBILITY.get(converter.mode)
-        if compat is not None:
-            valid_sources, valid_dests = compat
-            for source_memory_type in source_memory_types:
-                if source_memory_type not in valid_sources:
-                    location_text = _format_location(source_location)
-                    findings.append(
-                        ClickFinding(
-                            code=CLK_COPY_CONVERTER_INCOMPATIBLE,
-                            severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
-                            message=(
-                                f"to_{converter.mode}() reads only from "
-                                f"{', '.join(sorted(valid_sources))}. The source at "
-                                f"{location_text} is {source_memory_type}."
-                            ),
-                            location=location_text,
-                            suggestion=_build_suggestion(
-                                CLK_COPY_CONVERTER_INCOMPATIBLE, None, tag_map
-                            ),
-                        )
-                    )
-            for dest_memory_type in dest_memory_types:
-                if dest_memory_type not in valid_dests:
-                    location_text = _format_location(dest_location)
-                    findings.append(
-                        ClickFinding(
-                            code=CLK_COPY_CONVERTER_INCOMPATIBLE,
-                            severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
-                            message=(
-                                f"to_{converter.mode}() writes only to "
-                                f"{', '.join(sorted(valid_dests))}. The destination at "
-                                f"{location_text} is {dest_memory_type}."
-                            ),
-                            location=location_text,
-                            suggestion=_build_suggestion(
-                                CLK_COPY_CONVERTER_INCOMPATIBLE, None, tag_map
-                            ),
-                        )
-                    )
-
-    return findings
-
-
-def _evaluate_pack_text(
-    instruction: Any,
-    base_location: ProgramLocation,
-    tag_map: TagMap,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    if type(instruction).__name__ != "PackTextInstruction":
+    if instruction_type == "CopyInstruction":
+        value, dest, range_fill = instruction.source, instruction.dest, False
+    elif instruction_type == "FillInstruction":
+        value, dest = instruction.value, instruction.dest
+        # A Fill of one register exports as a Copy, which takes a fraction as a Real.
+        range_fill = single_register_fill_dest(dest) is None
+    else:
         return []
-
-    findings: list[ClickFinding] = []
-    source_location = _instruction_location(base_location, "instruction.source_range")
-    dest_location = _instruction_location(base_location, "instruction.dest")
-
-    source_resolution = resolver.resolve_operand_slots(instruction.source_range)
-    dest_resolution = resolver.resolve_operand_slots(instruction.dest)
-
-    if source_resolution.unresolved:
-        findings.append(_unresolved_finding(source_location, mode, "source"))
-    if dest_resolution.unresolved:
-        findings.append(_unresolved_finding(dest_location, mode, "destination"))
-    if source_resolution.unresolved or dest_resolution.unresolved:
-        return findings
-
-    if not source_resolution.slots or not dest_resolution.slots:
-        return findings
-
-    allowed_dest_banks = {"DS", "DD", "DH", "DF", "TD", "CTD"}
-    source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
-    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
-    for source_memory_type in source_memory_types:
-        for dest_memory_type in dest_memory_types:
-            if source_memory_type == "TXT" and dest_memory_type in allowed_dest_banks:
-                continue
-            location_text = _format_location(dest_location)
-            findings.append(
-                ClickFinding(
-                    code=CLK_PACK_TEXT_BANK_INCOMPATIBLE,
-                    severity=_route_severity(CLK_PACK_TEXT_BANK_INCOMPATIBLE, mode),
-                    message=(
-                        f"pack_text() at {location_text} cannot pack {source_memory_type} "
-                        f"into {dest_memory_type}. CLICK packs TXT into DS, DD, DH, DF, TD or "
-                        "CTD."
-                    ),
-                    location=location_text,
-                )
-            )
-
-    return findings
+    if copy_source_kind(value) != LITERAL:
+        return []
+    resolution = resolver.resolve_operand_slots(dest)
+    if resolution.unresolved:
+        return []
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+    return _wide_constant_into_hex(
+        instruction_type,
+        value,
+        dest_memory_types,
+        _instruction_location(base_location, "instruction.dest"),
+        mode,
+        range_fill=range_fill,
+    )
 
 
 # The banks that CLICK v4's Search dialog accepts (checked in the editor, 2026-11-06).
@@ -899,6 +634,32 @@ def constant_text_past_txt(instruction: Any, address: int) -> int | None:
     return length
 
 
+def constant_text_past_bank_advice(instruction: Any, resolver: _ResolutionCache) -> str | None:
+    """Return the advice for a text Copy's constant that runs past TXT1000.
+
+    The advice names the highest TXT that keeps every character that CLICK saves and
+    every character that the Copy writes.
+    """
+    if type(instruction).__name__ != "CopyInstruction":
+        return None
+    target = instruction.target
+    if isinstance(target, ImmediateRef):
+        target = target.value
+    written = _fewest_elements_written(instruction)
+    resolution = resolver.resolve_operand_slots(target)
+    if written is None or resolution.unresolved or len(resolution.slots) != 1:
+        return None
+    address = resolution.slots[0].address
+    saved = None if address is None else constant_text_past_txt(instruction, address)
+    if saved is None:
+        return None
+    bank = BANKS["TXT"]
+    lowest = bank.max_addr - max(saved, written.count) + 1
+    if lowest < bank.min_addr:
+        return None
+    return f"Start it at TXT{lowest} or lower to keep {written.kept()}."
+
+
 def _evaluate_text_past_bank(
     instruction: Any,
     base_location: ProgramLocation,
@@ -910,9 +671,9 @@ def _evaluate_text_past_bank(
     Each is a Copy by address whose text runs past the end of its bank, or past the end
     of its own block while the bank goes on.
 
-    pyrung writes the elements that its block holds and drops the rest. A constant into
-    TXT that runs past the bank as written is refused, because CLICK's Copy refuses it
-    (OBJ-003). Any other store past the bank warns. CLICK's Copy accepts a register
+    pyrung writes the elements that its block holds and drops the rest. A store past the
+    bank warns. laddercodec refuses a constant into TXT that runs past the bank as CLICK
+    saves it (OBJ-003), so this function skips that store. CLICK's Copy accepts a register
     source, which saves no end address. A store past the end of a block that is mapped
     inside a bank warns. CLICK writes the rest of the text into the bank past the block,
     and pyrung stops at the end of the block. Only a store whose shortest text runs past
@@ -942,27 +703,9 @@ def _evaluate_text_past_bank(
     start = f"{memory_type}{slot.address}"
     severity = "error" if mode == "strict" else "warning"
 
-    saved = constant_text_past_txt(instruction, slot.address) if memory_type == "TXT" else None
-    if saved is not None:
-        lowest = bank.max_addr - max(saved, count) + 1
-        named = target.name if target.name == start else f"{target.name} ({start})"
-        return [
-            ClickFinding(
-                code=CLK_TEXT_PAST_BANK,
-                severity=severity,
-                message=(
-                    f"copy() into {named} at {location_text} has a {saved}-character "
-                    f"constant, which runs past {memory_type}{bank.max_addr} at the end of the "
-                    "bank. CLICK's Copy refuses it (OBJ-003), so the export refuses it."
-                ),
-                location=location_text,
-                suggestion=(
-                    f"Start it at {memory_type}{lowest} or lower to keep {written.kept()}."
-                    if lowest >= bank.min_addr
-                    else None
-                ),
-            )
-        ]
+    if memory_type == "TXT" and constant_text_past_txt(instruction, slot.address) is not None:
+        # laddercodec refuses this constant as text-past-bank.
+        return []
     if count < 2:
         return []
     block_room_ = block_room(target)

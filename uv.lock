@@ -191,6 +191,11 @@ wheels = [
 ]
 
 [[package]]
+name = "laddercodec"
+version = "0.4.1.dev108+5b003b1"
+source = { git = "https://github.com/ssweber/laddercodec?branch=main#5b003b1239544a19057184af15af3366488b767f" }
+
+[[package]]
 name = "markdown"
 version = "3.11.3"
 source = { registry = "https://pypi.org/simple" }
@@ -557,6 +562,7 @@ name = "pyrung"
 source = { editable = "." }
 dependencies = [
     { name = "executing" },
+    { name = "laddercodec" },
     { name = "pyclickplc" },
     { name = "pymodbus" },
     { name = "pyrsistent" },
@@ -581,6 +587,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "executing", specifier = ">=2.2.0" },
+    { name = "laddercodec", git = "https://github.com/ssweber/laddercodec?branch=main" },
     { name = "pyclickplc", specifier = ">=0.9.1" },
     { name = "pymodbus", specifier = ">=3.12,<4" },
     { name = "pyrsistent", specifier = ">=0.20.0" },

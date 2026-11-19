@@ -13,6 +13,7 @@ from pyrung.click._topology import (
     factor_outputs,
     make_compound,
 )
+from pyrung.click.validation.findings import check_allowed_codes
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.rung import Rung, dsl_call
 from pyrung.core.validation._common import rung_path
@@ -56,6 +57,7 @@ def build_ladder_bundle(
     allow: Collection[str] = (),
 ) -> LadderBundle:
     """Render a `Program` into deterministic Click ladder CSV row matrices."""
+    check_allowed_codes(allow)
     return _LadderExporter(tag_map=tag_map, program=program, index=index).export(
         validate=validate, allow=allow
     )

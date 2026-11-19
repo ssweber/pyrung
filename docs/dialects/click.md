@@ -73,6 +73,8 @@ X and Y are sparse banks with non-contiguous valid addresses. `.select()` filter
 x.select(1, 21)   # yields X001..X016 and X021 (17 tags, not 21)
 ```
 
+A CLICK range must be consecutive addresses. CLICK validation and the export reject a range like this one in `blockcopy()`, `fill()`, a pack or an unpack. Split it at X016.
+
 ### Per-slot configuration
 
 Pre-built blocks support per-slot runtime policy for retention, default values, and naming. Configure before first access to a slot:
@@ -399,8 +401,9 @@ Common findings:
 | Constant in `copy()` or `fill()` into a `Word` | Any | 0..65535 into DH, XD or YD (`CLK_COPY_WIDE_CONSTANT`). The export writes −32768..−1 as its 16 bits. A `copy()` may have a fraction, and a CLICK drops it (`copy(1.5, DH1)` stores 1). A `fill()` of several registers must be a whole number. The export rejects any other constant, even with `allow=` |
 | A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK. In pyrung it is 0, because the `sc` block does not follow the system points |
 | Compare of a `Word` mapped to `DH`, `XD` or `YD` with a `DS`, `DD`, `DF`, `TD`, `CTD` or `SD` tag | Compares the values | Both sides hex, or a hex tag against a constant. Copy the `Word` into a `DS` tag first (`CLK_COMPARE_HEX_MIX`) |
+| Range in `blockcopy()`, `fill()`, a pack or an unpack | Any tags, in any order | Consecutive addresses in one bank, in ascending order (`CLK_COPY_RANGE_NOT_CONSECUTIVE`). `y.select(1, 21)` skips Y017..Y020, so split it at Y016. The export rejects such a range even with `allow=` |
 | Text compare on a `Char` (`Name == "AB"`) | Compares the Chars that follow it in its block | The Chars must map to consecutive TXT addresses, in order (`CLK_TEXT_WINDOW_NOT_CONTIGUOUS`) |
-| Text `copy()` that runs past the end of its bank | Drops what runs past | Start it low enough to keep every character (`CLK_TEXT_PAST_BANK`). The export rejects a constant whose text runs past TXT1000 as written, such as `1.5` into TXT999. `allow=` does not change this, and CLICK's Copy rejects it too. If the text runs past TXT1000 only after conversion, such as `1.5` into TXT995, the export warns. It also warns for a register source. CLICK's Copy accepts that |
+| Text `copy()` that runs past the end of its bank | Drops what runs past | Start it low enough to keep every character. If a constant runs past TXT1000 as written, such as `1.5` into TXT999, CLICK's Copy rejects it (`text-past-bank`). The export rejects it too, even with `allow=`. If the constant runs past TXT1000 only after conversion, such as `1.5` into TXT995, validation warns (`CLK_TEXT_PAST_BANK`). A register source gets the same warning. CLICK's Copy accepts both |
 | Text `copy()` that runs past the end of its block | Drops what runs past | A CLICK keeps writing into the bank past the block. Map the block onto more of the bank (`CLK_TEXT_PAST_BLOCK`) |
 
 ### Timer preset limits

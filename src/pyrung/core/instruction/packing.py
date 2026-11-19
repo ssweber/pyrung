@@ -18,6 +18,7 @@ from .conversions import (
     _store_copy_value_to_tag_type,
     _truncate_to_tag_type,
 )
+from .data_transfer import _is_range
 from .resolvers import (
     _set_fault_address_error,
     _set_fault_out_of_range,
@@ -64,6 +65,18 @@ def _unpack_source_tag(source: Tag | IndirectRef | IndirectExprRef, ctx: ScanCon
     return resolve_tag_ctx(source, ctx)
 
 
+def _require_range(call: str, action: str, example: str, value: Any) -> None:
+    """Refuse a block operand that is not a range, as blockcopy() does.
+
+    Without this check, a list or one tag builds and then raises on its first scan.
+    """
+    if not _is_range(value):
+        raise TypeError(
+            f"{call}() {action} a range from .select(), such as {example}. Pass the tags as "
+            "one range, not as a list or one tag."
+        )
+
+
 class PackBitsInstruction(OneShotMixin, Instruction):
     """Pack BOOL tags from a BlockRange into a destination register."""
 
@@ -75,6 +88,7 @@ class PackBitsInstruction(OneShotMixin, Instruction):
     _structural_fields = ()
 
     def __init__(self, bit_block: Any, dest: Any, *, oneshot: bool = False):
+        _require_range("pack_bits", "reads", "c.select(1, 16)", bit_block)
         OneShotMixin.__init__(self, oneshot)
         self.bit_block = bit_block
         self.dest = dest
@@ -128,6 +142,7 @@ class PackWordsInstruction(OneShotMixin, Instruction):
     _structural_fields = ()
 
     def __init__(self, word_block: Any, dest: Any, *, oneshot: bool = False):
+        _require_range("pack_words", "reads", "ds.select(1, 2)", word_block)
         OneShotMixin.__init__(self, oneshot)
         self.word_block = word_block
         self.dest = dest
@@ -180,6 +195,7 @@ class PackTextInstruction(OneShotMixin, Instruction):
     def __init__(
         self, source_range: Any, dest: Any, *, allow_whitespace: bool = False, oneshot: bool = False
     ):
+        _require_range("pack_text", "reads", "txt.select(1, 4)", source_range)
         OneShotMixin.__init__(self, oneshot)
         self.source_range = source_range
         self.dest = dest
@@ -244,6 +260,7 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
     _structural_fields = ()
 
     def __init__(self, source: Any, bit_block: Any, *, oneshot: bool = False):
+        _require_range("unpack_to_bits", "writes", "c.select(1, 16)", bit_block)
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.bit_block = bit_block
@@ -306,6 +323,7 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
     _structural_fields = ()
 
     def __init__(self, source: Any, word_block: Any, *, oneshot: bool = False):
+        _require_range("unpack_to_words", "writes", "ds.select(1, 2)", word_block)
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.word_block = word_block
