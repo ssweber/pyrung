@@ -27,7 +27,6 @@ from pyrung.click.validation import (
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
-    CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
     ClickValidationReport,
     validate_click_program,
@@ -1854,11 +1853,11 @@ class TestTimerPresetOverflow:
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1])],
+            [Timer[1].Done.map_to(t[1]), Timer[1].Acc.map_to(td[1])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_TIMER_PRESET_OVERFLOW not in _finding_codes(report)
+        assert _finding_codes(report) == []
 
     def test_preset_exceeds_int_range(self):
         def logic():
@@ -1867,11 +1866,12 @@ class TestTimerPresetOverflow:
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1])],
+            [Timer[1].Done.map_to(t[1]), Timer[1].Acc.map_to(td[1])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_TIMER_PRESET_OVERFLOW in _finding_codes(report)
+        # laddercodec's Timer refuses the preset, in place of CLK_TIMER_PRESET_OVERFLOW.
+        assert Code.CONSTANT_OUT_OF_RANGE in _finding_codes(report)
 
     def test_preset_tag_skipped(self):
         """Dynamic preset via Tag should not trigger overflow check."""
@@ -1883,11 +1883,11 @@ class TestTimerPresetOverflow:
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1]), Preset.map_to(ds[2])],
+            [Timer[1].Done.map_to(t[1]), Timer[1].Acc.map_to(td[1]), Preset.map_to(ds[2])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert CLK_TIMER_PRESET_OVERFLOW not in _finding_codes(report)
+        assert _finding_codes(report) == []
 
 
 class TestForLoopCountAndRandBounds:

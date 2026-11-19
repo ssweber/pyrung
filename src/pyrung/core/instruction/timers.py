@@ -76,6 +76,10 @@ class OnDelayInstruction(Instruction):
     _structural_fields = ("unit",)
     _exclusive_fields = ("accumulator",)
     _status_fields = ("en_bit", "tt_bit")
+    _call_operands = (("timer", ("done_bit", "accumulator")),)
+    _call_keyword_operands = (("preset", "preset"),)
+    _call_keywords = ("unit",)
+    _call_chained = (("reset", "reset_condition"),)
 
     def __init__(
         self,
@@ -217,6 +221,9 @@ class OffDelayInstruction(Instruction):
     _structural_fields = ("unit",)
     _exclusive_fields = ("accumulator",)
     _status_fields = ("en_bit", "tt_bit")
+    _call_operands = (("timer", ("done_bit", "accumulator")),)
+    _call_keyword_operands = (("preset", "preset"),)
+    _call_keywords = ("unit",)
 
     def __init__(
         self,
