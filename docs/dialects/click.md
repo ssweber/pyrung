@@ -375,8 +375,17 @@ After mapping, validate your program against CLICK hardware restrictions:
 report = mapping.validate(logic, mode="warn")
 print(report.summary())
 
-for finding in report.findings:
-    print(f"  {finding.level}: {finding.message}")
+for finding in (*report.errors, *report.warnings, *report.hints):
+    print(finding)
+```
+
+Each finding prints like this:
+
+```text
+[CLK_MATH_MODE_MIXED] hint
+  math() at main.rung[1].instruction[0](CalcInstruction).instruction.expression mixes WORD operands with other operands. CLICK runs a Math in hex or in decimal, not both.
+ --> main.rung[1].instruction[0](CalcInstruction).instruction.expression
+  = hint: Split it into a math() of WORD tags and a math() of the other tags. Pass the result from one to the other through a tag.
 ```
 
 Common findings:

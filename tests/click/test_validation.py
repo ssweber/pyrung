@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap
@@ -37,6 +39,7 @@ from pyrung.click.validation import (
     CLK_RAND_EQUAL_BOUNDS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PRESET_OVERFLOW,
+    ClickFinding,
     ClickValidationReport,
     validate_click_program,
 )
@@ -67,6 +70,7 @@ from pyrung.core.program import (
     run_function,
     rung,
 )
+from pyrung.core.validation.display import FindingDisplay, Frame
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1237,6 +1241,83 @@ class TestReportSummary:
 
         report_strict = validate_click_program(prog, tag_map, mode="strict")
         assert "error(s)" in report_strict.summary()
+
+
+class TestFindingDisplay:
+    def test_a_finding_without_a_display_gets_one_frame_at_its_location(self):
+        finding = ClickFinding(
+            code=CLK_MATH_FLOOR_DIV,
+            severity="hint",
+            message="Floor division at main.rung[1].",
+            location="main.rung[1]",
+            suggestion="Use math(a / b, int_dest).",
+        )
+        display = finding.display
+        assert display.code == CLK_MATH_FLOOR_DIV
+        assert display.severity == "hint"
+        assert [frame.location for frame in display.frames] == ["main.rung[1]"]
+        assert display.frames[0].lines == ()
+        assert display.problem == "Floor division at main.rung[1]."
+        assert display.hint == "Use math(a / b, int_dest)."
+        assert str(finding) == str(display)
+
+    def test_a_finding_without_a_suggestion_has_no_hint(self):
+        finding = ClickFinding(
+            code=CLK_MATH_FLOOR_DIV, severity="error", message="m", location="main"
+        )
+        assert finding.suggestion is None
+        assert finding.display.hint == ""
+
+    def test_a_passed_display_is_kept(self):
+        display = FindingDisplay(
+            code=CLK_MATH_FLOOR_DIV,
+            severity="hint",
+            frames=(Frame(location="main.rung[1]", lines=("math(A // B, C)",)),),
+            problem="CLICK has no floor division.",
+        )
+        finding = ClickFinding(
+            code=CLK_MATH_FLOOR_DIV,
+            severity="hint",
+            message="m",
+            location="main.rung[1]",
+            display=display,
+        )
+        assert finding.display is display
+        assert finding.message == "m"
+
+    @pytest.mark.parametrize(
+        ("code", "severity"),
+        [(CLK_MATH_NESTING_DEPTH, "hint"), (CLK_MATH_FLOOR_DIV, "error")],
+    )
+    def test_a_passed_display_for_another_code_or_severity_is_refused(self, code, severity):
+        display = FindingDisplay(code=CLK_MATH_FLOOR_DIV, severity="hint")
+        with pytest.raises(ValueError, match="same code and severity"):
+            ClickFinding(
+                code=code, severity=severity, message="m", location="main", display=display
+            )
+
+    def test_replace_with_another_severity_is_refused(self):
+        finding = ClickFinding(
+            code=CLK_MATH_FLOOR_DIV, severity="hint", message="m", location="main"
+        )
+        with pytest.raises(ValueError, match="same code and severity"):
+            dataclasses.replace(finding, severity="error")
+
+    def test_validation_findings_carry_their_text_in_the_display(self):
+        A = Tag("A", TagType.INT)
+
+        def logic():
+            with rung((A + 1) > 10):
+                out(Bool("Light"))
+
+        report = validate_click_program(_build_program(logic), TagMap(include_system=False))
+        assert report.hints
+        for finding in report.hints:
+            assert finding.display.code == finding.code
+            assert finding.display.severity == finding.severity
+            assert [frame.location for frame in finding.display.frames] == [finding.location]
+            assert finding.display.problem == finding.message
+            assert finding.display.hint == (finding.suggestion or "")
 
 
 class TestFunctionCallPortability:

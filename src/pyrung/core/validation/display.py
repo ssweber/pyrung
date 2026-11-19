@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pyrung.core.validation.severity import Severity
+from pyrung.core.validation.severity import DisplaySeverity
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ class FindingDisplay:
     """
 
     code: str
-    severity: Severity
+    severity: DisplaySeverity
     frames: tuple[Frame, ...] = field(default_factory=tuple)
     problem: str = ""
     hint: str = ""
