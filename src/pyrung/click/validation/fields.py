@@ -3,13 +3,14 @@
 For each copy(), blockcopy(), fill(), pack and unpack instruction, pyrung builds the
 laddercodec instruction that the export writes. laddercodec refuses the values that CLICK's
 dialog refuses. Each refusal becomes a finding whose code is laddercodec's code. The
-finding's message names the author's call and gives laddercodec's message. Its advice is
-pyrung's, where the advice names a pyrung call or argument.
+finding prints the author's call with a caret under the refused argument. laddercodec's
+short text labels the caret, and its explanation leads the hint. pyrung's advice follows it,
+where the advice names a pyrung call or argument.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from laddercodec import BlockCopy, Copy, FieldError, Fill, Pack, Unpack
@@ -17,12 +18,16 @@ from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.core.expression import Expression
-from pyrung.core.tag import TagType
+from pyrung.core.memory_block import BlockRange, IndirectRef
+from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.validation._common import instruction_frame
+from pyrung.core.validation.display import FindingDisplay, Frame
 from pyrung.core.validation.render import operand_name, render_instruction
 
 from .findings import (
     CLK_COPY_RANGE_NOT_CONSECUTIVE,
     ClickFinding,
+    FindingSeverity,
     RangeProblem,
     ValidationMode,
     _route_severity,
@@ -38,6 +43,9 @@ from .resolve import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import ProgramLocation
 
 # Each pyrung instruction of the Copy family, with its source and destination attributes.
@@ -50,6 +58,40 @@ _COPY_FAMILY_FIELDS: dict[str, tuple[str, str]] = {
     "PackTextInstruction": ("source_range", "dest"),
     "UnpackToBitsInstruction": ("source", "bit_block"),
     "UnpackToWordsInstruction": ("source", "word_block"),
+}
+
+# The argument of the pyrung call that holds each field of laddercodec's Copy family. An
+# int is the index of a positional argument, and a str is the name of a keyword argument.
+# The export writes a fill() of one register as a Copy, so Copy.source is then the value
+# of fill().
+_FIELD_ARGUMENTS: dict[str, int | str] = {
+    "Copy.source": 0,
+    "Copy.dest": 1,
+    "Copy.convert": "convert",
+    "Copy.suppress_zero": "convert",
+    "Copy.exponential": "convert",
+    "Copy.termination_code": "convert",
+    "Copy.oneshot": "oneshot",
+    "BlockCopy.source_start": 0,
+    "BlockCopy.source_end": 0,
+    "BlockCopy.dest_start": 1,
+    "BlockCopy.dest_end": 1,
+    "BlockCopy.convert": "convert",
+    "BlockCopy.termination_code": "convert",
+    "BlockCopy.oneshot": "oneshot",
+    "Fill.value": 0,
+    "Fill.dest_start": 1,
+    "Fill.dest_end": 1,
+    "Fill.oneshot": "oneshot",
+    "Pack.source_start": 0,
+    "Pack.source_end": 0,
+    "Pack.dest": 1,
+    "Pack.allow_whitespace": "allow_whitespace",
+    "Pack.oneshot": "oneshot",
+    "Unpack.source": 0,
+    "Unpack.dest_start": 1,
+    "Unpack.dest_end": 1,
+    "Unpack.oneshot": "oneshot",
 }
 
 # The fields of each Copy family instruction that hold a range of addresses.
@@ -120,14 +162,6 @@ def _advice(code: str, instruction: Any, resolver: _ResolutionCache) -> str | No
 
 class _Unbuildable(Exception):
     """Raised when the export cannot write the instruction, so laddercodec has no input."""
-
-
-@dataclass(frozen=True)
-class CopyFamilyResult:
-    """The findings for one Copy family instruction, and the codes that laddercodec raised."""
-
-    findings: list[ClickFinding]
-    codes: frozenset[str]
 
 
 def _render(exporter: Any, value: Any, path: str, instruction: Any) -> str:
@@ -342,23 +376,226 @@ def _broken_ranges(instruction: Any, exporter: Any) -> list[RangeProblem]:
 
 def _call_text(instruction: Any) -> str:
     """Return the instruction as the call that the author wrote."""
-    kind = type(instruction).__name__
-    verb = _PACK_KINDS.get(kind) or _UNPACK_KINDS.get(kind)
-    if verb is None:
-        return render_instruction(instruction, "")[0]
-    source, dest = (getattr(instruction, field) for field in _COPY_FAMILY_FIELDS[kind])
-    return f"{verb}({operand_name(source)}, {operand_name(dest)})"
+    return render_instruction(instruction, "")[0]
 
 
-def _finding_text(call: str, location_text: str, refusals: list[Any]) -> str:
-    """Return the finding's message: pyrung's frame, then laddercodec's message."""
-    text = f"CLICK refuses {call} at {location_text}."
-    messages = list(dict.fromkeys(map(str, refusals)))
-    click_ids = dict.fromkeys(r.click_id for r in refusals if r.click_id)
-    for click_id in click_ids:
-        if not any(click_id in message for message in messages):
-            messages.append(f"CLICK's error is {click_id}.")
-    return " ".join([text, *messages])
+def _operand_tags(operand: Any) -> list[tuple[Tag, str]]:
+    """Return each tag that *operand* names, with the name that the call spells for it.
+
+    A pointer such as ``DS[Ptr]`` names ``Ptr``. A range such as ``X1..X16`` spells each
+    tag by the block's name and the tag's address.
+    """
+    if isinstance(operand, ImmediateRef):
+        operand = operand.value
+    if isinstance(operand, IndirectRef):
+        return [(operand.pointer, operand_name(operand.pointer))]
+    if isinstance(operand, Tag):
+        return [(operand, operand_name(operand))]
+    if isinstance(operand, BlockRange):
+        name = operand.block.name
+        return [(operand.block[addr], f"{name}{addr}") for addr in operand.addresses]
+    return []
+
+
+def _address_text(address: str) -> str:
+    """Return a CLICK address in CLICK's form, such as ``X001`` for ``X1``."""
+    return format_address_display(*parse_address(address))
+
+
+def _tag_address(tag: Tag, resolver: _ResolutionCache) -> str | None:
+    """Return the CLICK address of *tag* in CLICK's form, or None if it has none."""
+    slot = resolver.resolve_direct_tag(tag)
+    if slot is None or slot.address is None:
+        return None
+    return format_address_display(slot.memory_type, slot.address)
+
+
+def tag_names(tag_map: TagMap) -> dict[str, str]:
+    """Return the name of each mapped CLICK address, for laddercodec's text.
+
+    A tag of the program is named as a call spells it, such as ``Motor.speed`` for a field
+    of a structure.
+    """
+    names = {slot.hardware_address: slot.logical_name for slot in tag_map.mapped_slots()}
+    for entry in tag_map.tags():
+        names[_address_text(tag_map.resolve(entry.logical))] = operand_name(entry.logical)
+    for block in tag_map.blocks():
+        for index in block.logical_addresses:
+            address = _address_text(tag_map.resolve(block.logical, index))
+            names[address] = operand_name(block.logical[index])
+    return names
+
+
+def _call_names(
+    instruction: Any, names: Mapping[str, str], resolver: _ResolutionCache
+) -> dict[str, str]:
+    """Return *names*, with each address in the call named as the call spells it.
+
+    laddercodec quotes every address when it gets no names, so each address of the call
+    has an entry. An address that the call spells as an address, such as ``X1`` for
+    ``X001``, is named by itself. laddercodec would show any other name with the address
+    after it in brackets.
+    """
+    call = dict(names)
+    for attribute in _COPY_FAMILY_FIELDS[type(instruction).__name__]:
+        for tag, name in _operand_tags(getattr(instruction, attribute)):
+            address = _tag_address(tag, resolver)
+            if address is not None:
+                call[address] = address if _spells(name, address) else name
+    return call
+
+
+def _spells(name: str, address: str) -> bool:
+    """Return True if *name* is a spelling of the CLICK address *address*."""
+    try:
+        return parse_address(name) == parse_address(address)
+    except ValueError:
+        return False
+
+
+def _sentence(text: str) -> str:
+    """Return a phrase of laddercodec's as a sentence, with a capital and a full stop.
+
+    A phrase that starts with a name, such as ``to_value``, keeps its case.
+    """
+    first_word = text.split(" ", 1)[0]
+    if first_word.isalpha() and first_word.islower():
+        text = text[0].upper() + text[1:]
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    """One laddercodec refusal, ready to become a finding once all advice is known."""
+
+    code: str
+    severity: FindingSeverity
+    message: str
+    location: str
+    frame: Frame
+    problem: str
+    detail: str
+    click_id: str | None
+    advice: str | None
+    # The instruction attribute that holds the refused operand, or the name of the refused
+    # keyword argument. It is None for a field that no argument holds.
+    attribute: str | None
+
+    def finding(self, extra_advice: Sequence[str] = ()) -> ClickFinding:
+        """Return the finding. Advice in *extra_advice* replaces pyrung's advice for the code."""
+        advice = " ".join(extra_advice) if extra_advice else self.advice
+        hint = [_sentence(self.detail)] if self.detail else []
+        if advice:
+            hint.append(advice)
+        if self.click_id and self.click_id not in f"{self.problem} {self.detail}":
+            hint.append(f"CLICK's error is {self.click_id}.")
+        return ClickFinding(
+            code=self.code,
+            severity=self.severity,
+            message=self.message,
+            location=self.location,
+            suggestion=advice,
+            display=FindingDisplay(
+                code=self.code,
+                severity=self.severity,
+                frames=(self.frame,),
+                problem=self.problem,
+                hint=" ".join(hint),
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class CopyFamilyResult:
+    """What validation found in one Copy family instruction.
+
+    ``checks`` holds the findings of pyrung's own checks, and ``refusals`` holds
+    laddercodec's refusals.
+    """
+
+    checks: list[ClickFinding]
+    refusals: tuple[_Refusal, ...] = ()
+
+    @property
+    def codes(self) -> frozenset[str]:
+        """The codes of laddercodec's refusals."""
+        return frozenset(refusal.code for refusal in self.refusals)
+
+    def findings(
+        self, pointer_advice: Mapping[tuple[str, str], Sequence[str]] | None = None
+    ) -> list[ClickFinding]:
+        """Return every finding, with one finding for each laddercodec refusal.
+
+        *pointer_advice* maps a code and an instruction attribute to the advice of the
+        pyrung findings that a refusal of that code replaced. The refusal of that operand
+        takes the advice. If no refusal of the code is about that operand, the first
+        refusal of the code takes it.
+        """
+        extra: dict[int, list[str]] = {}
+        for (code, attribute), advice in (pointer_advice or {}).items():
+            same_code = [i for i, r in enumerate(self.refusals) if r.code == code]
+            on_operand = [i for i in same_code if self.refusals[i].attribute == attribute]
+            for i in on_operand or same_code[:1]:
+                taken = extra.setdefault(i, [])
+                taken.extend(text for text in advice if text not in taken)
+        return [
+            *self.checks,
+            *(refusal.finding(extra.get(i, ())) for i, refusal in enumerate(self.refusals)),
+        ]
+
+
+def _refusal(
+    refusal: Any,
+    instruction: Any,
+    base_location: ProgramLocation,
+    location_text: str,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+    names: Mapping[str, str],
+) -> _Refusal:
+    """Return laddercodec's *refusal* with its frame, its caret and its texts."""
+    code = str(refusal.code)
+    argument = _FIELD_ARGUMENTS.get(refusal.field)
+    operand: Any = None
+    if isinstance(argument, int):
+        attribute: str | None = _COPY_FAMILY_FIELDS[type(instruction).__name__][argument]
+        operand = getattr(instruction, attribute)
+    else:
+        # A keyword argument, such as the converter, holds no address.
+        attribute = argument
+    frame = instruction_frame(base_location, instruction, argument=argument)
+    call_names = _call_names(instruction, names, resolver)
+    text = refusal.message(call_names)
+    # laddercodec gives no detail for an instruction it has no rules for yet. The short
+    # text is then the whole message, so it stays as the problem line.
+    detail = refusal.detail(call_names) if frame.caret is not None else ""
+    if detail:
+        # The caret marks the operand, so the label gives the operand's addresses and not
+        # its names.
+        own = {
+            address: address
+            for tag, _name in _operand_tags(operand)
+            if (address := _tag_address(tag, resolver)) is not None
+        }
+        frame = replace(frame, caret_label=refusal.short({**call_names, **own}))
+        problem = ""
+    else:
+        problem = text
+    message = f"CLICK refuses {_call_text(instruction)} at {location_text}. {text}"
+    if refusal.click_id and refusal.click_id not in text:
+        message += f" CLICK's error is {refusal.click_id}."
+    return _Refusal(
+        code=code,
+        severity=_route_severity(code, mode),
+        message=message,
+        location=location_text,
+        frame=frame,
+        problem=problem,
+        detail=detail,
+        click_id=refusal.click_id,
+        advice=_advice(code, instruction, resolver),
+        attribute=attribute,
+    )
 
 
 def evaluate_copy_family(
@@ -367,12 +604,17 @@ def evaluate_copy_family(
     exporter: Any,
     mode: ValidationMode,
     resolver: _ResolutionCache,
+    names: Mapping[str, str],
 ) -> CopyFamilyResult:
-    """Report each value of a Copy family instruction that laddercodec refuses."""
+    """Report each value of a Copy family instruction that laddercodec refuses.
+
+    *names* maps CLICK addresses to tag names for laddercodec's text. :func:`tag_names`
+    builds it.
+    """
     kind = type(instruction).__name__
     fields = _COPY_FAMILY_FIELDS.get(kind)
     if fields is None:
-        return CopyFamilyResult([], frozenset())
+        return CopyFamilyResult([])
 
     unresolved: list[ClickFinding] = []
     for field, what in zip(fields, ("source", "destination"), strict=True):
@@ -380,7 +622,7 @@ def evaluate_copy_family(
         if resolver.resolve_operand_slots(getattr(instruction, field)).unresolved:
             unresolved.append(_unresolved_finding(location, mode, what))
     if unresolved:
-        return CopyFamilyResult(unresolved, frozenset())
+        return CopyFamilyResult(unresolved)
 
     location_text = _format_location(_instruction_location(base_location, "instruction"))
     broken = _broken_ranges(instruction, exporter)
@@ -397,31 +639,22 @@ def evaluate_copy_family(
             location=location_text,
             suggestion=range_not_consecutive_advice(broken),
         )
-        return CopyFamilyResult([finding], frozenset())
+        return CopyFamilyResult([finding])
 
     try:
         refusals = _build(instruction, exporter)
     except _Unbuildable:
         # laddercodec has nothing to read. An expression operand, or an operand that the
         # export refuses, has a finding of its own.
-        return CopyFamilyResult([], frozenset())
+        return CopyFamilyResult([])
 
-    # pyrung reports one finding for each code.
-    by_code: dict[str, list[Any]] = {}
-    for refusal in refusals:
-        by_code.setdefault(str(refusal.code), []).append(refusal)
-    call = _call_text(instruction)
-    findings = [
-        ClickFinding(
-            code=code,
-            severity=_route_severity(code, mode),
-            message=_finding_text(call, location_text, grouped),
-            location=location_text,
-            suggestion=_advice(code, instruction, resolver),
-        )
-        for code, grouped in by_code.items()
-    ]
-    return CopyFamilyResult(findings, frozenset(by_code))
+    return CopyFamilyResult(
+        [],
+        tuple(
+            _refusal(r, instruction, base_location, location_text, mode, resolver, names)
+            for r in refusals
+        ),
+    )
 
 
-__all__ = ["CopyFamilyResult", "_COPY_FAMILY_FIELDS", "evaluate_copy_family"]
+__all__ = ["CopyFamilyResult", "_COPY_FAMILY_FIELDS", "evaluate_copy_family", "tag_names"]

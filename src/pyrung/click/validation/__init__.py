@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.validation.walker import ProgramLocation, walk_program
 
-from .fields import evaluate_copy_family
+from .fields import evaluate_copy_family, tag_names
 from .findings import (
     CLK_ADDRESS_IDENTITY_CONFLICT,
     CLK_BANK_NOT_WRITABLE,
@@ -273,25 +273,27 @@ def validate_click_program(
     findings.extend(_evaluate_address_identity_conflicts(program, facts, tag_map, mode))
     findings.extend(_evaluate_nickname_lengths(program, facts, tag_map, mode))
     # laddercodec judges the Copy family. Where it raised a pointer code, pyrung's own
-    # pointer finding for that instruction would report the same fault twice. pyrung
-    # reports one finding for each laddercodec code, so that finding takes the advice of
-    # every pyrung finding that it replaces. That advice names each pointer that the tag
-    # map maps.
+    # pointer finding for that operand would report the same fault twice. The refusal's
+    # finding takes the advice of each pyrung finding that it replaces. That advice names
+    # each pointer that the tag map maps.
     exporter = _field_renderer(program, tag_map)
+    names = tag_names(tag_map)
     copy_family = {
         _site_key(base_location): evaluate_copy_family(
-            instruction, base_location, exporter, mode, resolver
+            instruction, base_location, exporter, mode, resolver, names
         )
         for instruction, base_location in instruction_sites
     }
-    pointer_advice: dict[tuple[ProgramLocation, str], list[str]] = {}
+    pointer_advice: dict[ProgramLocation, dict[tuple[str, str], list[str]]] = {}
     for fact in facts.operands:
         key = _site_key(fact.location)
         judged = copy_family.get(key)
         for finding in _evaluate_fact(fact, tag_map, mode, resolver):
             code = _POINTER_FACT_CODES.get(finding.code)
             if judged is not None and code is not None and code in judged.codes:
-                advice = pointer_advice.setdefault((key, code), [])
+                path = fact.location.arg_path.removeprefix("instruction.")
+                operand = path.partition(".")[0]
+                advice = pointer_advice.setdefault(key, {}).setdefault((code, operand), [])
                 if finding.suggestion and finding.suggestion not in advice:
                     advice.append(finding.suggestion)
                 continue
@@ -328,12 +330,9 @@ def validate_click_program(
         findings.extend(_evaluate_math_bit_operands(instruction, base_location, mode))
         findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
         key = _site_key(base_location)
-        judged = copy_family[key]
         findings.extend(_evaluate_text_past_bank(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_wide_copy_constant(instruction, base_location, mode, resolver))
-        for finding in judged.findings:
-            advice = pointer_advice.get((key, finding.code))
-            findings.append(replace(finding, suggestion=" ".join(advice)) if advice else finding)
+        findings.extend(copy_family[key].findings(pointer_advice.get(key)))
 
     active_profile = profile if profile is not None else _load_default_profile()
 

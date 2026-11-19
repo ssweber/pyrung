@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 ConvertMode = Literal["value", "ascii", "text", "binary"]
@@ -24,6 +24,8 @@ class CopyConverter:
     suppress_zero: bool = True
     exponential: bool = False
     termination_code: int | None = None
+    # The termination code as the author wrote it, such as "$0D", so a finding can quote it.
+    written_termination_code: int | str | None = field(default=None, compare=False, repr=False)
 
     def __call__(self, **kwargs: object) -> CopyConverter:
         """Allow ``to_binary()`` to work the same as ``to_binary``."""
@@ -105,6 +107,7 @@ def to_text(
         suppress_zero=bool(suppress_zero),
         exponential=bool(exponential),
         termination_code=_normalize_termination_code(termination_code),
+        written_termination_code=termination_code,
     )
 
 

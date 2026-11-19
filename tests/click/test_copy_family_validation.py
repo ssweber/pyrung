@@ -1,13 +1,16 @@
 """CLICK validation of the Copy family, where laddercodec and pyrung's own checks meet.
 
 laddercodec judges copy(), blockcopy(), fill() and the pack and unpack calls. These tests
-cover the places where pyrung keeps a check of its own, or keeps one finding of two.
+cover the places where pyrung keeps a check of its own, or keeps one finding of two. They
+also cover how a refusal prints: the call, the caret under the refused argument, and the hint.
 """
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
-from laddercodec import Code
+from laddercodec import BlockCopy, Code, Copy, Fill, Pack, Unpack
 
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
@@ -17,7 +20,9 @@ from pyrung.click.validation import (
     CLK_PTR_CONTEXT_ONLY_COPY,
     validate_click_program,
 )
-from pyrung.core import Block, Dint, TagType
+from pyrung.core import Block, Bool, Dint, Int, Tag, TagType, udt
+from pyrung.core.copy_converters import to_value
+from pyrung.core.instruction import BlockCopyInstruction, CopyInstruction
 from pyrung.core.program import (
     Program,
     blockcopy,
@@ -71,26 +76,34 @@ def test_a_fill_onto_a_read_only_sd_is_refused(write):
 # --- A Fill of one register -------------------------------------------------------------
 
 
+_BANK, _INCOMPATIBLE = Code.BANK_NOT_ALLOWED, Code.COPY_BANK_INCOMPATIBLE
+
+
 @pytest.mark.parametrize(
-    "write, code",
+    "write, codes",
     [
-        (lambda: fill(c[1], y.select(1, 1)), Code.BANK_NOT_ALLOWED),
-        (lambda: fill(c[1], c.select(2, 2)), Code.BANK_NOT_ALLOWED),
-        (lambda: fill(x[1], y.select(1, 1)), Code.BANK_NOT_ALLOWED),
-        (lambda: fill(ds[1], txt.select(5, 5)), Code.COPY_BANK_INCOMPATIBLE),
-        (lambda: fill(df[1], txt.select(5, 5)), Code.COPY_BANK_INCOMPATIBLE),
+        (lambda: fill(c[1], y.select(1, 1)), [_BANK, _BANK]),
+        (lambda: fill(c[1], c.select(2, 2)), [_BANK, _BANK]),
+        (lambda: fill(x[1], y.select(1, 1)), [_BANK, _BANK]),
+        (lambda: fill(ds[1], txt.select(5, 5)), [_INCOMPATIBLE]),
+        (lambda: fill(df[1], txt.select(5, 5)), [_INCOMPATIBLE]),
     ],
     ids=["C->Y", "C->C", "X->Y", "DS->TXT", "DF->TXT"],
 )
-def test_a_fill_of_one_register_must_pass_as_a_fill(write, code):
+def test_a_fill_of_one_register_must_pass_as_a_fill(write, codes):
     # The export writes it as a Copy, and CLICK's Copy accepts these banks. CLICK's Fill does
-    # not, so pyrung refuses the fill() as a Fill.
-    assert [f.code for f in _errors(write)] == [code]
+    # not, so pyrung refuses the fill() as a Fill. A Fill refuses a bit as its value and as
+    # its destination, and each refusal has its own finding.
+    assert [f.code for f in _errors(write)] == codes
 
 
 def test_a_fill_of_a_bit_suggests_a_copy_and_a_fill_of_a_constant_suggests_latch():
-    (bit,) = _errors(lambda: fill(c[1], y.select(1, 1)))
-    assert bit.suggestion == "Copy the bit into each destination bit with copy()."
+    value, dest = _errors(lambda: fill(c[1], y.select(1, 1)))
+    assert (
+        value.suggestion
+        == dest.suggestion
+        == ("Copy the bit into each destination bit with copy().")
+    )
     (constant,) = _errors(lambda: fill(5, c.select(1, 4)))
     assert constant.suggestion == "Set or clear the bits with latch() or reset() on the range."
 
@@ -327,17 +340,52 @@ def test_a_copy_through_a_pointer_into_sd_is_accepted():
     assert _errors(lambda: copy(sd[ds[1]], ds[1])) == ()
 
 
-def test_one_finding_for_two_pointers_names_both():
+def test_each_refused_pointer_has_its_own_finding_and_advice():
     ptr_a, ptr_b = Dint("PtrA"), Dint("PtrB")
     prog = _program(lambda: copy(ds[ptr_a], ds[ptr_b]))
     mapping = TagMap([ptr_a.map_to(dd[50]), ptr_b.map_to(dd[51])], include_system=False)
-    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
-    assert finding.code == Code.POINTER_NOT_DS
-    assert finding.suggestion == (
+    source, dest = validate_click_program(prog, mapping, mode="strict").errors
+    assert source.code == dest.code == Code.POINTER_NOT_DS
+    # copy(DS[PtrA], DS[PtrB])
+    assert source.display.frames[0].caret == (0, 5, 8)
+    assert dest.display.frames[0].caret == (0, 15, 8)
+    # The advice of pyrung's pointer finding for each operand stays with that operand.
+    assert source.suggestion == (
         "Pointer 'PtrA' is mapped to DD memory. Remap it to a DS address so Click hardware can "
-        "use it as a pointer. Pointer 'PtrB' is mapped to DD memory. Remap it to a DS address "
-        "so Click hardware can use it as a pointer."
+        "use it as a pointer."
     )
+    assert dest.suggestion == (
+        "Pointer 'PtrB' is mapped to DD memory. Remap it to a DS address so Click hardware can "
+        "use it as a pointer."
+    )
+    assert source.suggestion in source.display.hint
+
+
+def test_pointer_advice_for_an_operand_that_no_refusal_names_is_kept():
+    from pyrung.click.validation.fields import CopyFamilyResult, _Refusal
+    from pyrung.core.validation.display import Frame
+
+    def refusal(attribute):
+        return _Refusal(
+            code=Code.POINTER_NOT_DS,
+            severity="error",
+            message="",
+            location="",
+            frame=Frame(location="Main:R1"),
+            problem="",
+            detail="",
+            click_id=None,
+            advice=None,
+            attribute=attribute,
+        )
+
+    result = CopyFamilyResult([], (refusal("source"), refusal("dest")))
+    on_dest = result.findings({(Code.POINTER_NOT_DS, "dest"): ["Remap the pointer."]})
+    assert [f.suggestion for f in on_dest] == [None, "Remap the pointer."]
+    # The first refusal of the code takes advice for an operand that no refusal names.
+    elsewhere = result.findings({(Code.POINTER_NOT_DS, "value"): ["Remap the pointer."]})
+    assert [f.suggestion for f in elsewhere] == ["Remap the pointer.", None]
+    assert elsewhere[0].display.hint == "Remap the pointer."
 
 
 def test_a_pointer_outside_the_copy_family_keeps_pyrungs_code():
@@ -393,11 +441,21 @@ def test_a_block_copy_of_one_register_suggests_copy():
     assert finding.suggestion == "Use copy() for one register."
 
 
-def test_a_copy_of_14_into_dh_exports():
-    prog = _program(lambda: copy(14, dh[1]))
+@pytest.mark.parametrize(
+    "write, token",
+    [
+        (lambda: copy(14, dh[1]), "copy(14,DH1)"),
+        (lambda: copy(30, yd[1]), "copy(30,YD1)"),
+        (lambda: fill(14, dh.select(1, 1)), "copy(14,DH1)"),
+    ],
+    ids=["copy-DH", "copy-YD", "fill-DH"],
+)
+def test_a_constant_that_hex_would_spell_with_an_e_exports_in_decimal(write, token):
+    # In hex, 14 is Eh and 30 is 1Eh. CLICK would read either as a real, so the export
+    # writes the constant in decimal.
+    prog = _program(write)
     assert validate_click_program(prog, TagMap(), mode="strict").errors == ()
-    tokens = pyrung_to_ladder(prog, TagMap()).main_rows[1]
-    assert "copy(Eh,DH1)" not in tokens
+    assert token in pyrung_to_ladder(prog, TagMap()).main_rows[1]
 
 
 @pytest.mark.parametrize("dest", [(1, 2), (999, 1000)], ids=["TXT1", "TXT999"])
@@ -407,6 +465,229 @@ def test_a_fill_of_more_than_one_character_is_refused(text, dest):
     # but its save holds the Real 0.0 and not the text.
     (finding,) = _errors(lambda: fill(text, txt.select(*dest)))
     assert finding.code == Code.CONSTANT_OUT_OF_RANGE
+
+
+# --- How a refusal prints ---------------------------------------------------------------
+
+
+def _named_errors(write):
+    """Return the strict errors of ``write(count, valve)``, with Count on DS1 and Valve on C1."""
+    count, valve = Int("Count"), Bool("Valve")
+    prog = _program(lambda: write(count, valve))
+    mapping = TagMap([count.map_to(ds[1]), valve.map_to(c[1])], include_system=False)
+    return validate_click_program(prog, mapping, mode="strict").errors
+
+
+@pytest.mark.parametrize(
+    "write, code, kind, line, caret",
+    [
+        (
+            lambda count, valve: copy(count, valve),
+            Code.COPY_BANK_INCOMPATIBLE,
+            "CopyInstruction",
+            "copy(Count, Valve)",
+            (0, 12, 5),
+        ),
+        (
+            lambda count, valve: fill(5, sd.select(1, 3)),
+            Code.NOT_WRITABLE,
+            "FillInstruction",
+            "fill(5, SD1..SD3)",
+            (0, 8, 8),
+        ),
+        (
+            lambda count, valve: pack_bits(x.select(1, 16), count),
+            Code.COPY_BANK_INCOMPATIBLE,
+            "PackBitsInstruction",
+            "pack_bits(X1..X16, Count)",
+            (0, 19, 5),
+        ),
+        (
+            lambda count, valve: blockcopy(ds.select(1, 1), ds.select(5, 5)),
+            Code.RANGE_NOT_ASCENDING,
+            "BlockCopyInstruction",
+            "blockcopy(DS1..DS1, DS5..DS5)",
+            (0, 10, 8),
+        ),
+    ],
+    ids=["copy", "fill", "pack_bits", "blockcopy"],
+)
+def test_a_refusal_marks_the_refused_argument(write, code, kind, line, caret):
+    (finding,) = _named_errors(write)
+    assert finding.code == code
+    (frame,) = finding.display.frames
+    assert (frame.location, frame.lines, frame.caret) == ("Main:R1", (line,), caret)
+    # laddercodec's short text labels the caret, so no problem line repeats it.
+    assert frame.caret_label
+    assert finding.display.problem == ""
+    assert finding.display.hint
+    assert finding.location == _at(kind)
+
+
+@pytest.mark.parametrize(
+    "write, line, caret",
+    [
+        (lambda: copy(sd[1], sd[1]), "copy(SD1, SD1)", (0, 10, 3)),
+        (lambda: copy(sd[10], sd[1]), "copy(SD10, SD1)", (0, 11, 3)),
+    ],
+    ids=["same-name", "name-inside-a-name"],
+)
+def test_the_caret_marks_the_refused_argument_and_not_the_first_match(write, line, caret):
+    # SD1 is read-only, so CLICK refuses it as the destination.
+    (finding,) = _errors(write)
+    assert finding.code == Code.NOT_WRITABLE
+    (frame,) = finding.display.frames
+    assert (frame.lines, frame.caret) == ((line,), caret)
+
+
+def test_the_label_leaves_out_the_name_under_the_caret():
+    (finding,) = _named_errors(lambda count, valve: copy(count, valve))
+    label = finding.display.frames[0].caret_label
+    assert "Count" in label
+    assert "Valve" not in label
+    # pyrung adds CLICK's id, which laddercodec's explanation leaves out.
+    assert "OBJ-024" in finding.display.hint
+
+
+def test_a_refusal_with_no_explanation_keeps_laddercodecs_message():
+    (finding,) = _errors(lambda: copy(ds[1], txt[1], convert=to_value))
+    assert finding.code == Code.COPY_CONVERTER_BANK
+    (frame,) = finding.display.frames
+    assert (frame.lines, frame.caret) == (("copy(DS1, TXT1, convert=to_value)",), (0, 24, 8))
+    assert frame.caret_label == ""
+    assert finding.display.problem
+    assert finding.display.hint == finding.suggestion
+
+
+def test_a_label_names_an_address_without_quotes_when_the_map_names_none():
+    # laddercodec quotes each address when it gets no names at all.
+    prog = _program(lambda: copy(ds[2], c[2]))
+    (finding,) = validate_click_program(prog, TagMap(include_system=False), mode="strict").errors
+    label = finding.display.frames[0].caret_label
+    assert "C2" in label
+    assert "'C2'" not in label
+    assert "'DS2'" not in label
+
+
+def test_a_label_spells_a_field_as_the_call_does():
+    @udt()
+    class Motor:
+        speed: Int
+
+    valve = Bool("Valve")
+    prog = _program(lambda: copy(Motor.speed, valve))
+    mapping = TagMap([Motor.speed.map_to(ds[1]), valve.map_to(c[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].lines == ("copy(Motor.speed, Valve)",)
+    assert "Motor.speed (DS1)" in finding.display.frames[0].caret_label
+
+
+@pytest.mark.parametrize(
+    "write, line, address",
+    [
+        (lambda: unpack_to_bits(ds[1], x.select(1, 16)), "unpack_to_bits(DS1, X1..X16)", "X001"),
+        (lambda: fill(c[1], y.select(1, 1)), "fill(C1, Y1..Y1)", "Y001"),
+        (
+            lambda: blockcopy(x.select(1, 3), txt.select(1, 3)),
+            "blockcopy(X1..X3, TXT1..TXT3)",
+            "X001",
+        ),
+        (lambda: copy(ds[1], x[1]), "copy(DS1, X001)", "X001"),
+        (lambda: copy(5, xd[1]), "copy(5, XD1)", "XD1"),
+        (lambda: copy(yd[3], c[1]), "copy(YD3, C1)", "YD3"),
+    ],
+    ids=["X-range-under-caret", "Y-range", "X-range-elsewhere", "X-tag", "XD", "YD"],
+)
+def test_a_label_shows_a_bank_address_without_a_bracket(write, line, address):
+    # A call spells X001 as X1 in a range. That is the address, not a tag name, so
+    # laddercodec gets no name for it to show in front of the address.
+    findings = _errors(write)
+    labels = [f.display.frames[0].caret_label for f in findings]
+    assert {f.display.frames[0].lines for f in findings} == {(line,)}
+    assert any(address in label for label in labels)
+    assert not any(f"({address}" in label for label in labels)
+
+
+@pytest.mark.parametrize(
+    "operand",
+    [
+        x.select(1, 2),
+        y.select(1, 2),
+        x[1],
+        y[1],
+        c.select(1, 2),
+        t[1],
+        ct[1],
+        sc[1],
+        ds.select(1, 2),
+        dd[1],
+        dh[1],
+        df[1],
+        xd.select(0, 1),
+        yd.select(0, 1),
+        xd0u,
+        yd0u,
+        td[1],
+        ctd[1],
+        sd[1],
+        txt.select(1, 2),
+    ],
+    ids=lambda operand: getattr(operand, "name", None) or f"{operand.block.name}-range",
+)
+def test_each_bank_address_in_a_call_is_named_by_itself(operand):
+    from pyrung.click.validation.fields import _call_names
+    from pyrung.click.validation.resolve import _ResolutionCache
+
+    # A range spells X001 as X1, and a tag spells it X001. Both are the address.
+    if isinstance(operand, Tag):
+        instruction = CopyInstruction(operand, ds[101])
+    else:
+        instruction = BlockCopyInstruction(operand, ds.select(101, 102))
+    names = _call_names(instruction, {}, _ResolutionCache(TagMap()))
+    assert names
+    assert all(name == address for address, name in names.items())
+
+
+def test_a_tag_named_like_an_address_keeps_its_bracket():
+    # The tag X1 sits on DS1, so its name is not a spelling of its address.
+    x1 = Int("X1")
+    prog = _program(lambda: copy(x1, c[2]))
+    mapping = TagMap([x1.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert "X1 (DS1)" in finding.display.frames[0].caret_label
+
+
+def test_a_problem_line_names_the_tags():
+    count = Int("Count")
+    prog = _program(lambda: copy(count, txt[1], convert=to_value))
+    mapping = TagMap([count.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].caret_label == ""
+    assert "Count (DS1)" in finding.display.problem
+    assert "Count (DS1)" in finding.message
+
+
+def test_an_export_error_names_each_place_once():
+    prog = _program(lambda: copy(sd[10], sd[1]))
+    with pytest.raises(LadderExportError) as exc_info:
+        pyrung_to_ladder(prog, TagMap())
+    text = str(exc_info.value)
+    assert " --> Main:R1" in text
+    assert _at("CopyInstruction") not in text
+
+
+def test_each_copy_family_field_has_an_argument():
+    # A field that laddercodec renames or adds would lose its caret.
+    from pyrung.click.validation.fields import _FIELD_ARGUMENTS
+
+    fields = {
+        f"{cls.__name__}.{field.name}"
+        for cls in (Copy, BlockCopy, Fill, Pack, Unpack)
+        for field in dataclasses.fields(cls)
+        # The verb is the kind.
+        if field.name != "kind"
+    }
+    assert set(_FIELD_ARGUMENTS) == fields
 
 
 # --- allow= -----------------------------------------------------------------------------

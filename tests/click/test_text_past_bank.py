@@ -114,13 +114,13 @@ def test_a_text_that_always_runs_past_the_bank_warns(store, message, suggestion)
         ),
         pytest.param(
             lambda level: copy(12345, txt[997], convert=to_text()),
-            "copy(12345, TXT997)",
+            "copy(12345, TXT997, convert=to_text())",
             "Start it at TXT996 or lower to keep every one.",
             id="literal_number",
         ),
         pytest.param(
             lambda level: copy(1.5, txt[999], convert=to_text()),
-            "copy(1.5, TXT999)",
+            "copy(1.5, TXT999, convert=to_text())",
             "Start it at TXT992 or lower to keep every one.",
             id="literal_real",
         ),

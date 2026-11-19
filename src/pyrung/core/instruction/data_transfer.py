@@ -492,7 +492,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     that runs, and ``authored_convert`` holds the one that was written.
 
     A single tag as *dest* is the first address of the destination.  The Block Copy
-    writes one element of its block for each source element, as CLICK's does.
+    writes one element of its block for each source element, as CLICK's does.  ``dest``
+    holds that range, and ``authored_dest`` holds the tag that was written.
     """
 
     _reads = ("source",)
@@ -521,6 +522,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 "blockcopy() reads a range from .select(). Use copy() to copy one value, "
                 "or fill() to write one value into a range."
             )
+        self.authored_dest = dest
         dest = _block_copy_dest(_unwrapped(source), dest)
         fixed_source, fixed_dest = _unwrapped(source), _unwrapped(dest)
         if isinstance(fixed_source, BlockRange) and isinstance(fixed_dest, BlockRange):
