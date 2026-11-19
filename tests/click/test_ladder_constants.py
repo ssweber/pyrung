@@ -14,6 +14,7 @@ A blank text constant is ``$00``, CLICK's ASCII-code constant for NUL (a TXT bla
 
 from __future__ import annotations
 
+import json
 import math as pymath
 
 import pytest
@@ -348,7 +349,10 @@ def test_a_quote_on_its_own_exports_as_its_ascii_code():
     assert after == before, code
 
 
-@pytest.mark.parametrize("value", ['A"B', 'A""B', '"A', 'A"', '""', 'say "hi"'])
+_TYPED_QUOTES = ['A"B', 'A""B', '"A', 'A"', '""', 'say "hi"']
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
 def test_a_copy_writes_a_quote_inside_its_text_as_typed(value, tmp_path):
     # RESULTS9-10.md c10: CLICK saves a Copy's text as typed, with no escape for a quote.
     from laddercodec import read_csv
@@ -368,6 +372,39 @@ def test_a_copy_writes_a_quote_inside_its_text_as_typed(value, tmp_path):
         if hasattr(instruction, "source")
     ]
     assert sources == [f'"{value}"', f'"{value}"']
+
+
+def _quoted_copies(value):
+    with Program() as logic:
+        with rung():
+            copy(value, txt[1])
+        with rung():
+            copy(value, txt[ds[1]])
+    return logic
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
+def test_a_copy_text_with_a_quote_round_trips(value):
+    code, before, after = round_trip_logic(_quoted_copies(value), TagMap())
+    assert after == before, code
+    assert f"copy({json.dumps(value)}, " in code
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
+def test_a_copy_text_with_a_quote_imports_from_a_click_project(value, tmp_path):
+    # laddercodec encodes the CSV as CLICK saves it, then decodes the CLICK form back.
+    from laddercodec import decode, encode, read_csv, write_csv
+
+    pyrung_to_ladder(_quoted_copies(value), TagMap()).write(tmp_path / "export")
+    click_form = encode(read_csv(tmp_path / "export" / "main.csv"))
+    (tmp_path / "click").mkdir()
+    write_csv(tmp_path / "click" / "main.csv", decode(click_form))
+    code = ladder_to_pyrung(tmp_path / "click")
+    namespace: dict[str, object] = {}
+    exec_with_source(code, namespace)
+    imported = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    tokens = [cell for row in imported.main_rows for cell in row if cell.startswith("copy(")]
+    assert tokens == [f'copy("{value}",TXT1)', f'copy("{value}",TXT[DS1])'], code
 
 
 # Each copy() text that laddercodec 8d117a1 reads back from the CSV as another text.

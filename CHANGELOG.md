@@ -101,6 +101,7 @@
 - `run_for()`, `history.at()` and the generated code.py now run a pack, an unpack or a `blockcopy()` with a pointer outside its bank the same way `step()` does. They set the address-error flag only when `step()` sets it (the code.py could raise `ValueError`, and `run_for()` could set the flag when `step()` did not).
 - The CLICK export now writes a text constant of one quote, such as `copy('"', txt[1])`, as the ASCII code `$22` (it wrote `""""`).
 - `copy()` of a text that holds a quote among other characters now writes that text on a CLICK, as typed. `copy('a"b', txt[1])` exports as `copy("a"b",TXT1)` (it exported `copy("a""b",TXT1)`, and a CLICK wrote `a""b`).
+- `ladder_to_pyrung()` now reads a `copy()` text as typed, as a CLICK does. `copy("a""b",TXT1)` imports as `'a""b'` (it imported `'a"b'`), and `copy("a"b",TXT1)` imports as `'a"b'` (it raised `ValueError`).
 
 ## v0.17.0 (2026-11-18)
 

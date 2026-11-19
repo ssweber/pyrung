@@ -40,6 +40,27 @@ def _csv_string_value(source: str) -> str:
     return value
 
 
+def _typed_copy_source(args_str: str) -> tuple[str, str] | None:
+    """Return the text of a ``copy()`` source as typed, and the arguments after it.
+
+    CLICK keeps a Copy's text as typed and has no escape for a quote. So
+    ``copy("A""B",TXT1)`` copies the four characters ``A""B``, and ``copy("A"B",TXT1)``
+    copies three. laddercodec's split rule finds where the text ends. Return ``None`` for
+    a source with no quote inside, which reads as any other text does.
+    """
+    from laddercodec import CsvReadError
+    from laddercodec.csv.token_parser import _split_top_level_csv_like
+
+    try:
+        segments = _split_top_level_csv_like(args_str.strip(), "copy")
+    except CsvReadError:
+        return None
+    source = segments[0] if segments else ""
+    if len(source) < 3 or source[0] != '"' or source[-1] != '"' or '"' not in source[1:-1]:
+        return None
+    return source[1:-1], ",".join(segments[1:])
+
+
 def _pythonize_csv_strings(source: str) -> str:
     parts: list[str] = []
     index = 0

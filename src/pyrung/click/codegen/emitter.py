@@ -16,7 +16,11 @@ _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
     "Char": True,
 }
 
-from pyrung.click.codegen._syntax import _csv_string_value, _string_literal
+from pyrung.click.codegen._syntax import (
+    _csv_string_value,
+    _string_literal,
+    _typed_copy_source,
+)
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -1352,7 +1356,13 @@ def _render_af_token(
     if not args_str:
         return f"{py_func}()"
 
-    args, kwargs = _parse_af_args(args_str)
+    typed = _typed_copy_source(args_str) if func_name == "copy" else None
+    if typed is not None:
+        typed_text, rest = typed
+        args, kwargs = _parse_af_args(rest)
+        args = [f'"{typed_text}"', *args]
+    else:
+        args, kwargs = _parse_af_args(args_str)
 
     if func_name in {"copy", "blockcopy"} and args:
         for key, value in kwargs:
@@ -1388,12 +1398,19 @@ def _render_af_token(
 
     rendered_parts = []
     choice_source = None
-    if func_name == "copy" and len(args) >= 2 and not any(k == "convert" for k, _ in kwargs):
+    if (
+        func_name == "copy"
+        and typed is None
+        and len(args) >= 2
+        and not any(k == "convert" for k, _ in kwargs)
+    ):
         choice_source = _render_choice_literal(
             args[0], args[1], collection, nicknames, structured_map
         )
     for index, arg in enumerate(args):
-        if index == 0 and choice_source is not None:
+        if index == 0 and typed is not None:
+            rendered_parts.append(_string_literal(typed[0]))
+        elif index == 0 and choice_source is not None:
             rendered_parts.append(choice_source)
         else:
             rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))
