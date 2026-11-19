@@ -7,7 +7,6 @@ import pytest
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
-    CLK_TEXT_ORDER_COMPARE,
     CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     validate_click_program,
 )
@@ -55,14 +54,14 @@ def test_char_order_compare_is_a_finding_and_refused_on_export(op, literal):
     mapping = TagMap({a: txt[1], b: txt[2], hit: c[1]}, include_system=False)
 
     report = validate_click_program(prog, mapping, mode="strict")
-    found = [f for f in report.errors if f.code == CLK_TEXT_ORDER_COMPARE]
+    found = [f for f in report.errors if f.code == "CLK_TEXT_ORDER_COMPARE"]
     assert len(found) == 1
     assert found[0].message.isascii() and found[0].suggestion.isascii()
     assert f"'{op}'" in found[0].message
 
-    with pytest.raises(LadderExportError, match=CLK_TEXT_ORDER_COMPARE):
+    with pytest.raises(LadderExportError, match="CLK_TEXT_ORDER_COMPARE"):
         pyrung_to_ladder(prog, mapping)
-    assert pyrung_to_ladder(prog, mapping, allow=(CLK_TEXT_ORDER_COMPARE,)).main_rows
+    assert pyrung_to_ladder(prog, mapping, allow=("CLK_TEXT_ORDER_COMPARE",)).main_rows
 
 
 def test_numeric_order_compare_is_not_flagged():
@@ -75,7 +74,7 @@ def test_numeric_order_compare_is_not_flagged():
     report = validate_click_program(
         prog, TagMap({n: ds[1], hit: c[1]}, include_system=False), mode="strict"
     )
-    assert CLK_TEXT_ORDER_COMPARE not in {
+    assert "CLK_TEXT_ORDER_COMPARE" not in {
         f.code for f in (*report.errors, *report.warnings, *report.hints)
     }
 

@@ -129,7 +129,9 @@ The first argument is a comparison expression built from a `.select()` range. It
 - On success: `result = matched_address` (1-based), `found = True`
 - On miss: `result = -1`, `found = False`
 - `result` must be INT or DINT, and `found` must be BOOL
-- For CLICK, `result` must be a `DS` and the range in `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT`. The export rejects anything else
+- For CLICK, `result` must be a `DS` and `found` a `C` bit. The range must hold two or more addresses in `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT`
+- For CLICK, the value must suit the range. A `TXT` range takes text or a `TXT` tag. A `DH` range takes a number or a `DH`, `XD` or `YD` tag. The other ranges take a number or a tag in `DS`, `DD`, `DF`, `TD`, `CTD` or `SD`
+- The export rejects a search that CLICK refuses
 
 ### Continuous search (resume from last position)
 

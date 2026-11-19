@@ -46,7 +46,7 @@
   - `CLK_BANK_UNRESOLVED` becomes `pointer-bank-not-allowed` for a pointer into SD as the destination.
   - In these calls, `CLK_PTR_POINTER_MUST_BE_DS` becomes `pointer-not-ds` and `CLK_PTR_CONTEXT_ONLY_COPY` becomes `pointer-outside-copy`.
 
-  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a code that pyrung does not report, and names the codes that replace a removed one.
+  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that is neither a pyrung code nor a laddercodec code, and names the codes that replace a removed one.
 - CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
 - The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
@@ -64,6 +64,25 @@
   - `pack_bits()` of X, Y, T, CT or SC into DS, DD or DF, and `unpack_to_bits()` of DS, DD or DF into Y. Pack into a DH, or unpack from one.
   - A constant outside its register's range, such as `copy(99999999999, dd[1])`. Use a constant that fits.
   - A `blockcopy()` into X or Y that crosses a 16-point slot, such as `blockcopy(c.select(1, 20), y.select(1, 20))`. Split it at the end of the slot, Y016. 0.17.0 exported this example into Y001..Y016, which is not what the program does. Export such a program again after you split it.
+- CLICK validation of `forloop()` now reports `for-count-bank` for a count in a bank that CLICK refuses (it reported `CLK_FORLOOP_COUNT_BANK`).
+  Pass the new code to `allow=`.
+- CLICK validation of `forloop()` now reports `pointer-outside-copy` for a pointer count (it reported `CLK_PTR_CONTEXT_ONLY_COPY`).
+  Pass the new code to `allow=`.
+- CLICK validation of `search()` now reports `bank-not-allowed` for a range, a result or a `found` flag in a bank that CLICK refuses (it reported `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS` or `CLK_BANK_NOT_WRITABLE`).
+  Pass the new code to `allow=`.
+- CLICK validation of `search()` now reports `pointer-outside-copy` for a pointer value (it reported `CLK_PTR_CONTEXT_ONLY_COPY`).
+  Pass the new code to `allow=`.
+- CLICK validation and the export now refuse these `search()` forms, which CLICK's editor rejects (they exported them):
+  - A `found` flag in Y, such as `found=y[2]`. Map it to a C bit.
+  - A value that does not suit the range, such as `ds.select(1, 10) == dh[30]`. The `search()` docs list the values that each range takes.
+  - `>`, `>=`, `<` or `<=` on a TXT range. Use `==` or `!=`.
+  - A range of one address, such as `ds.select(5, 5)`. Search two or more addresses.
+  - A quote inside the text, such as `'sub"name'`. Write the text without it.
+  - A constant outside its range, such as `2147483648` or text of more than 128 characters. Use a constant that fits.
+- `pyrung.click.validation` no longer exports the `CLK_` codes of its checks of `math()`, the drums, contacts, `debounce()`, `flasher()` and `timed()`, such as `CLK_MATH_MODE_MIXED`, except `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS`. Validation still reports them.
+  Write the code as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`.
+- The CLICK export now refuses a text constant that holds a quote among other characters, such as `'a"b'` in a comparison or in `copy()` (it wrote `"a""b"`).
+  Write the text without the quote.
 
 ### Fixes
 
@@ -78,6 +97,7 @@
 - A constant that you `copy()` or `fill()` into a DH or YD now stores its value on a CLICK. `copy(14, dh[1])` exports as `copy(14,DH1)` (it exported `copy(Eh,DH1)`, and a CLICK stored 0).
 - `generate_circuitpy()` now writes an `IntEnum` member as its number. `copy(Mode.RUN, ds[1])` writes 1 (it raised `RuntimeError`).
 - `run_for()`, `history.at()` and the generated code.py now run a pack, an unpack or a `blockcopy()` with a pointer outside its bank the same way `step()` does. They set the address-error flag only when `step()` sets it (the code.py could raise `ValueError`, and `run_for()` could set the flag when `step()` did not).
+- The CLICK export now writes a text constant of one quote, such as `copy('"', txt[1])`, as the ASCII code `$22` (it wrote `""""`).
 
 ## v0.17.0 (2026-11-18)
 

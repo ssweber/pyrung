@@ -1,28 +1,34 @@
-"""CLICK's field rules for the Copy family, as laddercodec checks them.
+"""CLICK's field rules for an instruction family, as laddercodec checks them.
 
-For each copy(), blockcopy(), fill(), pack and unpack instruction, pyrung builds the
-laddercodec instruction that the export writes. laddercodec refuses the values that CLICK's
-dialog refuses. Each refusal becomes a finding whose code is laddercodec's code. The
+For each instruction of a family in :mod:`pyrung.click.validation.families`, pyrung builds
+the laddercodec instruction that the export writes. laddercodec refuses the values that
+CLICK's dialog refuses. Each refusal becomes a finding whose code is laddercodec's code. The
 finding prints the author's call with a caret under the refused argument. laddercodec's
-short text labels the caret, and its explanation leads the hint. pyrung's advice follows it,
-where the advice names a pyrung call or argument.
+short text labels the caret, and its explanation leads the hint. The family's advice follows
+it, where the advice names a pyrung call or argument.
+
+A family declares what differs from one family to the next in a :class:`Family`. This
+module holds the rest, so that a family branch adds a module and edits nothing here. Where a
+family's call does not fit the declarations on its classes, the family overrides the
+``operands``, ``call_text`` or ``place`` hook of its :class:`Family` in its own module.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import re
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from laddercodec import BlockCopy, Copy, FieldError, Fill, Pack, Unpack
+from laddercodec import FieldError
 from pyclickplc.addresses import format_address_display, parse_address
 
-from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.core.expression import Expression
 from pyrung.core.memory_block import BlockRange, IndirectRef
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation._common import instruction_frame
 from pyrung.core.validation.display import FindingDisplay, Frame
-from pyrung.core.validation.render import operand_name, render_instruction
+from pyrung.core.validation.render import Call, declared_call, operand_name
 
 from .findings import (
     CLK_COPY_RANGE_NOT_CONSECUTIVE,
@@ -34,7 +40,6 @@ from .findings import (
     range_not_consecutive_advice,
     range_not_consecutive_text,
 )
-from .hardware import constant_text_past_bank_advice
 from .resolve import (
     _format_location,
     _instruction_location,
@@ -43,137 +48,203 @@ from .resolve import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import ProgramLocation
 
-# Each pyrung instruction of the Copy family, with its source and destination attributes.
-_COPY_FAMILY_FIELDS: dict[str, tuple[str, str]] = {
-    "CopyInstruction": ("source", "dest"),
-    "BlockCopyInstruction": ("source", "dest"),
-    "FillInstruction": ("value", "dest"),
-    "PackBitsInstruction": ("bit_block", "dest"),
-    "PackWordsInstruction": ("word_block", "dest"),
-    "PackTextInstruction": ("source_range", "dest"),
-    "UnpackToBitsInstruction": ("source", "bit_block"),
-    "UnpackToWordsInstruction": ("source", "word_block"),
-}
 
-# The argument of the pyrung call that holds each field of laddercodec's Copy family. An
-# int is the index of a positional argument, and a str is the name of a keyword argument.
-# The export writes a fill() of one register as a Copy, so Copy.source is then the value
-# of fill().
-_FIELD_ARGUMENTS: dict[str, int | str] = {
-    "Copy.source": 0,
-    "Copy.dest": 1,
-    "Copy.convert": "convert",
-    "Copy.suppress_zero": "convert",
-    "Copy.exponential": "convert",
-    "Copy.termination_code": "convert",
-    "Copy.oneshot": "oneshot",
-    "BlockCopy.source_start": 0,
-    "BlockCopy.source_end": 0,
-    "BlockCopy.dest_start": 1,
-    "BlockCopy.dest_end": 1,
-    "BlockCopy.convert": "convert",
-    "BlockCopy.termination_code": "convert",
-    "BlockCopy.oneshot": "oneshot",
-    "Fill.value": 0,
-    "Fill.dest_start": 1,
-    "Fill.dest_end": 1,
-    "Fill.oneshot": "oneshot",
-    "Pack.source_start": 0,
-    "Pack.source_end": 0,
-    "Pack.dest": 1,
-    "Pack.allow_whitespace": "allow_whitespace",
-    "Pack.oneshot": "oneshot",
-    "Unpack.source": 0,
-    "Unpack.dest_start": 1,
-    "Unpack.dest_end": 1,
-    "Unpack.oneshot": "oneshot",
-}
+@dataclass(frozen=True)
+class Family:
+    """One instruction family that laddercodec checks.
 
-# The fields of each Copy family instruction that hold a range of addresses.
-_RANGE_FIELDS: dict[str, tuple[str, ...]] = {
-    "BlockCopyInstruction": ("source", "dest"),
-    "FillInstruction": ("dest",),
-    "PackBitsInstruction": ("bit_block",),
-    "PackWordsInstruction": ("word_block",),
-    "PackTextInstruction": ("source_range",),
-    "UnpackToBitsInstruction": ("bit_block",),
-    "UnpackToWordsInstruction": ("word_block",),
-}
+    Each module in :mod:`pyrung.click.validation.families` defines one, named ``FAMILY``.
+    """
 
-_PACK_KINDS = {
-    "PackBitsInstruction": "pack_bits",
-    "PackWordsInstruction": "pack_words",
-    "PackTextInstruction": "pack_text",
-}
-_UNPACK_KINDS = {
-    "UnpackToBitsInstruction": "unpack_to_bits",
-    "UnpackToWordsInstruction": "unpack_to_words",
-}
+    name: str
+    # Each pyrung instruction class of the family, by name. Each maps every instruction
+    # attribute that holds an operand or a condition of the call to the plain word for it
+    # in a CLK_BANK_UNRESOLVED finding, such as "destination".
+    classes: Mapping[str, Mapping[str, str]]
+    # Return laddercodec's refusals of the instruction that the export writes, from
+    # ``build(instruction, exporter)``. Raise :class:`Unbuildable` when the export cannot
+    # write it.
+    build: Callable[[Any, Any], list[Any]]
+    # The pyrung argument that holds each laddercodec field, such as ``"Copy.source"``. An
+    # int is the index of a positional argument, and a str is the name of a keyword
+    # argument or a chained call. A test checks that every field of the family's laddercodec
+    # classes is here.
+    arguments: Mapping[str, int | str]
+    # Return pyrung's advice for a refusal, from ``advice(code, field, instruction,
+    # resolver)``. The field is laddercodec's, such as ``"Search.result"``, so that one
+    # code can take different advice on each field. The advice names a pyrung call or
+    # argument. Return None to give none.
+    advice: Callable[[str, str, Any, _ResolutionCache], str | None]
+    # The operands of each class that hold a range of addresses. pyrung refuses a range
+    # that CLICK cannot hold as a range with CLK_COPY_RANGE_NOT_CONSECUTIVE before it asks
+    # laddercodec.
+    ranges: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Each CLK_ code that the family's move removed, with the codes that replace it.
+    # ``allow=`` names them when a caller passes the old code.
+    replaced_codes: Mapping[str, str] = field(default_factory=dict)
+    # Return each argument of an instruction's call that holds tags, from
+    # ``operands(instruction)``. The CLK_BANK_UNRESOLVED check, laddercodec's names and the
+    # caret's label read it. None reads the declarations on the class, through
+    # :func:`declared_operands`.
+    operands: Callable[[Any], Sequence[Operand]] | None = None
+    # Return the call that the family's findings print, from ``call_text(instruction)``.
+    # None reads the declarations on the class, through
+    # :func:`~pyrung.core.validation.render.declared_call`.
+    call_text: Callable[[Any], Call] | None = None
+    # Return the argument that a laddercodec refusal marks, from ``place(refusal)``. None
+    # reads the refusal's field through :func:`default_place`.
+    place: Callable[[Any], Place | None] | None = None
 
-# pyrung's advice for a code, where the advice names pyrung's own calls or arguments.
-_ADVICE: dict[str, str] = {
-    "constant-into-bit": "Set or clear a bit with out(), latch() or reset(), or copy a bit into it.",
-    "copy-converter-bank": (
-        "to_text() and to_binary read a number register and write TXT. to_value and "
-        "to_ascii read TXT and write a number register."
-    ),
-    "pointer-outside-copy": "Copy the value through the pointer with copy() in a rung above.",
-}
+    def operands_of(self, instruction: Any) -> tuple[Operand, ...]:
+        """Return each argument of the call of *instruction* that holds tags."""
+        if self.operands is not None:
+            return tuple(self.operands(instruction))
+        return declared_operands(instruction, self.classes[type(instruction).__name__])
 
-_BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
+    def call_of(self, instruction: Any) -> Call:
+        """Return the call of *instruction* that the family's findings print."""
+        if self.call_text is not None:
+            return self.call_text(instruction)
+        return declared_call(instruction)
+
+    def place_of(self, refusal: Any) -> Place | None:
+        """Return the argument that laddercodec's *refusal* marks, or None if none holds it."""
+        if self.place is not None:
+            return self.place(refusal)
+        return default_place(refusal.field, self.arguments)
 
 
-def _memory_types(operand: Any, resolver: _ResolutionCache) -> set[str]:
-    return {slot.memory_type for slot in resolver.resolve_operand_slots(operand).slots}
+@dataclass(frozen=True)
+class Place:
+    """The argument of a call that a refusal marks, and the item of a list argument."""
+
+    # The argument as ``Family.arguments`` names it.
+    argument: int | str
+    # The index of the item in a list argument, such as 1 for ``Drum.outputs[1]``. None
+    # marks the whole argument.
+    item: int | None = None
 
 
-def _advice(code: str, instruction: Any, resolver: _ResolutionCache) -> str | None:
-    kind = type(instruction).__name__
-    if code == "text-past-bank":
-        return constant_text_past_bank_advice(instruction, resolver)
-    if code == "option-not-offered":
-        converter = getattr(instruction, "convert", None)
-        if converter is not None and converter.exponential:
-            return "Remove exponential=True from to_text(). Only a Real source takes it."
+# A field of one item of a list, such as ``Drum.outputs[1]``.
+_ITEM_FIELD = re.compile(r"(.+)\[(\d+)\]")
+
+
+def default_place(field: str | None, arguments: Mapping[str, int | str]) -> Place | None:
+    """Return the argument in *arguments* that holds laddercodec's *field*, or None.
+
+    laddercodec names one item of a list field with its index, such as ``Drum.outputs[1]``.
+    Such a field marks item 1 of the argument that holds ``Drum.outputs``. A refusal of a
+    pair, such as two outputs that are the same bit, names the first field of the pair.
+    """
+    if field is None:
         return None
-    if code == "range-not-ascending" and kind == "BlockCopyInstruction":
-        return "Use copy() for one register."
-    if (
-        code == "bank-not-allowed"
-        and kind == "FillInstruction"
-        and _memory_types(instruction.dest, resolver) & _BIT_BANKS
-    ):
-        if _memory_types(instruction.value, resolver):
-            return "Copy the bit into each destination bit with copy()."
-        return "Set or clear the bits with latch() or reset() on the range."
-    if (
-        code == "bank-not-allowed"
-        and kind == "BlockCopyInstruction"
-        and "YD" in _memory_types(instruction.dest, resolver)
-    ):
-        return "Write each YD with copy() or math()."
-    return _ADVICE.get(code)
+    if field in arguments:
+        return Place(arguments[field])
+    match = _ITEM_FIELD.fullmatch(field)
+    if match is None or match.group(1) not in arguments:
+        return None
+    return Place(arguments[match.group(1)], int(match.group(2)))
 
 
-class _Unbuildable(Exception):
+@dataclass(frozen=True)
+class Operand:
+    """One argument of an instruction's call that holds tags, ranges or a condition."""
+
+    # The argument as ``Family.arguments`` names it: the index of a positional argument,
+    # or the name of a keyword argument or a chained call.
+    argument: int | str
+    # The plain word for the argument in a CLK_BANK_UNRESOLVED finding, such as "source".
+    word: str
+    # Each instruction attribute that the argument holds, with its value. A finding's
+    # location names the attribute.
+    values: tuple[tuple[str, Any], ...]
+
+    @property
+    def attributes(self) -> tuple[str, ...]:
+        """The instruction attributes that the argument holds."""
+        return tuple(attribute for attribute, _value in self.values)
+
+    def tags(self) -> list[tuple[Tag, str]]:
+        """Return each tag that the argument names, with the name that the call spells."""
+        return [found for _attribute, value in self.values for found in _value_tags(value)]
+
+
+def declared_operands(instruction: Any, words: Mapping[str, str]) -> tuple[Operand, ...]:
+    """Return the operands that the class of *instruction* declares for its call.
+
+    These are the positional arguments, the keyword arguments that hold an operand, and
+    the conditions of the chained calls. *words* maps an attribute to its plain word, and
+    an attribute with no word takes the argument's name. An argument that holds nothing,
+    such as a chained call that the author left off, is not there.
+    """
+    cls = type(instruction)
+    found: list[Operand] = []
+
+    def add(argument: int | str, name: str, attributes: tuple[str, ...]) -> None:
+        values = tuple(
+            (attribute, getattr(instruction, attribute, None)) for attribute in attributes
+        )
+        if any(value is not None for _attribute, value in values):
+            found.append(Operand(argument, words.get(attributes[0], name), values))
+
+    for index, (name, attribute) in enumerate(cls._call_operands or ()):
+        add(index, name, _attributes(attribute))
+    for name, attribute in (*cls._call_keyword_operands, *cls._call_chained):
+        add(name, name, (attribute,))
+    return tuple(found)
+
+
+class Unbuildable(Exception):
     """Raised when the export cannot write the instruction, so laddercodec has no input."""
 
 
-def _render(exporter: Any, value: Any, path: str, instruction: Any) -> str:
+def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) -> str:
+    """Return the operand in *attribute* of *instruction* as the export writes it.
+
+    Raise :class:`Unbuildable` when the export refuses it.
+    """
     from pyrung.click.ladder.types import _RenderError
 
     if isinstance(value, Expression):
         # CLK_EXPR_ONLY_IN_MATH reports an expression outside math().
-        raise _Unbuildable
+        raise Unbuildable
     try:
-        return exporter._render_operand(value, path=path, source=instruction)
+        return exporter._render_operand(value, path=f"instruction.{attribute}", source=instruction)
     except _RenderError as exc:
-        raise _Unbuildable from exc
+        if isinstance(value, str) and '"' in value:
+            # The export refuses a text that holds a quote among other characters. laddercodec
+            # refuses the quote with its own text, so validation hands it the quote doubled.
+            return '"{}"'.format(value.replace('"', '""'))
+        raise Unbuildable from exc
+
+
+def split_range(text: str) -> tuple[str, str]:
+    """Return the start and end of a range that the export wrote, such as ``DS1..DS5``."""
+    start, sep, end = text.partition("..")
+    if not sep:
+        # A range that is not one run of CLICK addresses, such as ``[DS1,DS5]``, has a
+        # finding of its own.
+        raise Unbuildable
+    return start, end
+
+
+def refusals_of(build: Callable[[], Any]) -> list[Any]:
+    """Return laddercodec's refusals of the instruction that *build* constructs."""
+    try:
+        build()
+    except FieldError as exc:
+        return list(exc.errors)
+    return []
+
+
+def memory_types(operand: Any, resolver: _ResolutionCache) -> set[str]:
+    """Return the CLICK banks that *operand* maps to."""
+    return {slot.memory_type for slot in resolver.resolve_operand_slots(operand).slots}
 
 
 def _range_text(exporter: Any, value: Any, path: str, instruction: Any) -> tuple[str, Any]:
@@ -183,200 +254,25 @@ def _range_text(exporter: Any, value: Any, path: str, instruction: Any) -> tuple
     try:
         return exporter._range_text(value, path=path, instruction=instruction)
     except _RenderError as exc:
-        raise _Unbuildable from exc
+        raise Unbuildable from exc
 
 
-def _split_range(text: str) -> tuple[str, str]:
-    start, sep, end = text.partition("..")
-    if not sep:
-        # A range that is not one run of CLICK addresses, such as ``[DS1,DS5]``, has a
-        # finding of its own.
-        raise _Unbuildable
-    return start, end
-
-
-def _dest_range(text: str, source_start: str, source_end: str) -> tuple[str, str]:
-    """Return the start and end of a Block copy's destination *text*.
-
-    The export writes a destination tag as one address. CLICK ends the destination as many
-    addresses past its start as the source runs past its own start. laddercodec counts the
-    same way.
-    """
-    if ".." in text:
-        return _split_range(text)
-    try:
-        memory_type, address = parse_address(text)
-        _bank, first = parse_address(source_start)
-        _bank, last = parse_address(source_end)
-    except ValueError as exc:
-        raise _Unbuildable from exc
-    return text, format_address_display(memory_type, address + last - first)
-
-
-def _copy_kwargs(instruction: Any, source: Any) -> dict[str, Any]:
-    """Return the converter fields of the laddercodec Copy that the export writes."""
-    from pyrung.click.ladder.instructions import _exported_converter
-    from pyrung.click.ladder.translator import _operand_type
-
-    converter = _exported_converter(instruction)
-    if converter is None:
-        return {}
-    kwargs: dict[str, Any] = {"convert": f"to_{converter.mode}"}
-    if converter.mode == "text":
-        # The export writes suppress zero for every source but a Real. CLICK offers
-        # exponential numbering only for a Real.
-        if _operand_type(source) is TagType.REAL:
-            kwargs["suppress_zero"] = None
-        else:
-            kwargs["suppress_zero"] = bool(converter.suppress_zero)
-        kwargs["exponential"] = bool(converter.exponential)
-        if converter.termination_code is not None:
-            kwargs["termination_code"] = f"${converter.termination_code:02X}"
-    return kwargs
-
-
-def _refusals(build: Any) -> list[Any]:
-    """Return laddercodec's refusals of the instruction that *build* constructs."""
-    try:
-        build()
-    except FieldError as exc:
-        return list(exc.errors)
-    return []
-
-
-def _single_register_fill_refusals(instruction: Any, tag: Any, exporter: Any) -> list[Any]:
-    """Return laddercodec's refusals of a Fill of one register.
-
-    CLICK's Fill needs two registers, so the export writes a Fill of one as a Copy. CLICK
-    sees the Copy, so the Copy's refusals come first. A Fill converts no value, so the banks
-    must also pass as a Fill.
-    """
-    from pyrung.click.ladder.types import _RenderError
-
-    oneshot = bool(getattr(instruction, "oneshot", False))
-    hex_dest = exporter._is_hex_bank_operand
-    dest = _render(exporter, tag, "instruction.dest", instruction).partition("..")[0]
-    copy_refusals: list[Any] | None
-    try:
-        # The export refuses some of these Fills as a Copy, and says why.
-        exporter._single_register_fill_token(instruction, tag, path="instruction", oneshot_kw={})
-        with exporter._hex_constants("copy" if hex_dest(dest) else None):
-            value = _render(exporter, instruction.value, "instruction.value", instruction)
-        copy_refusals = _refusals(lambda: Copy(source=value, dest=dest, oneshot=oneshot))
-    except (_RenderError, _Unbuildable):
-        copy_refusals = None
-    if copy_refusals:
-        return copy_refusals
-    try:
-        with exporter._hex_constants("word" if hex_dest(dest) else None):
-            value = _render(exporter, instruction.value, "instruction.value", instruction)
-    except _Unbuildable:
-        if copy_refusals is None:
-            raise
-        return []
-    refusals = _refusals(lambda: Fill(value=value, dest_start=dest, dest_end=dest, oneshot=oneshot))
-    # laddercodec refuses a Fill range of one address. The export writes a Copy in its
-    # place, so CLICK never sees that range.
-    return [refusal for refusal in refusals if str(refusal.code) != "range-not-ascending"]
-
-
-def _build(instruction: Any, exporter: Any) -> list[Any]:
-    """Return laddercodec's refusals of the instruction that the export writes.
-
-    Raise ``_Unbuildable`` when the export cannot write the instruction at all.
-    """
-    kind = type(instruction).__name__
-    oneshot = bool(getattr(instruction, "oneshot", False))
-    hex_dest = exporter._is_hex_bank_operand
-
-    def render(value: Any, field: str) -> str:
-        return _render(exporter, value, f"instruction.{field}", instruction)
-
-    if kind == "FillInstruction":
-        tag = single_register_fill_dest(instruction.dest)
-        if tag is not None:
-            return _single_register_fill_refusals(instruction, tag, exporter)
-        dest_start, dest_end = _split_range(render(instruction.dest, "dest"))
-        with exporter._hex_constants("word" if hex_dest(dest_start) else None):
-            value = render(instruction.value, "value")
-        return _refusals(
-            lambda: Fill(value=value, dest_start=dest_start, dest_end=dest_end, oneshot=oneshot)
-        )
-    if kind == "CopyInstruction":
-        # The export writes a text Copy's destination as the range that the text fills.
-        # laddercodec's Copy takes the first address of it.
-        dest = render(instruction.dest, "dest").partition("..")[0]
-        with exporter._hex_constants("copy" if hex_dest(dest) else None):
-            source = render(instruction.source, "source")
-        kwargs = _copy_kwargs(instruction, instruction.source)
-        return _refusals(lambda: Copy(source=source, dest=dest, oneshot=oneshot, **kwargs))
-    if kind == "BlockCopyInstruction":
-        source_start, source_end = _split_range(render(instruction.source, "source"))
-        dest_start, dest_end = _dest_range(
-            render(instruction.dest, "dest"), source_start, source_end
-        )
-        convert = None if instruction.convert is None else f"to_{instruction.convert.mode}"
-        return _refusals(
-            lambda: BlockCopy(
-                source_start=source_start,
-                source_end=source_end,
-                dest_start=dest_start,
-                dest_end=dest_end,
-                convert=convert,  # ty: ignore[invalid-argument-type]
-                oneshot=oneshot,
-            )
-        )
-    if kind in _PACK_KINDS:
-        source_field, _ = _COPY_FAMILY_FIELDS[kind]
-        start, end = _split_range(render(getattr(instruction, source_field), source_field))
-        dest = render(instruction.dest, "dest")
-        return _refusals(
-            lambda: Pack(
-                source_start=start,
-                source_end=end,
-                dest=dest,
-                kind=_PACK_KINDS[kind],  # ty: ignore[invalid-argument-type]
-                allow_whitespace=bool(getattr(instruction, "allow_whitespace", False)),
-                oneshot=oneshot,
-            )
-        )
-    if kind in _UNPACK_KINDS:
-        _, dest_field = _COPY_FAMILY_FIELDS[kind]
-        start, end = _split_range(render(getattr(instruction, dest_field), dest_field))
-        source = render(instruction.source, "source")
-        return _refusals(
-            lambda: Unpack(
-                source=source,
-                dest_start=start,
-                dest_end=end,
-                kind=_UNPACK_KINDS[kind],  # ty: ignore[invalid-argument-type]
-                oneshot=oneshot,
-            )
-        )
-    raise _Unbuildable
-
-
-def _broken_ranges(instruction: Any, exporter: Any) -> list[RangeProblem]:
+def _broken_ranges(instruction: Any, exporter: Any, family: Family) -> list[RangeProblem]:
     """Return each range operand that CLICK cannot hold as a range.
 
     The export would write such a range as a list, such as ``[DS1,DS5]`` or ``[]``. CLICK
     has no list form, so no CLICK project can hold it.
     """
     problems: list[RangeProblem] = []
-    for field in _RANGE_FIELDS.get(type(instruction).__name__, ()):
-        value = getattr(instruction, field)
+    for attribute in family.ranges.get(type(instruction).__name__, ()):
+        value = getattr(instruction, attribute)
         try:
-            _text, problem = _range_text(exporter, value, f"instruction.{field}", instruction)
-        except _Unbuildable:
+            _text, problem = _range_text(exporter, value, f"instruction.{attribute}", instruction)
+        except Unbuildable:
             continue
         if problem is not None:
             problems.append(problem)
     return problems
-
-
-def _call_text(instruction: Any) -> str:
-    """Return the instruction as the call that the author wrote."""
-    return render_instruction(instruction, "")[0]
 
 
 def _operand_tags(operand: Any) -> list[tuple[Tag, str]]:
@@ -395,6 +291,36 @@ def _operand_tags(operand: Any) -> list[tuple[Tag, str]]:
         name = operand.block.name
         return [(operand.block[addr], f"{name}{addr}") for addr in operand.addresses]
     return []
+
+
+def _leaves(value: Any) -> list[Any]:
+    """Return the operands that *value* reads: itself, or each operand of a condition."""
+    from pyrung.core.condition import Condition
+    from pyrung.core.validation.walker import _condition_children
+
+    if not isinstance(value, Condition):
+        return [value]
+    return [leaf for _name, child in _condition_children(value) for leaf in _leaves(child)]
+
+
+def _value_tags(value: Any) -> list[tuple[Tag, str]]:
+    """Return each tag that an operand or a condition names, with its name in the call."""
+    return [found for leaf in _leaves(value) for found in _operand_tags(leaf)]
+
+
+def _unresolved(value: Any, resolver: _ResolutionCache) -> bool:
+    """Return True if an operand or a condition names a tag that has no CLICK address."""
+    return any(resolver.resolve_operand_slots(leaf).unresolved for leaf in _leaves(value))
+
+
+def _attributes(attribute: str | tuple[str, ...]) -> tuple[str, ...]:
+    """Return the attributes of an argument that holds one attribute or several."""
+    return (attribute,) if isinstance(attribute, str) else attribute
+
+
+def _operand_of(operands: Sequence[Operand], argument: int | str) -> Operand | None:
+    """Return the operand of *argument*, or None for a flag, an option or a constant."""
+    return next((operand for operand in operands if operand.argument == argument), None)
 
 
 def _address_text(address: str) -> str:
@@ -427,9 +353,9 @@ def tag_names(tag_map: TagMap) -> dict[str, str]:
 
 
 def _call_names(
-    instruction: Any, names: Mapping[str, str], resolver: _ResolutionCache
+    operands: Sequence[Operand], names: Mapping[str, str], resolver: _ResolutionCache
 ) -> dict[str, str]:
-    """Return *names*, with each address in the call named as the call spells it.
+    """Return *names*, with each address of *operands* named as the call spells it.
 
     laddercodec quotes every address when it gets no names, so each address of the call
     has an entry. An address that the call spells as an address, such as ``X1`` for
@@ -437,11 +363,10 @@ def _call_names(
     after it in brackets.
     """
     call = dict(names)
-    for attribute in _COPY_FAMILY_FIELDS[type(instruction).__name__]:
-        for tag, name in _operand_tags(getattr(instruction, attribute)):
-            address = _tag_address(tag, resolver)
-            if address is not None:
-                call[address] = address if _spells(name, address) else name
+    for tag, name in (found for operand in operands for found in operand.tags()):
+        address = _tag_address(tag, resolver)
+        if address is not None:
+            call[address] = address if _spells(name, address) else name
     return call
 
 
@@ -477,12 +402,12 @@ class _Refusal:
     detail: str
     click_id: str | None
     advice: str | None
-    # The instruction attribute that holds the refused operand, or the name of the refused
-    # keyword argument. It is None for a field that no argument holds.
-    attribute: str | None
+    # The instruction attributes that hold the refused argument, or the name of a refused
+    # flag, option or constant. It is empty for a field that no argument holds.
+    attributes: tuple[str, ...]
 
     def finding(self, extra_advice: Sequence[str] = ()) -> ClickFinding:
-        """Return the finding. Advice in *extra_advice* replaces pyrung's advice for the code."""
+        """Return the finding. Advice in *extra_advice* replaces the family's advice."""
         advice = " ".join(extra_advice) if extra_advice else self.advice
         hint = [_sentence(self.detail)] if self.detail else []
         if advice:
@@ -506,8 +431,8 @@ class _Refusal:
 
 
 @dataclass(frozen=True)
-class CopyFamilyResult:
-    """What validation found in one Copy family instruction.
+class FamilyResult:
+    """What validation found in one instruction of a family.
 
     ``checks`` holds the findings of pyrung's own checks, and ``refusals`` holds
     laddercodec's refusals.
@@ -534,7 +459,7 @@ class CopyFamilyResult:
         extra: dict[int, list[str]] = {}
         for (code, attribute), advice in (pointer_advice or {}).items():
             same_code = [i for i, r in enumerate(self.refusals) if r.code == code]
-            on_operand = [i for i in same_code if self.refusals[i].attribute == attribute]
+            on_operand = [i for i in same_code if attribute in self.refusals[i].attributes]
             for i in on_operand or same_code[:1]:
                 taken = extra.setdefault(i, [])
                 taken.extend(text for text in advice if text not in taken)
@@ -546,6 +471,7 @@ class CopyFamilyResult:
 
 def _refusal(
     refusal: Any,
+    family: Family,
     instruction: Any,
     base_location: ProgramLocation,
     location_text: str,
@@ -555,16 +481,18 @@ def _refusal(
 ) -> _Refusal:
     """Return laddercodec's *refusal* with its frame, its caret and its texts."""
     code = str(refusal.code)
-    argument = _FIELD_ARGUMENTS.get(refusal.field)
-    operand: Any = None
-    if isinstance(argument, int):
-        attribute: str | None = _COPY_FAMILY_FIELDS[type(instruction).__name__][argument]
-        operand = getattr(instruction, attribute)
+    place = family.place_of(refusal)
+    argument = None if place is None else place.argument
+    operands = family.operands_of(instruction)
+    operand = None if argument is None else _operand_of(operands, argument)
+    if operand is not None:
+        attributes = operand.attributes
     else:
-        # A keyword argument, such as the converter, holds no address.
-        attribute = argument
-    frame = instruction_frame(base_location, instruction, argument=argument)
-    call_names = _call_names(instruction, names, resolver)
+        attributes = (argument,) if isinstance(argument, str) else ()
+    call = family.call_of(instruction)
+    item = None if place is None else place.item
+    frame = instruction_frame(base_location, instruction, argument=argument, item=item, call=call)
+    call_names = _call_names(operands, names, resolver)
     text = refusal.message(call_names)
     # laddercodec gives no detail for an instruction it has no rules for yet. The short
     # text is then the whole message, so it stays as the problem line.
@@ -574,14 +502,14 @@ def _refusal(
         # its names.
         own = {
             address: address
-            for tag, _name in _operand_tags(operand)
+            for tag, _name in (operand.tags() if operand is not None else ())
             if (address := _tag_address(tag, resolver)) is not None
         }
         frame = replace(frame, caret_label=refusal.short({**call_names, **own}))
         problem = ""
     else:
         problem = text
-    message = f"CLICK refuses {_call_text(instruction)} at {location_text}. {text}"
+    message = f"CLICK refuses {call.text} at {location_text}. {text}"
     if refusal.click_id and refusal.click_id not in text:
         message += f" CLICK's error is {refusal.click_id}."
     return _Refusal(
@@ -593,68 +521,85 @@ def _refusal(
         problem=problem,
         detail=detail,
         click_id=refusal.click_id,
-        advice=_advice(code, instruction, resolver),
-        attribute=attribute,
+        advice=family.advice(code, str(refusal.field), instruction, resolver),
+        attributes=attributes,
     )
 
 
-def evaluate_copy_family(
+def evaluate_family(
     instruction: Any,
     base_location: ProgramLocation,
     exporter: Any,
     mode: ValidationMode,
     resolver: _ResolutionCache,
     names: Mapping[str, str],
-) -> CopyFamilyResult:
-    """Report each value of a Copy family instruction that laddercodec refuses.
+) -> FamilyResult:
+    """Report each value of *instruction* that laddercodec refuses.
 
-    *names* maps CLICK addresses to tag names for laddercodec's text. :func:`tag_names`
-    builds it.
+    An instruction that no family covers has no findings here. *names* maps CLICK
+    addresses to tag names for laddercodec's text. :func:`tag_names` builds it.
     """
-    kind = type(instruction).__name__
-    fields = _COPY_FAMILY_FIELDS.get(kind)
-    if fields is None:
-        return CopyFamilyResult([])
+    from .families import family_of
 
+    family = family_of(instruction)
+    if family is None:
+        return FamilyResult([])
+
+    # One finding for each argument, at the first of its attributes that has no address.
     unresolved: list[ClickFinding] = []
-    for field, what in zip(fields, ("source", "destination"), strict=True):
-        location = _instruction_location(base_location, f"instruction.{field}")
-        if resolver.resolve_operand_slots(getattr(instruction, field)).unresolved:
-            unresolved.append(_unresolved_finding(location, mode, what))
+    for operand in family.operands_of(instruction):
+        missing = [a for a, value in operand.values if _unresolved(value, resolver)]
+        if missing:
+            location = _instruction_location(base_location, f"instruction.{missing[0]}")
+            unresolved.append(_unresolved_finding(location, mode, operand.word))
     if unresolved:
-        return CopyFamilyResult(unresolved)
+        return FamilyResult(unresolved)
 
     location_text = _format_location(_instruction_location(base_location, "instruction"))
-    broken = _broken_ranges(instruction, exporter)
+    broken = _broken_ranges(instruction, exporter, family)
     if broken:
         finding = ClickFinding(
             code=CLK_COPY_RANGE_NOT_CONSECUTIVE,
             severity=_route_severity(CLK_COPY_RANGE_NOT_CONSECUTIVE, mode),
             message=" ".join(
                 [
-                    f"CLICK refuses {_call_text(instruction)} at {location_text}.",
+                    f"CLICK refuses {family.call_of(instruction).text} at {location_text}.",
                     range_not_consecutive_text(broken),
                 ]
             ),
             location=location_text,
             suggestion=range_not_consecutive_advice(broken),
         )
-        return CopyFamilyResult([finding])
+        return FamilyResult([finding])
 
     try:
-        refusals = _build(instruction, exporter)
-    except _Unbuildable:
+        refusals = family.build(instruction, exporter)
+    except Unbuildable:
         # laddercodec has nothing to read. An expression operand, or an operand that the
         # export refuses, has a finding of its own.
-        return CopyFamilyResult([])
+        return FamilyResult([])
 
-    return CopyFamilyResult(
+    return FamilyResult(
         [],
         tuple(
-            _refusal(r, instruction, base_location, location_text, mode, resolver, names)
+            _refusal(r, family, instruction, base_location, location_text, mode, resolver, names)
             for r in refusals
         ),
     )
 
 
-__all__ = ["CopyFamilyResult", "_COPY_FAMILY_FIELDS", "evaluate_copy_family", "tag_names"]
+__all__ = [
+    "Family",
+    "FamilyResult",
+    "Operand",
+    "Place",
+    "Unbuildable",
+    "declared_operands",
+    "default_place",
+    "evaluate_family",
+    "memory_types",
+    "refusals_of",
+    "render_operand",
+    "split_range",
+    "tag_names",
+]

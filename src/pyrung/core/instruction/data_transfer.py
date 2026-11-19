@@ -245,6 +245,8 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("dest",)
+    _call_operands = (("source", "source"), ("target", "dest"))
+    _call_keywords = ("convert", "oneshot")
     _fault_writes = ("fault.address_error", "fault.out_of_range")
     _fault_follows = _fault_writes
     _conditions = ()
@@ -501,6 +503,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("dest",)
+    _call_operands = (("source", "source"), ("dest", "dest"))
+    _call_keywords = ("convert", "oneshot")
     _fault_writes = ("fault.address_error", "fault.out_of_range")
     _fault_follows = _fault_writes
     _conditions = ()
@@ -617,6 +621,7 @@ class FillInstruction(OneShotMixin, Instruction):
 
     _reads = ("value",)
     _writes = ("dest",)
+    _call_operands = (("value", "value"), ("dest", "dest"))
     _fault_writes = ("fault.address_error", "fault.out_of_range")
     _fault_follows = _fault_writes
     _conditions = ()

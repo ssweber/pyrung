@@ -13,28 +13,20 @@ from pyrung.click.capabilities import (
     HEX_CONSTANT_BANKS,
     single_register_fill_dest,
 )
-from pyrung.core.condition import Condition
 from pyrung.core.instruction.conversions import (
     LITERAL,
     _render_text_from_numeric,
     copy_source_kind,
 )
-from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.memory_block import _element_name, _store_block, block_room
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.time_mode import TimeUnit
-from pyrung.core.validation.walker import ProgramLocation, _condition_children
+from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_WIDE_CONSTANT,
-    CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_MATH_DEST_BANK,
-    CLK_OUT_UNIT_UNSUPPORTED,
-    CLK_SEARCH_RANGE_BANK,
-    CLK_SEARCH_RESULT_NOT_DS,
     CLK_TEXT_PAST_BANK,
     CLK_TEXT_PAST_BLOCK,
     CLK_TIMER_PAIR_MISMATCH,
@@ -58,75 +50,12 @@ if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
     from pyrung.click.tag_map import TagMap
 
-# ---------------------------------------------------------------------------
-# Rule maps (table-driven)
-# ---------------------------------------------------------------------------
 
-_WRITE_TARGET_FIELDS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("OutInstruction", "target"),
-        ("LatchInstruction", "target"),
-        ("ResetInstruction", "target"),
-        ("CalcInstruction", "dest"),
-        ("SearchInstruction", "result"),
-        ("SearchInstruction", "found"),
-        ("ShiftInstruction", "bit_range"),
-        ("EventDrumInstruction", "current_step"),
-        ("EventDrumInstruction", "completion_flag"),
-        ("TimeDrumInstruction", "current_step"),
-        ("TimeDrumInstruction", "accumulator"),
-        ("TimeDrumInstruction", "completion_flag"),
-        ("TimeEventDrumInstruction", "current_step"),
-        ("TimeEventDrumInstruction", "accumulator"),
-        ("TimeEventDrumInstruction", "completion_flag"),
-        ("ToggleInstruction", "target"),
-        ("DebounceInstruction", "target"),
-        ("FlasherInstruction", "target"),
-        ("TimedInstruction", "target"),
-    }
-)
+def _family_rows(name: str) -> dict[Any, Any]:
+    """Return the rows of a table that several families share, from the families in legacy/."""
+    from .legacy import table
 
-_ROLE_ASSIGNMENT_FIELDS: dict[tuple[str, str], str] = {
-    ("OnDelayInstruction", "done_bit"): "timer_done_bit",
-    ("OnDelayInstruction", "accumulator"): "timer_accumulator",
-    ("OnDelayInstruction", "preset"): "timer_preset",
-    ("OffDelayInstruction", "done_bit"): "timer_done_bit",
-    ("OffDelayInstruction", "accumulator"): "timer_accumulator",
-    ("OffDelayInstruction", "preset"): "timer_preset",
-    ("CountUpInstruction", "done_bit"): "counter_done_bit",
-    ("CountUpInstruction", "accumulator"): "counter_accumulator",
-    ("CountUpInstruction", "preset"): "counter_preset",
-    ("CountDownInstruction", "done_bit"): "counter_done_bit",
-    ("CountDownInstruction", "accumulator"): "counter_accumulator",
-    ("CountDownInstruction", "preset"): "counter_preset",
-    ("EventDrumInstruction", "current_step"): "drum_current_step",
-    ("EventDrumInstruction", "completion_flag"): "drum_completion_flag",
-    ("EventDrumInstruction", "jump_step"): "drum_jump_step",
-    ("TimeDrumInstruction", "current_step"): "drum_current_step",
-    ("TimeDrumInstruction", "accumulator"): "drum_accumulator",
-    ("TimeDrumInstruction", "completion_flag"): "drum_completion_flag",
-    ("TimeDrumInstruction", "jump_step"): "drum_jump_step",
-    ("TimeEventDrumInstruction", "current_step"): "drum_current_step",
-    ("TimeEventDrumInstruction", "accumulator"): "drum_accumulator",
-    ("TimeEventDrumInstruction", "completion_flag"): "drum_completion_flag",
-    ("TimeEventDrumInstruction", "jump_step"): "drum_jump_step",
-    # The Out coil variants claim each phase's whole Timer, as on_delay does.
-    ("DebounceInstruction", "on_done"): "timer_done_bit",
-    ("DebounceInstruction", "on_acc"): "timer_accumulator",
-    ("DebounceInstruction", "on_preset"): "timer_preset",
-    ("DebounceInstruction", "off_done"): "timer_done_bit",
-    ("DebounceInstruction", "off_acc"): "timer_accumulator",
-    ("DebounceInstruction", "off_preset"): "timer_preset",
-    ("FlasherInstruction", "on_done"): "timer_done_bit",
-    ("FlasherInstruction", "on_acc"): "timer_accumulator",
-    ("FlasherInstruction", "on_preset"): "timer_preset",
-    ("FlasherInstruction", "off_done"): "timer_done_bit",
-    ("FlasherInstruction", "off_acc"): "timer_accumulator",
-    ("FlasherInstruction", "off_preset"): "timer_preset",
-    ("TimedInstruction", "timer_done"): "timer_done_bit",
-    ("TimedInstruction", "timer_acc"): "timer_accumulator",
-    ("TimedInstruction", "on_preset"): "timer_preset",
-}
+    return table(name)
 
 
 def _load_default_profile() -> HardwareProfile | None:
@@ -146,10 +75,7 @@ def _evaluate_write_targets(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
 
-    for candidate_type, field_name in _WRITE_TARGET_FIELDS:
-        if instruction_type != candidate_type:
-            continue
-
+    for field_name in _family_rows("WRITE_TARGET_FIELDS").get(instruction_type, ()):
         location = _instruction_location(base_location, f"instruction.{field_name}")
         resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
         written_by = (instruction_type, field_name)
@@ -234,10 +160,7 @@ def _evaluate_role_assignments(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
 
-    for (candidate_type, field_name), role in _ROLE_ASSIGNMENT_FIELDS.items():
-        if instruction_type != candidate_type:
-            continue
-
+    for field_name, role in _family_rows("ROLE_ASSIGNMENT_FIELDS").get(instruction_type, ()):
         value = getattr(instruction, field_name)
         if value is None:
             continue
@@ -268,50 +191,6 @@ def _evaluate_role_assignments(
                 )
 
     return findings
-
-
-# Maps each coil instruction to its pyrung verb and CLICK coil name. The target must be
-# bit memory. toggle() and the Out variants already accept only a Bool tag.
-_COIL_TARGET_INSTRUCTIONS: dict[str, tuple[str, str]] = {
-    "OutInstruction": ("out", "Out"),
-    "LatchInstruction": ("latch", "Set"),
-    "ResetInstruction": ("reset", "Reset"),
-}
-
-
-def _evaluate_coil_targets(
-    instruction: Any,
-    base_location: ProgramLocation,
-    profile: HardwareProfile,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    names = _COIL_TARGET_INSTRUCTIONS.get(type(instruction).__name__)
-    if names is None:
-        return []
-    verb, coil = names
-    # An unresolved target is reported by the write-target check.
-    resolution = resolver.resolve_operand_slots(instruction.target)
-    bad = [
-        _bank_label(slot)
-        for slot in resolution.slots
-        if not profile.valid_for_role(slot.memory_type, "coil_target")
-    ]
-    if not bad:
-        return []
-    target = bad[0] if len(bad) == 1 else f"{bad[0]}..{bad[-1]}"
-    location_text = _format_location(_instruction_location(base_location, "instruction.target"))
-    return [
-        ClickFinding(
-            code=CLK_BANK_WRONG_ROLE,
-            severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-            message=(
-                f"{verb}({target}) at {location_text}: CLICK's {coil} coil takes bit "
-                "memory only (X, Y, C, T, CT, SC). Write a register with copy() or fill()."
-            ),
-            location=location_text,
-        )
-    ]
 
 
 def _wide_constant_into_hex(
@@ -401,106 +280,6 @@ def _evaluate_wide_copy_constant(
         mode,
         range_fill=range_fill,
     )
-
-
-# The banks that CLICK v4's Search dialog accepts (checked in the editor, 2026-11-06).
-_SEARCH_RANGE_BANKS = ("DS", "DD", "DH", "DF", "TD", "CTD", "TXT")
-_SEARCH_RESULT_BANKS = ("DS",)
-
-
-def _evaluate_search_banks(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    """Report CLK_SEARCH_RANGE_BANK and CLK_SEARCH_RESULT_NOT_DS.
-
-    The first is a Search range in a bank that CLICK's Search does not accept. The second
-    is a Result that is not a DS. The write-target and bank checks report an unresolved
-    operand.
-    """
-    if type(instruction).__name__ != "SearchInstruction":
-        return []
-    findings: list[ClickFinding] = []
-    checks = (
-        ("search_range", _SEARCH_RANGE_BANKS, CLK_SEARCH_RANGE_BANK),
-        ("result", _SEARCH_RESULT_BANKS, CLK_SEARCH_RESULT_NOT_DS),
-    )
-    for field_name, allowed, code in checks:
-        resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
-        banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
-        bad = [bank for bank in banks if bank not in allowed]
-        if not bad:
-            continue
-        location_text = _format_location(
-            _instruction_location(base_location, f"instruction.{field_name}")
-        )
-        if code == CLK_SEARCH_RANGE_BANK:
-            message = (
-                f"search() range in {', '.join(bad)} at {location_text}; CLICK's Search "
-                f"takes a range in {', '.join(allowed)} only."
-            )
-            suggestion = "Copy the values into a range in one of those banks and search that."
-        else:
-            message = (
-                f"search() result in {', '.join(bad)} at {location_text}; CLICK's Search "
-                "takes a DS Result only."
-            )
-            suggestion = "Map the result to a DS address, and copy it on from there if needed."
-        findings.append(
-            ClickFinding(
-                code=code,
-                severity=_route_severity(code, mode),
-                message=message,
-                location=location_text,
-                suggestion=suggestion,
-            )
-        )
-    return findings
-
-
-# The banks that CLICK v4's Math dialog accepts as its Result (its Address Picker,
-# 2026-11-16). A decimal Math accepts DS, DD, DF, TD, CTD and the writable SD. A hex Math
-# accepts DH and YD. The table needs no mode. A Result in the other mode's bank makes a
-# mixed Math, and CLK_MATH_MODE_MIXED flags that (``infer_calc_mode`` in calc.py).
-_MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "SD", "DH", "YD")
-
-
-def _evaluate_math_dest_bank(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    """Report CLK_MATH_DEST_BANK, a math() into a bank that CLICK's Math Result rejects.
-
-    Those banks are bit memory, XD and TXT. The write-target check reports an unresolved
-    destination and an SD that CLICK does not let a program write.
-    """
-    if type(instruction).__name__ != "CalcInstruction":
-        return []
-    resolution = resolver.resolve_operand_slots(instruction.dest)
-    banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
-    bad = [bank for bank in banks if bank not in _MATH_DEST_BANKS]
-    if not bad:
-        return []
-    location_text = _format_location(_instruction_location(base_location, "instruction.dest"))
-    return [
-        ClickFinding(
-            code=CLK_MATH_DEST_BANK,
-            severity=_route_severity(CLK_MATH_DEST_BANK, mode),
-            message=(
-                f"math() into {', '.join(bad)} at {location_text}; CLICK's Math takes a "
-                "Result in DS, DD, DF, TD, CTD or SD, or DH or YD in a hex Math."
-            ),
-            location=location_text,
-            suggestion=(
-                "Store the result in a register of one of those banks, and test or copy "
-                "it on from there."
-            ),
-        )
-    ]
 
 
 # The fewest characters that ``to_text()`` writes for a tag of each type, and whether
@@ -601,6 +380,9 @@ def _saved_constant_length(value: Any) -> int | None:
     if isinstance(value, ImmediateRef):
         value = value.value
     if isinstance(value, str):
+        if value == '"':
+            # The export writes a quote on its own as $22, one character.
+            return 1
         return len(value.replace('"', '""'))
     if isinstance(value, bool):
         return 1
@@ -758,156 +540,7 @@ def _evaluate_text_past_bank(
     ]
 
 
-def _iter_condition_tags(root: Any) -> tuple[Tag, ...]:
-    found: list[Tag] = []
-    seen_values: set[int] = set()
-    seen_tags: set[int] = set()
-
-    def walk(value: Any) -> None:
-        value_id = id(value)
-        if value_id in seen_values:
-            return
-        seen_values.add(value_id)
-
-        if isinstance(value, Tag):
-            tag_id = id(value)
-            if tag_id not in seen_tags:
-                seen_tags.add(tag_id)
-                found.append(value)
-            return
-
-        if isinstance(value, ImmediateRef):
-            walk(value.value)
-            return
-
-        if isinstance(value, Condition):
-            for _, child in _condition_children(value):
-                walk(child)
-            return
-
-    walk(root)
-    return tuple(found)
-
-
-def _evaluate_drums(
-    instruction: Any,
-    base_location: ProgramLocation,
-    tag_map: TagMap,
-    profile: HardwareProfile,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    instruction_type = type(instruction).__name__
-    if instruction_type not in {
-        "EventDrumInstruction",
-        "TimeDrumInstruction",
-        "TimeEventDrumInstruction",
-    }:
-        return []
-
-    findings: list[ClickFinding] = []
-
-    def check_role(
-        value: Any,
-        role: str,
-        location: ProgramLocation,
-        unresolved_reason: str,
-    ) -> None:
-        resolution = resolver.resolve_operand_slots(value)
-        if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, unresolved_reason))
-            return
-        for slot in resolution.slots:
-            if not profile.valid_for_role(slot.memory_type, role):
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_BANK_WRONG_ROLE,
-                        severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                        message=_wrong_role_text(
-                            slot, _role_words(role), location_text, _role_banks(profile, role)
-                        ),
-                        location=location_text,
-                    )
-                )
-
-    outputs = getattr(instruction, "outputs", ())
-    for idx, output in enumerate(outputs):
-        location = _instruction_location(base_location, f"instruction.outputs[{idx}]")
-        resolution = resolver.resolve_operand_slots(output)
-        if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "drum output"))
-            continue
-        for slot in resolution.slots:
-            if not profile.is_writable(slot.memory_type, slot.address):
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_BANK_NOT_WRITABLE,
-                        severity=_route_severity(CLK_BANK_NOT_WRITABLE, mode),
-                        message=_not_writable_text(instruction, slot, location_text),
-                        location=location_text,
-                    )
-                )
-            if not profile.valid_for_role(slot.memory_type, "drum_output_bit"):
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_BANK_WRONG_ROLE,
-                        severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                        message=_wrong_role_text(
-                            slot,
-                            "drum output",
-                            location_text,
-                            _role_banks(profile, "drum_output_bit"),
-                        ),
-                        location=location_text,
-                    )
-                )
-
-    if instruction_type in {"EventDrumInstruction", "TimeEventDrumInstruction"}:
-        events = getattr(instruction, "events", ())
-        for idx, event_condition in enumerate(events):
-            if event_condition is None:
-                continue
-            event_location = _instruction_location(base_location, f"instruction.events[{idx}]")
-            event_tags = _iter_condition_tags(event_condition)
-            for event_tag in event_tags:
-                check_role(
-                    value=event_tag,
-                    role="drum_event_condition",
-                    location=event_location,
-                    unresolved_reason="drum event condition",
-                )
-
-    jump_step = getattr(instruction, "jump_step", None)
-    if jump_step is not None and not isinstance(jump_step, Tag):
-        location = _instruction_location(base_location, "instruction.jump_step")
-        location_text = _format_location(location)
-        findings.append(
-            ClickFinding(
-                code=CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-                severity=_route_severity(CLK_DRUM_JUMP_STEP_TAG_REQUIRED, mode),
-                message=(
-                    f"The drum's jump step at {location_text} is not a tag. CLICK needs a DS "
-                    "tag there."
-                ),
-                location=location_text,
-            )
-        )
-
-    return findings
-
-
 _INT16_MAX = 32_767
-
-_TIMER_PRESET_FIELDS: dict[str, tuple[str, ...]] = {
-    "OnDelayInstruction": ("preset",),
-    "OffDelayInstruction": ("preset",),
-    "DebounceInstruction": ("on_preset", "off_preset"),
-    "FlasherInstruction": ("on_preset", "off_preset"),
-    "TimedInstruction": ("on_preset",),
-}
 
 
 def _evaluate_timer_preset_overflow(
@@ -917,7 +550,8 @@ def _evaluate_timer_preset_overflow(
     mode: ValidationMode,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
-    for field_name in _TIMER_PRESET_FIELDS.get(type(instruction).__name__, ()):
+    fields = _family_rows("TIMER_PRESET_FIELDS").get(type(instruction).__name__, ())
+    for field_name in fields:
         preset = getattr(instruction, field_name, None)
         if isinstance(preset, Tag) or preset is None or preset <= _INT16_MAX:
             continue
@@ -938,25 +572,13 @@ def _evaluate_timer_preset_overflow(
     return findings
 
 
-# The least constant preset that CLICK v4's dialogs accept (checked in the editor,
-# 2026-11-06). A flasher or a timed coil refuses 0. A debounce and a drum step accept 0
-# and refuse a negative one. A register preset accepts any value.
-_CONSTANT_PRESET_FLOORS: dict[str, tuple[str, int, tuple[str, ...]]] = {
-    "DebounceInstruction": ("debounce", 0, ("on_preset", "off_preset")),
-    "FlasherInstruction": ("flasher", 1, ("on_preset", "off_preset")),
-    "TimedInstruction": ("timed", 1, ("on_preset",)),
-    "TimeDrumInstruction": ("time_drum", 0, ()),
-    "TimeEventDrumInstruction": ("time_event_drum", 0, ()),
-}
-
-
 def _evaluate_timer_preset_floor(
     instruction: Any,
     base_location: ProgramLocation,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
     """Report CLK_TIMER_PRESET_TOO_LOW, a constant preset below what CLICK accepts."""
-    spec = _CONSTANT_PRESET_FLOORS.get(type(instruction).__name__)
+    spec = _family_rows("CONSTANT_PRESET_FLOORS").get(type(instruction).__name__)
     if spec is None:
         return []
     verb, floor, fields = spec
@@ -993,15 +615,6 @@ def _evaluate_timer_preset_floor(
 
 # A CLICK timer or counter is one number. Its instruction names T<n> (or CT<n>), and the
 # accumulator TD<n> (CTD<n>) comes with it. The Out coils name only TD<n>.
-_TIMER_PAIR_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
-    "OnDelayInstruction": (("done_bit", "accumulator"),),
-    "OffDelayInstruction": (("done_bit", "accumulator"),),
-    "CountUpInstruction": (("done_bit", "accumulator"),),
-    "CountDownInstruction": (("done_bit", "accumulator"),),
-    "DebounceInstruction": (("on_done", "on_acc"), ("off_done", "off_acc")),
-    "FlasherInstruction": (("on_done", "on_acc"), ("off_done", "off_acc")),
-    "TimedInstruction": (("timer_done", "timer_acc"),),
-}
 _PAIRED_BANKS = {"T": "TD", "CT": "CTD"}
 
 
@@ -1012,7 +625,8 @@ def _evaluate_timer_pairs(
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
-    for done_field, acc_field in _TIMER_PAIR_FIELDS.get(type(instruction).__name__, ()):
+    pairs = _family_rows("TIMER_PAIR_FIELDS").get(type(instruction).__name__, ())
+    for done_field, acc_field in pairs:
         done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
         done_slots = resolver.resolve_operand_slots(done).slots
         acc_slots = resolver.resolve_operand_slots(acc).slots
@@ -1039,121 +653,4 @@ def _evaluate_timer_pairs(
                 suggestion="Map Done and Acc to the same number, e.g. T5 with TD5.",
             )
         )
-    return findings
-
-
-# CLICK v4's Out dialog offers fewer time units than its timers do.
-_OUT_VARIANT_UNITS: dict[str, tuple[str, frozenset[TimeUnit]]] = {
-    "DebounceInstruction": ("debounce", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
-    "FlasherInstruction": ("flasher", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
-    "TimedInstruction": ("timed", frozenset({TimeUnit.Tms, TimeUnit.Ts, TimeUnit.Tm})),
-}
-_UNIT_NAMES = {
-    TimeUnit.Tms: "ms",
-    TimeUnit.Ts: "sec",
-    TimeUnit.Tm: "min",
-    TimeUnit.Th: "hour",
-    TimeUnit.Td: "day",
-}
-
-
-def _evaluate_out_variant_unit(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-) -> list[ClickFinding]:
-    spec = _OUT_VARIANT_UNITS.get(type(instruction).__name__)
-    if spec is None:
-        return []
-    verb, allowed = spec
-    unit = instruction.unit
-    if unit in allowed:
-        return []
-    location_text = _format_location(_instruction_location(base_location, "instruction.unit"))
-    choices = "/".join(_UNIT_NAMES[u] for u in TimeUnit if u in allowed)
-    return [
-        ClickFinding(
-            code=CLK_OUT_UNIT_UNSUPPORTED,
-            severity=_route_severity(CLK_OUT_UNIT_UNSUPPORTED, mode),
-            message=(
-                f"CLICK's {verb} coil times in {choices}, not {_UNIT_NAMES[unit]}, "
-                f"at {location_text}."
-            ),
-            location=location_text,
-            suggestion=f"Use unit= one of {choices} and scale the preset.",
-        )
-    ]
-
-
-# The banks that each Send or Receive operand accepts, from CLICK's help pages for them
-# (the MODBUS TCP and RTU pages agree). No conformance case runs them, so they are not
-# probed on hardware. The help pages accept the whole SD bank as a Receive destination,
-# so this does not apply copy()'s writable SD subset.
-_MODBUS_FLAG_BANKS = frozenset({"C"})
-_MODBUS_EXCEPTION_BANKS = frozenset({"DS", "DD"})
-_MODBUS_DEVICE_ID_BANKS = frozenset({"DS"})
-_MODBUS_RECEIVE_DEST_BANKS = frozenset(
-    {"Y", "C", "CTD", "DS", "DD", "DH", "DF", "SD", "TD", "YD", "TXT"}
-)
-_MODBUS_BANKS: dict[tuple[str, str], frozenset[str]] = {
-    ("ModbusReceiveInstruction", "dest"): _MODBUS_RECEIVE_DEST_BANKS,
-    ("ModbusReceiveInstruction", "receiving"): _MODBUS_FLAG_BANKS,
-    ("ModbusReceiveInstruction", "success"): _MODBUS_FLAG_BANKS,
-    ("ModbusReceiveInstruction", "error"): _MODBUS_FLAG_BANKS,
-    ("ModbusReceiveInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
-    ("ModbusSendInstruction", "sending"): _MODBUS_FLAG_BANKS,
-    ("ModbusSendInstruction", "success"): _MODBUS_FLAG_BANKS,
-    ("ModbusSendInstruction", "error"): _MODBUS_FLAG_BANKS,
-    ("ModbusSendInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
-    # CLICK's Slave ID box accepts a number or a DS address.
-    ("ModbusReceiveInstruction", "device_id"): _MODBUS_DEVICE_ID_BANKS,
-    ("ModbusSendInstruction", "device_id"): _MODBUS_DEVICE_ID_BANKS,
-}
-
-
-def _evaluate_modbus_banks(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    findings: list[ClickFinding] = []
-    instruction_type = type(instruction).__name__
-
-    for (candidate_type, field_name), banks in _MODBUS_BANKS.items():
-        if instruction_type != candidate_type:
-            continue
-
-        value = getattr(instruction, field_name)
-        # If the caller did not pass a status bit, pyrung gives it a hidden tag.  That tag
-        # never reaches the CLICK project.
-        if isinstance(value, Tag) and is_modbus_status_tag(value.name):
-            continue
-        # A numeric device ID has no bank.
-        if isinstance(value, int):
-            continue
-
-        location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = resolver.resolve_operand_slots(value)
-        if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "operand"))
-            continue
-
-        for slot in resolution.slots:
-            if slot.memory_type in banks:
-                continue
-            location_text = _format_location(location)
-            choices = ", ".join(sorted(banks))
-            findings.append(
-                ClickFinding(
-                    code=CLK_BANK_WRONG_ROLE,
-                    severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                    message=(
-                        f"Bank {_bank_label(slot)} is invalid for {field_name} "
-                        f"at {location_text}; CLICK takes {choices}."
-                    ),
-                    location=location_text,
-                )
-            )
-
     return findings

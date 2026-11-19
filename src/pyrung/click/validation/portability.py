@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
-
-from pyclickplc.addresses import format_address_display
 
 from pyrung.core.expression import (
     BinaryExpr,
     Expression,
-    LiteralExpr,
-    MathFuncExpr,
-    RandIntExpr,
-    RangeAggregateExpr,
-    ShiftFuncExpr,
-    SumExpr,
-    TagExpr,
-    UnaryExpr,
 )
-from pyrung.core.instruction.calc import CalcMode, infer_calc_mode
 from pyrung.core.instruction.control import (
     CallInstruction,
     ForLoopInstruction,
@@ -28,41 +16,25 @@ from pyrung.core.instruction.control import (
 )
 from pyrung.core.memory_block import (
     BlockRange,
-    IndirectExprRef,
-    IndirectRef,
 )
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import rung_label
-from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
-    CLK_COMPARE_HEX_MIX,
     CLK_EXPR_ONLY_IN_MATH,
-    CLK_FORLOOP_COUNT_BANK,
     CLK_FORLOOP_INNER_ONESHOT,
     CLK_FORLOOP_NESTING_DEPTH,
     CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
-    CLK_IMMEDIATE_CONTACT_MUST_BE_X,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
-    CLK_MATH_ARG_NOT_PLAIN,
-    CLK_MATH_BIT_OPERAND,
-    CLK_MATH_BIT_RANGE_AGGREGATE,
     CLK_MATH_FLOOR_DIV,
-    CLK_MATH_FUNC_MODE_MISMATCH,
-    CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
-    CLK_MATH_MODE_MIXED,
-    CLK_MATH_NESTING_DEPTH,
-    CLK_MATH_RANGE_MIXED_BANKS,
-    CLK_MATH_SUM_BANK_NOT_AVAILABLE,
-    CLK_MATH_WIDE_CONSTANT,
     CLK_NESTED_CALL,
     CLK_NOP_NO_COIL,
     CLK_PTR_BLOCK_OFFSET,
@@ -70,10 +42,7 @@ from .findings import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
-    CLK_RAND_BOUND_TYPE,
-    CLK_RAND_EQUAL_BOUNDS,
     CLK_STATUS_BIT_NOT_PORTABLE,
-    CLK_TEXT_ORDER_COMPARE,
     CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickFinding,
@@ -88,9 +57,6 @@ from .findings import (
     pointer_block_range_text,
     pointer_expression_text,
     pointer_offset_text,
-    range_aggregate_advice,
-    range_aggregate_problem,
-    range_not_consecutive_text,
 )
 from .resolve import (
     _bank_label,
@@ -376,89 +342,10 @@ def _evaluate_immediate_coil_target(
     return findings
 
 
-def _evaluate_immediate_contacts(
-    program: Any, tag_map: TagMap, mode: ValidationMode, resolver: _ResolutionCache
-) -> list[ClickFinding]:
-    """Report each immediate NO/NC contact whose tag is mapped to a bank other than X.
-
-    CLICK offers an immediate contact on X only.
-    """
-    from pyrung.core.condition import (
-        AllCondition,
-        AnyCondition,
-        BitCondition,
-        NormallyClosedCondition,
-    )
-
-    findings: list[ClickFinding] = []
-
-    def contacts(condition: Any, out: list[Tag]) -> None:
-        if isinstance(condition, (AllCondition, AnyCondition)):
-            for child in condition.conditions:
-                contacts(child, out)
-        elif isinstance(condition, (BitCondition, NormallyClosedCondition)) and isinstance(
-            condition.tag, ImmediateRef
-        ):
-            out.append(condition._resolved_tag)
-
-    def walk(rung: Any, location: ProgramLocation, *, loops: bool = True) -> None:
-        # iter_loop_body_rungs also yields the rungs of nested loops.  Walk those with
-        # loops=False.
-        wrapped: list[Tag] = []
-        for condition in rung._conditions[rung._branch_condition_start :]:
-            contacts(condition, wrapped)
-        location_text = _format_location(location)
-        for tag in wrapped:
-            slot = resolver.resolve_direct_tag(tag)
-            if slot is None or slot.memory_type == "X":
-                continue  # an unmapped tag has its own finding
-            findings.append(
-                ClickFinding(
-                    code=CLK_IMMEDIATE_CONTACT_MUST_BE_X,
-                    severity=_route_severity(CLK_IMMEDIATE_CONTACT_MUST_BE_X, mode),
-                    message=(
-                        f"Immediate contact on {tag.name} ({_bank_label(slot)}) at "
-                        f"{location_text}; an immediate contact must read an input mapped to X."
-                    ),
-                    location=location_text,
-                    suggestion=_build_suggestion(CLK_IMMEDIATE_CONTACT_MUST_BE_X, None, tag_map),
-                )
-            )
-        for index, branch in enumerate(rung._branches):
-            walk(
-                branch,
-                ProgramLocation(
-                    scope=location.scope,
-                    subroutine=location.subroutine,
-                    rung_index=location.rung_index,
-                    branch_path=(*location.branch_path, index),
-                    instruction_index=None,
-                    instruction_type=None,
-                    arg_path="condition",
-                ),
-                loops=loops,
-            )
-        if loops:
-            for body_rung in iter_loop_body_rungs(rung._instructions):
-                walk(body_rung, location, loops=False)
-
-    def top(scope: Any, subroutine: str | None, rung_index: int) -> ProgramLocation:
-        return ProgramLocation(
-            scope=scope,
-            subroutine=subroutine,
-            rung_index=rung_index,
-            branch_path=(),
-            instruction_index=None,
-            instruction_type=None,
-            arg_path="condition",
-        )
-
-    for rung_index, rung in enumerate(program.rungs):
-        walk(rung, top("main", None, rung_index))
-    for sub_name in sorted(program.subroutines):
-        for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            walk(rung, top("subroutine", sub_name, rung_index))
-    return findings
+# The coils that take an immediate() target in CLICK.
+_IMMEDIATE_COILS = frozenset(
+    {"OutInstruction", "LatchInstruction", "ResetInstruction", "ToggleInstruction"}
+)
 
 
 def _evaluate_immediate_usage(
@@ -468,6 +355,9 @@ def _evaluate_immediate_usage(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
+    from .legacy import table
+
+    immediate_targets = table("IMMEDIATE_COIL_TARGETS")
     findings: list[ClickFinding] = []
     condition_types: dict[
         tuple[tuple[str, str | None, int, tuple[int, ...], int | None, str | None], str], str
@@ -526,14 +416,12 @@ def _evaluate_immediate_usage(
             )
             continue
 
-        if (
-            loc.instruction_type
-            in {"OutInstruction", "LatchInstruction", "ResetInstruction", "ToggleInstruction"}
-            and loc.arg_path == "instruction.target"
-        ):
+        if loc.instruction_type in _IMMEDIATE_COILS and loc.arg_path == "instruction.target":
+            # pyrung checks the target only while the coil's family is in legacy/. laddercodec
+            # checks the coils of a family that has moved.
             instruction = instructions_by_site.get(site_key)
             target = getattr(instruction, "target", None)
-            if isinstance(target, ImmediateRef):
+            if loc.instruction_type in immediate_targets and isinstance(target, ImmediateRef):
                 findings.extend(
                     _evaluate_immediate_coil_target(target, loc, tag_map, mode, resolver)
                 )
@@ -568,340 +456,12 @@ def _expr_contains_floor_div(expr: Any) -> bool:
 # explicit parens, and function calls (SQRT, LSH, abs, …) each add one paren
 # level.  This mirrors the rendered Click formula string.
 
-# Maximum parenthetical nesting the Click formula pad accepts.
-_CLICK_MAX_PAREN_DEPTH = 8
-
-
-def _is_negative_operand(expr: Any) -> bool:
-    """Return True for a right operand that the translator wraps in parentheses for its sign.
-
-    ``DS1 + ( -5 )`` for a literal, ``DS1 * ( 0 - DS2 )`` for a negation.
-
-    A negative literal counts here even in hex mode, where it renders unsigned
-    (``FFFFh``) and gets no parentheses. That only overstates the depth.
-    """
-    if isinstance(expr, UnaryExpr):
-        return expr.symbol == "-"
-    return (
-        isinstance(expr, LiteralExpr)
-        and isinstance(expr.value, (int, float))
-        and not isinstance(expr.value, bool)
-        and expr.value < 0
-    )
-
-
-def _expr_paren_depth(expr: Any) -> int:
-    """Return the max parenthesization depth the Click formula would have."""
-    if not isinstance(expr, Expression):
-        return 0
-
-    # Leaves
-    if isinstance(expr, (TagExpr, LiteralExpr)):
-        return 0
-
-    # Range aggregates: SUM ( a : b ), MAX ( a : b ), ... add one paren level.
-    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
-        return 1
-
-    # RAND ( lo , hi ) adds one paren level.
-    if isinstance(expr, RandIntExpr):
-        return max(_expr_paren_depth(expr.lo), _expr_paren_depth(expr.hi)) + 1
-
-    # ShiftFuncExpr: FUNC(val, cnt) — one paren level
-    if isinstance(expr, ShiftFuncExpr):
-        return max(_expr_paren_depth(expr.value), _expr_paren_depth(expr.count)) + 1
-
-    # MathFuncExpr: FUNC(operand) — one paren level
-    if isinstance(expr, MathFuncExpr):
-        return _expr_paren_depth(expr.operand) + 1
-
-    # Unary expressions
-    if isinstance(expr, UnaryExpr):
-        child_depth = _expr_paren_depth(expr.operand)
-        # abs is a function call — always adds a paren level
-        if expr.symbol == "abs":
-            return child_depth + 1
-        # Prefix unary: parens added only when operand is binary
-        if isinstance(expr.operand, BinaryExpr):
-            return child_depth + 1
-        return child_depth
-
-    # Binary operators (including << >> which render as Click shift functions)
-    if isinstance(expr, BinaryExpr):
-        # << and >> render as LSH/RSH function calls — one paren level
-        if expr.symbol in ("<<", ">>"):
-            return max(_expr_paren_depth(expr.left), _expr_paren_depth(expr.right)) + 1
-        left_depth = _expr_paren_depth(expr.left)
-        if isinstance(expr.left, BinaryExpr) or (
-            isinstance(expr.left, UnaryExpr) and expr.left.symbol == "-"
-        ):
-            left_depth += 1
-        right_depth = _expr_paren_depth(expr.right)
-        if isinstance(expr.right, BinaryExpr) or _is_negative_operand(expr.right):
-            right_depth += 1
-        return max(left_depth, right_depth)
-
-    return 0
-
 
 # Click formula-pad mode restrictions:
 #   decimal: +, -, *, /, MOD, ^, SUM, MAX, MIN, MDN, AVG, ABS,
 #            SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD, DEG, PI
 #   hex:     +, -, *, /, MOD, SUM, MAX, MIN, MDN, AVG, AND, OR, XOR, LSH, RSH, LRO, RRO
 # ABS is a UnaryExpr (``abs(x)``), not a MathFuncExpr, so it has its own arm below.
-
-_DECIMAL_ONLY_SYMBOLS = frozenset({"**"})
-_DECIMAL_ONLY_MATH_FUNCS = frozenset(
-    {"sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "radians", "degrees", "log10", "log"}
-)
-
-_HEX_ONLY_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
-_HEX_ONLY_SHIFT_FUNCS = frozenset({"lsh", "rsh", "lro", "rro"})
-
-# Click name for human-readable messages
-_CLICK_OP_NAME: dict[str, str] = {
-    "**": "^ (power)",
-    "&": "AND",
-    "|": "OR",
-    "^": "XOR",
-    "<<": "LSH",
-    ">>": "RSH",
-}
-
-
-def _collect_mode_violations(expr: Any, calc_mode: CalcMode) -> list[str]:
-    """Return Click-native names of operators/functions that violate the Math mode."""
-    violations: list[str] = []
-    _walk_mode_violations(expr, calc_mode, violations, set())
-    return violations
-
-
-def _walk_mode_violations(
-    expr: Any, calc_mode: CalcMode, violations: list[str], seen: set[int]
-) -> None:
-    expr_id = id(expr)
-    if expr_id in seen:
-        return
-    seen.add(expr_id)
-
-    if not isinstance(expr, Expression):
-        return
-
-    if isinstance(expr, BinaryExpr):
-        if calc_mode == "decimal" and expr.symbol in _HEX_ONLY_SYMBOLS:
-            violations.append(_CLICK_OP_NAME.get(expr.symbol, expr.symbol))
-        elif calc_mode == "hex" and expr.symbol in _DECIMAL_ONLY_SYMBOLS:
-            violations.append(_CLICK_OP_NAME.get(expr.symbol, expr.symbol))
-    if isinstance(expr, ShiftFuncExpr) and expr.name in _HEX_ONLY_SHIFT_FUNCS:
-        if calc_mode == "decimal":
-            violations.append(expr.name.upper())
-    if isinstance(expr, MathFuncExpr) and expr.name in _DECIMAL_ONLY_MATH_FUNCS:
-        if calc_mode == "hex":
-            from pyrung.click.ladder.translator import _MATH_FUNC_CLICK_NAME
-
-            violations.append(_MATH_FUNC_CLICK_NAME.get(expr.name, expr.name.upper()))
-    if isinstance(expr, UnaryExpr) and expr.symbol == "abs" and calc_mode == "hex":
-        violations.append("ABS")
-
-    for child in vars(expr).values():
-        _walk_mode_violations(child, calc_mode, violations, seen)
-
-
-# ---------------------------------------------------------------------------
-# Range aggregates: SUM / MAX / MIN / MDN / AVG ( first : last )
-# ---------------------------------------------------------------------------
-# CLICK's object error table requires the range to be ordered Low:High (OBJ-1014) and both
-# ends to be in the same address block (OBJ-1015). It limits an MDN range to 1024 bytes
-# (OBJ-1013). The exporter writes ``FUNC ( first : last )`` from the range's first and last
-# mapped tag. Every member in between must therefore map to the addresses CLICK will read.
-# ``range_aggregate_problem`` judges that, for validation and for the export.
-
-_BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
-# SUM reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, SD in decimal mode and DH, XD, YD in hex
-# mode. CT and TXT are unavailable in both modes. A bank in the wrong mode needs no check
-# here. TagMap ties a tag's type to its bank, and a mixed math() gets CLK_MATH_MODE_MIXED.
-_NO_SUM_BANKS = frozenset({"CT", "TXT"})
-_MDN_MAX_BYTES = 1024
-_BANK_BYTES: dict[str, int] = {"DD": 4, "DF": 4, "CTD": 4}
-
-
-def _collect_range_aggregates(expr: Any, out: list[tuple[str, BlockRange]], seen: set[int]) -> None:
-    if id(expr) in seen or not isinstance(expr, Expression):
-        return
-    seen.add(id(expr))
-    if isinstance(expr, SumExpr):
-        out.append(("sum", expr.block_range))
-        return
-    if isinstance(expr, RangeAggregateExpr):
-        out.append((expr.kind, expr.block_range))
-        return
-    for child in vars(expr).values():
-        _collect_range_aggregates(child, out, seen)
-
-
-def _evaluate_range_aggregates(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    """Check each math() range aggregate against CLICK's range rules."""
-    if type(instruction).__name__ != "CalcInstruction":
-        return []
-    from pyrung.click.ladder.translator import _RANGE_AGGREGATE_CLICK_NAME
-
-    aggregates: list[tuple[str, BlockRange]] = []
-    _collect_range_aggregates(instruction.source_expression, aggregates, set())
-    if not aggregates:
-        return []
-
-    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
-    findings: list[ClickFinding] = []
-
-    def emit(code: str, message: str, suggestion: str) -> None:
-        findings.append(
-            ClickFinding(
-                code=code,
-                severity=_route_severity(code, mode),
-                message=f"{message} at {location_text}.",
-                location=location_text,
-                suggestion=suggestion,
-            )
-        )
-
-    for kind, block_range in aggregates:
-        click_name = _RANGE_AGGREGATE_CLICK_NAME[kind]
-        tags = block_range.tags()
-        resolved: list[tuple[str, int]] = []
-        for tag in tags:
-            slot = resolver.resolve_direct_tag(tag)
-            if slot is None or slot.address is None:
-                break  # unresolved mappings are reported by the bank checks
-            resolved.append((slot.memory_type, slot.address))
-        else:
-            name = operand_name(block_range)
-            judged = range_aggregate_problem(
-                name,
-                [tag.name for tag in tags],
-                [format_address_display(bank, address) for bank, address in resolved],
-                reversed_order=block_range.reverse_order,
-            )
-            if judged is not None:
-                code, problem = judged
-                findings.append(
-                    ClickFinding(
-                        code=code,
-                        severity=_route_severity(code, mode),
-                        message=(
-                            f"pyrung cannot export {name}.{kind}() at {location_text} "
-                            "as one CLICK range. "
-                            f"{range_not_consecutive_text([problem])}"
-                        ),
-                        location=location_text,
-                        suggestion=range_aggregate_advice(problem),
-                    )
-                )
-                if code == CLK_MATH_RANGE_MIXED_BANKS:
-                    continue
-        if not resolved or len(resolved) < len(tags):
-            continue
-        bank = resolved[0][0]
-        if kind == "sum":
-            if bank in _NO_SUM_BANKS:
-                emit(
-                    CLK_MATH_SUM_BANK_NOT_AVAILABLE,
-                    f"SUM over {bank} is not available in CLICK",
-                    "Copy the values into a bank SUM accepts before summing.",
-                )
-        elif bank in _BIT_BANKS:
-            emit(
-                CLK_MATH_BIT_RANGE_AGGREGATE,
-                f"{click_name} over bit bank {bank} is not available in CLICK; "
-                "only SUM accepts a bit range",
-                f"Use .sum() to count the True bits, or copy the bits into a register "
-                f"bank before taking {click_name}.",
-            )
-        if kind == "median":
-            size = len(resolved) * _BANK_BYTES.get(bank, 2)
-            if size > _MDN_MAX_BYTES:
-                emit(
-                    CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
-                    f"MDN range is {size} bytes; CLICK allows at most {_MDN_MAX_BYTES} "
-                    "(512 DS/DH or 256 DD/DF registers)",
-                    "Shrink the median range, or take the median of smaller ranges in "
-                    "separate math() steps.",
-                )
-    return findings
-
-
-def _collect_bit_operands(expr: Any, out: list[Tag], seen: set[int]) -> None:
-    """Append to *out* each Bool tag that *expr* reads as an operand.
-
-    Range aggregates are skipped, because :func:`_evaluate_range_aggregates` checks them,
-    SUM over bits included. RAND is skipped too: a bit bound there is ``CLK_RAND_BOUND_TYPE``.
-    """
-    if isinstance(expr, ImmediateRef):
-        expr = expr.value
-    if isinstance(expr, Tag):
-        if expr.type is TagType.BOOL:
-            out.append(expr)
-        return
-    if id(expr) in seen or not isinstance(expr, Expression):
-        return
-    seen.add(id(expr))
-    if isinstance(expr, TagExpr):
-        _collect_bit_operands(expr.tag, out, seen)
-        return
-    if isinstance(expr, (SumExpr, RangeAggregateExpr, RandIntExpr)):
-        return
-    for child in vars(expr).values():
-        _collect_bit_operands(child, out, seen)
-
-
-def _evaluate_math_bit_operands(
-    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
-) -> list[ClickFinding]:
-    """Report a bit operand in a math() formula as CLK_MATH_BIT_OPERAND.
-
-    CLICK's Math editor refuses a bit in its formula, except in a SUM over a bit range
-    (checked in the v4 editor, 2026-11-06).
-    """
-    if type(instruction).__name__ != "CalcInstruction":
-        return []
-    bits: list[Tag] = []
-    _collect_bit_operands(instruction.source_expression, bits, set())
-    if not bits:
-        return []
-    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
-    names = list(dict.fromkeys(tag.name for tag in bits))
-    what = "the bit" if len(names) == 1 else "the bits"
-    # CLICK has no SUM over CT, so a one-bit range cannot stand in for a CT bit.
-    counter_bits = all(re.fullmatch(r"CT\d+", name) for name in names)
-    return [
-        ClickFinding(
-            code=CLK_MATH_BIT_OPERAND,
-            severity=_route_severity(CLK_MATH_BIT_OPERAND, mode),
-            message=(
-                f"math() at {location_text} reads {what} {', '.join(names)}; CLICK's Math "
-                "takes no bit in its formula, except in a SUM over a bit range."
-            ),
-            location=location_text,
-            suggestion=(
-                ""
-                if counter_bits
-                else "Write the bit as a one-bit range, c.select(1, 1).sum() for C1 "
-                "(SUM ( C1 : C1 )), or "
-            )
-            + "set a DS tag from the bit's contacts in a rung above (copy(1, Tag) under "
-            "the bit, copy(0, Tag) under ~bit) and use the tag."
-            + (
-                ""
-                if counter_bits
-                else " A one-bit range of pyrung's sc block reads 0 in pyrung, "
-                "where a CLICK reads the bit."
-            ),
-        )
-    ]
 
 
 def _is_status_bit_tag(tag: Any) -> bool:
@@ -988,76 +548,6 @@ def _evaluate_status_bit_usage(
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
             _walk_rung(rung, rung_label(sub_name, rung_index))
 
-    return findings
-
-
-def _is_char_operand(operand: Any) -> bool:
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-    from pyrung.core.tag import Tag
-
-    if isinstance(operand, Tag):
-        return operand.type == TagType.CHAR
-    if isinstance(operand, (IndirectRef, IndirectExprRef)):
-        return operand.block.type == TagType.CHAR
-    return False
-
-
-def _text_order_compares(condition: Any, out: list[str]) -> None:
-    """Collect the operators of ``<``, ``<=``, ``>`` and ``>=`` on a Char operand."""
-    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt, Condition
-
-    symbols = {CompareLt: "<", CompareLe: "<=", CompareGt: ">", CompareGe: ">="}
-    if not isinstance(condition, Condition):
-        return
-    symbol = symbols.get(type(condition))
-    if symbol is not None and (
-        _is_char_operand(getattr(condition, "tag", None))
-        or _is_char_operand(getattr(condition, "value", None))
-    ):
-        out.append(symbol)
-    for attr_name in ("condition", "conditions"):
-        attr = getattr(condition, attr_name, None)
-        for item in attr if isinstance(attr, (list, tuple)) else [attr]:
-            _text_order_compares(item, out)
-
-
-def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[ClickFinding]:
-    """Report each <, <=, > or >= compare on a Char operand.
-
-    CLICK's Compare offers only = and != on text (TXT).
-    """
-    findings: list[ClickFinding] = []
-
-    def _walk_rung(rung: Any, location_str: str) -> None:
-        symbols: list[str] = []
-        for cond in rung._conditions:
-            _text_order_compares(cond, symbols)
-        for symbol in symbols:
-            findings.append(
-                ClickFinding(
-                    code=CLK_TEXT_ORDER_COMPARE,
-                    severity=_route_severity(CLK_TEXT_ORDER_COMPARE, mode),
-                    message=(
-                        f"A text (Char) comparison with '{symbol}' at {location_str}; "
-                        "the CLICK Compare dialog offers only = and != on text."
-                    ),
-                    location=location_str,
-                    suggestion=(
-                        "Compare text with == or !=, or copy the characters into Int "
-                        "tags (convert=to_ascii) and compare those."
-                    ),
-                )
-            )
-        for branch in rung._branches:
-            _walk_rung(branch, location_str)
-        for body_rung in iter_loop_body_rungs(rung._instructions):
-            _walk_rung(body_rung, location_str)
-
-    for rung_index, rung in enumerate(program.rungs):
-        _walk_rung(rung, rung_label(None, rung_index))
-    for sub_name in sorted(program.subroutines):
-        for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _walk_rung(rung, rung_label(sub_name, rung_index))
     return findings
 
 
@@ -1180,116 +670,12 @@ def _evaluate_text_windows(
     return findings
 
 
-_HEX_COMPARE_BANKS = frozenset({"XD", "YD", "DH"})
-_NUMERIC_COMPARE_BANKS = frozenset({"TD", "CTD", "DS", "DD", "DF", "SD"})
-
-
-def _evaluate_compare_hex_mix(
-    program: Any, mode: ValidationMode, resolver: _ResolutionCache
-) -> list[ClickFinding]:
-    """Report a compare that pairs a hex operand (XD, YD, DH) with a decimal one.
-
-    CLICK's editor refuses a hex operand paired with a decimal one. A pasted rung skips
-    the check.
-    """
-    from pyrung.core.condition import Condition
-    from pyrung.core.validation.render import render_condition
-
-    findings: list[ClickFinding] = []
-
-    def _group(operand: Any) -> str | None:
-        if not isinstance(operand, (Tag, IndirectRef, IndirectExprRef)):
-            return None
-        resolution = resolver.resolve_operand_slots(operand)
-        banks = {slot.memory_type for slot in resolution.slots}
-        if banks and banks <= _HEX_COMPARE_BANKS:
-            return "hex"
-        if banks and banks <= _NUMERIC_COMPARE_BANKS:
-            return "numeric"
-        return None
-
-    def _check(condition: Any, location_str: str) -> None:
-        if not isinstance(condition, Condition):
-            return
-        if type(condition).__name__.startswith(("Compare", "IndirectCompare")):
-            left = getattr(condition, "tag", None)
-            if left is None:
-                left = getattr(condition, "indirect_ref", None)
-            right = getattr(condition, "value", None)
-            groups = {_group(left), _group(right)}
-            if groups == {"hex", "numeric"}:
-                findings.append(
-                    ClickFinding(
-                        code=CLK_COMPARE_HEX_MIX,
-                        severity=_route_severity(CLK_COMPARE_HEX_MIX, mode),
-                        message=(
-                            f"{render_condition(condition)} at {location_str} compares a hex "
-                            "operand (XD, YD, DH) with a decimal one (DS, DD, DF, TD, CTD, SD). "
-                            "CLICK's Compare dialog pairs a hex operand only with another "
-                            "hex operand or an h constant."
-                        ),
-                        location=location_str,
-                        suggestion=(
-                            "Copy the Word into a DS tag first and compare that, or compare "
-                            "it with a DH tag or a constant."
-                        ),
-                    )
-                )
-        for attr_name in ("condition", "conditions"):
-            attr = getattr(condition, attr_name, None)
-            for item in attr if isinstance(attr, (list, tuple)) else [attr]:
-                _check(item, location_str)
-
-    seen: set[int] = set()
-
-    def _walk_rung(rung: Any, location_str: str) -> None:
-        conditions = list(rung._conditions[rung._branch_condition_start :])
-        for instruction in rung._instructions:
-            for field_name in getattr(type(instruction), "_conditions", ()):
-                value = getattr(instruction, field_name, None)
-                conditions.extend(value if isinstance(value, (list, tuple)) else [value])
-        for condition in conditions:
-            if id(condition) not in seen:
-                seen.add(id(condition))
-                _check(condition, location_str)
-        for branch in rung._branches:
-            _walk_rung(branch, location_str)
-        for body_rung in iter_loop_body_rungs(rung._instructions):
-            _walk_rung(body_rung, location_str)
-
-    for rung_index, rung in enumerate(program.rungs):
-        _walk_rung(rung, rung_label(None, rung_index))
-    for sub_name in sorted(program.subroutines):
-        for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _walk_rung(rung, rung_label(sub_name, rung_index))
-    return findings
-
-
 def _evaluate_instruction_portability(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
     if instruction_type == "CalcInstruction":
-        mode_info = infer_calc_mode(instruction.source_expression, instruction.dest)
-        if mode_info.mixed_families:
-            location = _instruction_location(base_location, "instruction.expression")
-            location_text = _format_location(location)
-            findings.append(
-                ClickFinding(
-                    code=CLK_MATH_MODE_MIXED,
-                    severity=_route_severity(CLK_MATH_MODE_MIXED, mode),
-                    message=(
-                        f"math() at {location_text} mixes WORD operands with other operands. "
-                        "CLICK runs a Math in hex or in decimal, not both."
-                    ),
-                    location=location_text,
-                    suggestion=(
-                        "Split it into a math() of WORD tags and a math() of the other tags. "
-                        "Pass the result from one to the other through a tag."
-                    ),
-                )
-            )
         if _expr_contains_floor_div(instruction.source_expression):
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)
@@ -1302,49 +688,6 @@ def _evaluate_instruction_portability(
                     suggestion=(
                         "Use math(a / b, int_dest) instead. A copy into an Int or Dint tag "
                         "truncates toward zero."
-                    ),
-                )
-            )
-        if not mode_info.mixed_families:
-            violations = _collect_mode_violations(instruction.source_expression, mode_info.mode)
-            if violations:
-                location = _instruction_location(base_location, "instruction.expression")
-                location_text = _format_location(location)
-                unique = list(dict.fromkeys(violations))  # dedupe, preserve order
-                names = ", ".join(unique)
-                other_mode = "hex" if mode_info.mode == "decimal" else "decimal"
-                findings.append(
-                    ClickFinding(
-                        code=CLK_MATH_FUNC_MODE_MISMATCH,
-                        severity=_route_severity(CLK_MATH_FUNC_MODE_MISMATCH, mode),
-                        message=(
-                            f"math() at {location_text} is a {mode_info.mode} Math, and "
-                            f"{names} {'is' if len(unique) == 1 else 'are'} only available in "
-                            f"a {other_mode} Math."
-                        ),
-                        location=location_text,
-                        suggestion=(
-                            f"Move {names} into a separate math() whose tags are "
-                            f"{'WORD tags in DH' if other_mode == 'hex' else 'INT, DINT or REAL tags in DS, DD or DF'}."
-                        ),
-                    )
-                )
-        depth = _expr_paren_depth(instruction.source_expression)
-        if depth > _CLICK_MAX_PAREN_DEPTH:
-            location = _instruction_location(base_location, "instruction.expression")
-            location_text = _format_location(location)
-            findings.append(
-                ClickFinding(
-                    code=CLK_MATH_NESTING_DEPTH,
-                    severity=_route_severity(CLK_MATH_NESTING_DEPTH, mode),
-                    message=(
-                        f"math() at {location_text} nests brackets {depth} deep. CLICK "
-                        f"allows {_CLICK_MAX_PAREN_DEPTH}."
-                    ),
-                    location=location_text,
-                    suggestion=(
-                        "Break the expression into intermediate math() steps "
-                        "with temporary tags to reduce nesting depth."
                     ),
                 )
             )
@@ -1454,248 +797,6 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
                         )
                     )
     return findings
-
-
-# The memory types that a CLICK For accepts as its count, besides a constant.
-_FORLOOP_COUNT_BANKS = ("DS", "DD", "TD", "CTD", "SD")
-
-
-def _evaluate_forloop_count(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    """Report a For count that is not a constant, DS, DD, TD, CTD or SD.
-
-    A pasted DF count stops the PLC.
-    """
-    if not isinstance(instruction, ForLoopInstruction):
-        return []
-    count = instruction.count
-    if not isinstance(count, (Tag, IndirectRef, IndirectExprRef)):
-        return []
-    resolution = resolver.resolve_operand_slots(count)
-    banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
-    bad = [bank for bank in banks if bank not in _FORLOOP_COUNT_BANKS]
-    if not bad:
-        return []
-    location_text = _format_location(_instruction_location(base_location, "instruction.count"))
-    return [
-        ClickFinding(
-            code=CLK_FORLOOP_COUNT_BANK,
-            severity=_route_severity(CLK_FORLOOP_COUNT_BANK, mode),
-            message=(
-                f"forloop count at {location_text} is in {', '.join(bad)}; CLICK takes a "
-                "For count from a constant, DS, DD, TD, CTD or SD, and a pasted DF count "
-                "stops the PLC."
-            ),
-            location=location_text,
-            suggestion="Copy the count into a DS or DD tag and loop on that.",
-        )
-    ]
-
-
-def _collect_rands(expr: Any, out: list[RandIntExpr], seen: set[int]) -> None:
-    if id(expr) in seen or not isinstance(expr, Expression):
-        return
-    seen.add(id(expr))
-    if isinstance(expr, RandIntExpr):
-        out.append(expr)
-    for child in vars(expr).values():
-        _collect_rands(child, out, seen)
-
-
-def _collect_plain_arg_sites(
-    expr: Any, out: list[tuple[str, tuple[Any, ...]]], seen: set[int]
-) -> None:
-    """Append to *out* each RAND, LSH, RSH, LRO or RRO in *expr* with its arguments.
-
-    A ``<<`` or ``>>`` counts as LSH or RSH.
-    """
-    if id(expr) in seen or not isinstance(expr, Expression):
-        return
-    seen.add(id(expr))
-    if isinstance(expr, RandIntExpr):
-        out.append(("RAND", (expr.lo, expr.hi)))
-    elif isinstance(expr, ShiftFuncExpr) and expr.name in _HEX_ONLY_SHIFT_FUNCS:
-        out.append((expr.name.upper(), (expr.value, expr.count)))
-    elif isinstance(expr, BinaryExpr) and expr.symbol in ("<<", ">>"):
-        out.append((_CLICK_OP_NAME[expr.symbol], (expr.left, expr.right)))
-    for child in vars(expr).values():
-        _collect_plain_arg_sites(child, out, seen)
-
-
-# The banks that CLICK's RAND accepts as a bound (laddercodec editor_grids, 2026-11-16). A decimal
-# Math refuses TD, CTD and SD, and a hex Math refuses XD and YD (OBJ-1002).
-_RAND_BOUND_BANKS = {"decimal": frozenset({"DS", "DD"}), "hex": frozenset({"DH"})}
-# The tag types of those banks. They apply to a bound that the tag map does not map.
-_RAND_BOUND_TYPES = {
-    "decimal": frozenset({TagType.INT, TagType.DINT}),
-    "hex": frozenset({TagType.WORD}),
-}
-
-
-def _is_bad_bound_type(bound: Any, *, hex_mode: bool, resolver: _ResolutionCache) -> bool:
-    """Return True if *bound* is not valid for RAND.
-
-    RAND accepts an integer constant, a DS or DD tag, or a DH tag in a hex Math.
-    """
-    kind = "hex" if hex_mode else "decimal"
-    if isinstance(bound, TagExpr):
-        slot = resolver.resolve_direct_tag(bound.tag)
-        if slot is None:
-            return bound.tag.type not in _RAND_BOUND_TYPES[kind]
-        return slot.memory_type not in _RAND_BOUND_BANKS[kind]
-    return isinstance(bound, LiteralExpr) and isinstance(bound.value, (float, bool))
-
-
-def _evaluate_rand_bounds(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    """Report each RAND bound and each Math argument that CLICK's editor refuses.
-
-    The editor accepts only an integer constant or a DS or DD tag as a RAND bound (a DH tag
-    in a hex Math). It refuses equal constant bounds. It also refuses an expression as an
-    argument of RAND, LSH, RSH, LRO or RRO.
-    """
-    if type(instruction).__name__ != "CalcInstruction":
-        return []
-    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
-    findings: list[ClickFinding] = []
-    sites: list[tuple[str, tuple[Any, ...]]] = []
-    _collect_plain_arg_sites(instruction.source_expression, sites, set())
-    for name, args in sites:
-        if all(isinstance(arg, (TagExpr, LiteralExpr)) for arg in args):
-            continue
-        findings.append(
-            ClickFinding(
-                code=CLK_MATH_ARG_NOT_PLAIN,
-                severity=_route_severity(CLK_MATH_ARG_NOT_PLAIN, mode),
-                message=(
-                    f"{name} at {location_text} has an expression as an argument; CLICK takes "
-                    f"only a tag or a constant there (its editor refuses RAND ( DD1 / 2 , 10 ))."
-                ),
-                location=location_text,
-                suggestion="Compute the argument into a tag in a math() above, and pass the tag.",
-            )
-        )
-    rands: list[RandIntExpr] = []
-    _collect_rands(instruction.source_expression, rands, set())
-    hex_mode = instruction.mode == "hex"
-    for rand in rands:
-        if any(
-            _is_bad_bound_type(b, hex_mode=hex_mode, resolver=resolver) for b in (rand.lo, rand.hi)
-        ):
-            findings.append(
-                ClickFinding(
-                    code=CLK_RAND_BOUND_TYPE,
-                    severity=_route_severity(CLK_RAND_BOUND_TYPE, mode),
-                    message=(
-                        f"randint() at {location_text} has a bound that is not an integer "
-                        "constant or a DS or DD tag, or a DH tag in a hex Math. The CLICK "
-                        "editor takes no other."
-                    ),
-                    location=location_text,
-                    suggestion="Use integer constants, or copy the bound into a DS or DD tag.",
-                )
-            )
-        elif (
-            isinstance(rand.lo, LiteralExpr)
-            and isinstance(rand.hi, LiteralExpr)
-            and rand.lo.value == rand.hi.value
-        ):
-            findings.append(
-                ClickFinding(
-                    code=CLK_RAND_EQUAL_BOUNDS,
-                    severity=_route_severity(CLK_RAND_EQUAL_BOUNDS, mode),
-                    message=(
-                        f"randint({rand.lo.value}, {rand.hi.value}) at {location_text} has "
-                        "equal constant bounds; the CLICK editor refuses them."
-                    ),
-                    location=location_text,
-                    suggestion="Use a plain constant instead of a one-value draw.",
-                )
-            )
-    return findings
-
-
-def _collect_wide_constants(
-    expr: Any, out: list[int | float], seen: set[int], *, low: int, high: int, whole: bool
-) -> None:
-    """Append to *out* each integer constant in *expr* outside *low*..*high*.
-
-    A RAND's bounds are included. With *whole*, a float constant is checked as its integer.
-    A float with a fraction is collected too, because a hex Math takes only whole numbers.
-    """
-    if isinstance(expr, bool):
-        return
-    if whole and isinstance(expr, float):
-        if not expr.is_integer() or not low <= expr <= high:
-            out.append(expr)
-        return
-    if isinstance(expr, int):
-        if not low <= expr <= high:
-            out.append(expr)
-        return
-    if id(expr) in seen or not isinstance(expr, Expression):
-        return
-    seen.add(id(expr))
-    if isinstance(expr, LiteralExpr):
-        _collect_wide_constants(expr.value, out, seen, low=low, high=high, whole=whole)
-        return
-    for child in vars(expr).values():
-        # Recurse into subexpressions only. A constant is a LiteralExpr, and an int attribute
-        # such as a RAND's site number is not a constant.
-        if isinstance(child, Expression):
-            _collect_wide_constants(child, out, seen, low=low, high=high, whole=whole)
-
-
-def _evaluate_wide_constants(
-    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
-) -> list[ClickFinding]:
-    """Report a Math constant that CLICK's editor refuses.
-
-    A decimal Math accepts a constant in a DD's range (2026-11-11). A hex Math accepts a
-    whole number in 0h..FFFFh (2026-11-16). pyrung writes -32768..-1 there as its 16 bits.
-    So -1 is FFFFh, the value that pyrung's own hex Math reads.
-    """
-    if type(instruction).__name__ != "CalcInstruction":
-        return []
-    hex_mode = instruction.mode == "hex"
-    low, high = (-32768, 65535) if hex_mode else (-2147483648, 2147483647)
-    wide: list[int | float] = []
-    _collect_wide_constants(
-        instruction.source_expression, wide, set(), low=low, high=high, whole=hex_mode
-    )
-    if not wide:
-        return []
-    location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
-    listed = ", ".join(str(value) for value in dict.fromkeys(wide))
-    if hex_mode:
-        message = (
-            f"math() at {location_text} has a constant that is not a whole 16-bit value "
-            f"({listed}). A CLICK hex Math takes 0h..FFFFh, so the export refuses it."
-        )
-        suggestion = "Write the constant as a whole 16-bit value, 0..65535 (0h..FFFFh)."
-    else:
-        message = (
-            f"math() at {location_text} has a constant past a DD's range ({listed}). "
-            "CLICK's editor refuses it."
-        )
-        suggestion = "Use a constant in -2147483648..2147483647."
-    return [
-        ClickFinding(
-            code=CLK_MATH_WIDE_CONSTANT,
-            severity=_route_severity(CLK_MATH_WIDE_CONSTANT, mode),
-            message=message,
-            location=location_text,
-            suggestion=suggestion,
-        )
-    ]
 
 
 def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFinding]:

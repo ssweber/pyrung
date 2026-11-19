@@ -22,10 +22,6 @@ from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
     CLK_COPY_WIDE_CONSTANT,
-    CLK_MATH_MODE_MIXED,
-    CLK_MATH_RANGE_NOT_CONTIGUOUS,
-    CLK_MATH_WIDE_CONSTANT,
-    CLK_RAND_BOUND_TYPE,
     validate_click_program,
 )
 from pyrung.core import Word, randint, to_ascii, to_value
@@ -201,7 +197,7 @@ def test_a_sum_over_xd_or_yd_exports(bank, token):
 def test_a_sum_from_xd0_is_still_refused():
     # CLICK's XD0:XD1 range runs through XD0u (math_hex.answers.json accepts SUM(XD0:XD0u)
     # and SUM(XD0u:XD1)).  A pyrung block of XD never contains XD0u.
-    _refused(lambda: math(xd.select(0, 1).sum(), dh[100]), CLK_MATH_RANGE_NOT_CONTIGUOUS)
+    _refused(lambda: math(xd.select(0, 1).sum(), dh[100]), "CLK_MATH_RANGE_NOT_CONTIGUOUS")
 
 
 def test_a_hex_math_of_minus_one_exports_as_ffffh():
@@ -219,7 +215,7 @@ def test_a_hex_rand_of_two_dh_exports():
 
 def test_a_hex_rand_of_xd_or_yd_is_still_refused():
     # math_hex.answers.json: RAND(XD1,Ah) and RAND(YD1,Ah) are refused (OBJ-1002).
-    _refused(lambda: math(randint(xd[1], yd[1]), dh[3]), CLK_RAND_BOUND_TYPE)
+    _refused(lambda: math(randint(xd[1], yd[1]), dh[3]), "CLK_RAND_BOUND_TYPE")
 
 
 def test_a_hex_rand_of_words_mapped_to_xd_is_still_refused():
@@ -231,7 +227,7 @@ def test_a_hex_rand_of_words_mapped_to_xd_is_still_refused():
 
     tag_map = TagMap([lo.map_to(xd[1]), hi.map_to(xd[2]), dest.map_to(dh[3])])
     report = validate_click_program(_program(write), tag_map, mode="strict")
-    assert CLK_RAND_BOUND_TYPE in {f.code for f in report.errors}
+    assert "CLK_RAND_BOUND_TYPE" in {f.code for f in report.errors}
 
 
 @pytest.mark.parametrize(
@@ -242,7 +238,7 @@ def test_a_hex_rand_of_words_mapped_to_xd_is_still_refused():
 def test_a_math_result_in_the_other_modes_bank_is_still_refused(write):
     # editor-answers A10 and sc_sd_writable.answers.json: YD is a hex Result and SD a
     # decimal one.  pyrung makes either Math a mixed one.
-    _refused(write, CLK_MATH_MODE_MIXED)
+    _refused(write, "CLK_MATH_MODE_MIXED")
 
 
 @pytest.mark.parametrize("constant", [65536, 70000, -32769])
@@ -250,14 +246,14 @@ def test_a_hex_math_constant_past_16_bits_is_refused_even_when_allowed(constant)
     # math_hex.answers.json: 10000h is refused (OBJ-1009).  Export once wrote the low 16
     # bits (70000 as 1170h), a different number from the one the program reads.
     write = lambda: math(dh[1] + constant, dh[100])  # noqa: E731
-    assert CLK_MATH_WIDE_CONSTANT in _codes(write)
+    assert "CLK_MATH_WIDE_CONSTANT" in _codes(write)
     with pytest.raises(LadderExportError, match=f"Constant {constant} does not fit in 16 bits"):
-        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_MATH_WIDE_CONSTANT,))
+        pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_MATH_WIDE_CONSTANT",))
 
 
 def test_a_hex_math_constant_with_a_fraction_is_reported():
     # math_hex.answers.json: CLICK refuses a fraction in a hex Math (OBJ-1001).
-    _refused(lambda: math(dh[1] + 1.5, dh[100]), CLK_MATH_WIDE_CONSTANT)
+    _refused(lambda: math(dh[1] + 1.5, dh[100]), "CLK_MATH_WIDE_CONSTANT")
 
 
 # --- A Fill of one register -------------------------------------------------------------

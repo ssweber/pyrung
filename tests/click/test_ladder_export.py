@@ -790,7 +790,7 @@ def test_the_click_rungs_of_a_rung_with_no_contact_share_its_source_span():
     assert next_line > line
 
 
-def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
+def _quote_search(value):
     Enable = Bool("Enable")
     Chars = Block("Chars", TagType.CHAR, 1, 4)
     Result = Int("Result")
@@ -798,7 +798,7 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
 
     with Program() as logic:
         with rung(Enable):
-            search(Chars.select(1, 4) == 'sub"name', result=Result, found=Found)
+            search(Chars.select(1, 4) == value, result=Result, found=Found)
         with rung(Enable):
             search(Chars.select(1, 4) == "normal", result=Result, found=Found)
 
@@ -811,63 +811,42 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
         },
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
+    return logic, mapping
+
+
+def test_a_quote_on_its_own_exports_as_its_character_code():
+    # laddercodec can't yet read a quote inside a quoted text constant. $22 is the quote.
+    bundle = pyrung_to_ladder(*_quote_search('"'))
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert tokens == [
-        'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)',
+        "search(TXT1..TXT4 == $22,result=DS1,found=C1)",
         'search(TXT1..TXT4 == "normal",result=DS1,found=C1)',
         "end()",
     ]
 
 
-def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_path: Path):
-    Enable = Bool("Enable")
-    Chars = Block("Chars", TagType.CHAR, 1, 4)
-    Result = Int("Result")
-    Found = Bool("Found")
+def test_a_quote_on_its_own_loads_from_the_csv(tmp_path: Path):
+    from laddercodec import read_csv
 
-    with Program() as logic:
-        with rung(Enable):
-            search(Chars.select(1, 4) == 'sub"name', result=Result, found=Found)
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Chars: txt.select(1, 4),
-            Result: ds[1],
-            Found: c[1],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    expected = 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)'
-    expected_rows = _literal_csv_rows(
-        f"""
-        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,{expected}
-        """
-    )
-    assert normalize_csv(tuple(bundle.main_rows)) == expected_rows
-
+    bundle = pyrung_to_ladder(*_quote_search('"'))
     out_dir = tmp_path / "ladder"
     bundle.write(out_dir)
 
-    raw_csv = (out_dir / "main.csv").read_text(encoding="utf-8")
-    assert '\\"' not in raw_csv
+    values = [
+        getattr(instruction, "value", None)
+        for loaded in read_csv(out_dir / "main.csv")
+        for instruction in loaded.instructions
+    ]
+    assert "$22" in values
 
-    with (out_dir / "main.csv").open("r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.reader(handle))
 
-    assert normalize_csv(tuple(tuple(row) for row in rows)) == expected_rows
-
-    af_token = rows[1][-1]
-    assert af_token == expected
-    assert '\\"' not in af_token
-
-    # Extract the value literal from the comparison expression
-    value_literal = af_token.split(" == ", maxsplit=1)[1].split(",result=", maxsplit=1)[0]
-    assert value_literal == '"sub""name"'
-    assert value_literal[1:-1].replace('""', '"') == 'sub"name'
+def test_the_export_refuses_a_quote_among_other_characters():
+    # laddercodec can't yet read a quote inside a quoted text constant. So the export
+    # refuses the text even when the finding is allowed.
+    logic, mapping = _quote_search('sub"name')
+    with pytest.raises(LadderExportError, match="holds a quote among other characters"):
+        pyrung_to_ladder(logic, mapping, allow=["invalid-text-constant"])
 
 
 def test_tokens_include_explicit_defaults_and_oneshot():
@@ -935,8 +914,8 @@ def test_calc_hex_token_uses_inferred_hex_mode():
 
 def test_calc_exports_wide_constants_as_written_once_allowed():
     # pyrung runs the 3000000000 as its low 32 bits, as a pasted one ran on a CLICK.
-    # Validation refuses it (CLK_MATH_WIDE_CONSTANT), because CLICK's editor does. Once you
-    # allow CLK_MATH_WIDE_CONSTANT, the export writes the formula as written.
+    # Validation refuses it ("CLK_MATH_WIDE_CONSTANT"), because CLICK's editor does. Once you
+    # allow "CLK_MATH_WIDE_CONSTANT", the export writes the formula as written.
     from pyrung.click.ladder import LadderExportError
 
     logic, mapping = build_program(

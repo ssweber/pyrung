@@ -214,3 +214,122 @@ def test_a_call_shows_what_its_author_wrote() -> None:
         "copy(DS1, DS2, oneshot=True)",
         (23, 4),
     )
+
+
+def test_a_keyword_that_holds_an_operand_shows_its_text() -> None:
+    from pyrung import Block, Bool, Int, TagType
+    from pyrung.core.instruction import SearchInstruction
+    from pyrung.core.validation.render import argument_span
+
+    values = Block("Values", TagType.INT, 1, 10)
+    search = SearchInstruction(
+        values.select(1, 10) >= Int("Target"), result=Int("Res"), found=Bool("Hit"), oneshot=1
+    )
+
+    code = "search(Values1..Values10 >= Target, result=Res, found=Hit, oneshot=True)"
+    assert argument_span(search, 0) == (code, (7, 27))
+    assert argument_span(search, "result") == (code, (43, 3))
+    assert argument_span(search, "found") == (code, (54, 3))
+
+
+def _declared_timer(unit: str = "ms", reset=None):
+    """Return an on_delay() whose class declares its call, and one whose class does not."""
+    from pyrung.core.instruction import OnDelayInstruction
+
+    declared = type(
+        "OnDelayInstruction",
+        (OnDelayInstruction,),
+        {
+            "_call_operands": (("timer", ("done_bit", "accumulator")),),
+            "_call_keyword_operands": (("preset", "preset"),),
+            "_call_keywords": ("unit",),
+            "_call_chained": (("reset", "reset_condition"),),
+        },
+    )
+    timer = Timer.clone("RenderTest_Delay")
+    return (
+        declared(timer.Done, timer.Acc, 100, None, reset, unit=unit),
+        OnDelayInstruction(timer.Done, timer.Acc, 100, None, reset, unit=unit),
+    )
+
+
+def test_a_declared_call_shows_a_structure_and_a_number() -> None:
+    from pyrung.core.validation.render import _declared_arguments, _special_arguments
+
+    declared, plain = _declared_timer()
+    # The timer's UDT holds done_bit and accumulator, so the call names the structure. The
+    # preset shows its number. The call leaves out the unit, which is the default.
+    assert _declared_arguments(declared) == (
+        "on_delay",
+        [("timer", "RenderTest_Delay", "positional"), ("preset", "100", "keyword")],
+    )
+    # At the default unit, the declared call matches the special case. Any other unit shows
+    # in the declared call only, as the next two tests check.
+    assert _declared_arguments(declared) == _special_arguments(plain)
+
+
+def test_a_declared_option_shows_the_options_value() -> None:
+    from pyrung import Bool
+    from pyrung.core.validation.render import declared_call
+
+    declared, _plain = _declared_timer(unit="s", reset=Bool("Rst"))
+    call = declared_call(declared)
+    assert call.text == "on_delay(RenderTest_Delay, preset=100, unit='seconds').reset(Rst)"
+    assert call.span("unit") == (44, 9)
+    assert call.span("reset") == (61, 3)
+
+
+def test_a_special_case_runs_before_a_declared_call() -> None:
+    from pyrung.core.validation.render import declared_call, render_instruction
+
+    declared, plain = _declared_timer(unit="s")
+    # A family that declares the call keeps the frame of every other finding. Its own
+    # findings show the declared call.
+    assert render_instruction(declared, "") == render_instruction(plain, "")
+    assert declared_call(declared).text != render_instruction(plain, "")[0]
+
+
+def test_a_chained_call_shows_its_condition() -> None:
+    from pyrung import Block, Bool, TagType
+    from pyrung.core.instruction import ShiftInstruction
+    from pyrung.core.validation.render import argument_span
+
+    declared = type(
+        "ShiftInstruction",
+        (ShiftInstruction,),
+        {
+            "_call_operands": (("bit_range", "bit_range"),),
+            "_call_keywords": (),
+            "_call_chained": (("clock", "clock_condition"), ("reset", "reset_condition")),
+        },
+    )
+    bits = Block("Bits", TagType.BOOL, 1, 8)
+    shift = declared(bits.select(1, 8), None, Bool("Clk"), ~Bool("Rst"))
+
+    code = "shift(Bits1..Bits8).clock(Clk).reset(~Rst)"
+    assert argument_span(shift, 0) == (code, (6, 12))
+    assert argument_span(shift, "clock") == (code, (26, 3))
+    assert argument_span(shift, "reset") == (code, (37, 4))
+
+
+def test_a_list_argument_keeps_the_span_of_each_item() -> None:
+    from pyrung.core.validation.render import call_of
+
+    call = call_of("drum", [("outputs", ["Out1", "X009"], "keyword"), ("reset", "Rst", "chained")])
+    assert call.text == "drum(outputs=[Out1, X009]).reset(Rst)"
+    assert call.span("outputs") == (13, 12)
+    assert call.span("outputs", 1) == (20, 4)
+    # A call that has no such item marks the whole list.
+    assert call.span("outputs", 2) == (13, 12)
+    assert call.span("reset", 0) == (33, 3)
+
+
+def test_a_declared_list_operand_shows_each_item() -> None:
+    from pyrung import Int
+    from pyrung.core.instruction import CopyInstruction
+    from pyrung.core.validation.render import argument_span, declared_call
+
+    copy = CopyInstruction(5, [Int("A"), Int("Bee")])
+    assert declared_call(copy).text == "copy(5, [A, Bee])"
+    assert argument_span(copy, 1) == ("copy(5, [A, Bee])", (8, 8))
+    assert argument_span(copy, 1, 1) == ("copy(5, [A, Bee])", (12, 3))

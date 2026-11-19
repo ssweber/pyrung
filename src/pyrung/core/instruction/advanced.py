@@ -32,6 +32,8 @@ from .utils import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange, RangeComparison
 
@@ -85,6 +87,13 @@ class SearchInstruction(OneShotMixin, Instruction):
         "condition",
         "continuous",
     )  # condition is RangeComparison, not a Condition tree
+    _call_operands = (("comparison", ("search_range", "value")),)
+    _call_keyword_operands = (("result", "result"), ("found", "found"))
+    _call_keywords = ("continuous", "oneshot")
+
+    def _call_argument(self, name: str, text: Callable[[Any], str]) -> str:
+        """Return the comparison as the call writes it, such as ``DS1..DS10 >= 100``."""
+        return f"{text(self.search_range)} {self.condition} {text(self.value)}"
 
     _operands = {
         "found": TAG.of(TagType.BOOL, pointers=False, immediate=False, pointer_hint=_POINTER_HINT),

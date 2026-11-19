@@ -257,6 +257,14 @@ def test_a_text_that_can_fit_is_no_finding(store):
     assert _refused(report) == []
 
 
+def test_a_quote_on_its_own_fits_in_txt1000():
+    # The export writes a quote on its own as $22, which is one character.
+    prog, mapping, report = _report(lambda level: copy('"', txt[1000]), mode="strict")
+    assert not report.errors
+    bundle = pyrung_to_ladder(prog, mapping)
+    assert any("copy($22,TXT1000)" in cell for row in bundle.main_rows for cell in row)
+
+
 def test_export_warns_and_renders_the_store():
     prog, mapping, report = _report(lambda level: copy(level, txt[995], convert=to_text()))
     assert [f.severity for f in _found(validate_click_program(prog, mapping, mode="strict"))] == [

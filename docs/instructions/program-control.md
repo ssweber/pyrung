@@ -65,10 +65,9 @@ iterations (a scan of a second or more on a CLICK). A `Dint` count is read whole
 and signed, so 65536 runs 65536 and -1 runs none. A literal is read whole, so
 `forloop(70000)` runs 70000. A count of 0 runs none.
 
-For CLICK, the count must be a constant or a `DS`, `DD`, `TD`, `CTD` or `SD`
-tag. CLICK validation reports `CLK_FORLOOP_COUNT_BANK` for a count in any other
-bank. Copy the
-count into a `DS` or `DD` tag and loop on that.
+For CLICK, the count must be a whole-number constant or a `DS`, `DD`, `TD`,
+`CTD` or `SD` tag. CLICK validation reports `for-count-bank` for a count in any
+other bank. Copy the count into a `DS` or `DD` tag and loop on that.
 
 ```python
 with rung():

@@ -19,70 +19,100 @@ if TYPE_CHECKING:
 ValidationMode = Literal["warn", "strict"]
 FindingSeverity = Literal["error", "warning", "hint"]
 
+__all__ = ["ValidationMode", "FindingSeverity", "ClickFinding", "ClickValidationReport"]
+
 # ---------------------------------------------------------------------------
 # Finding codes
 # ---------------------------------------------------------------------------
 
+# Each family's own codes are in its module in legacy/.
+
+# Codes that stay in pyrung.
 CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
 CLK_PTR_EXPR_NOT_ALLOWED = "CLK_PTR_EXPR_NOT_ALLOWED"
 CLK_PTR_BLOCK_OFFSET = "CLK_PTR_BLOCK_OFFSET"
+CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
+CLK_PTR_PAST_BANK = "CLK_PTR_PAST_BANK"
+CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
 CLK_TILDE_BOOL_CONTACT_ONLY = "CLK_TILDE_BOOL_CONTACT_ONLY"
 CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
-CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
-CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
 CLK_FUNCTION_CALL_NOT_PORTABLE = "CLK_FUNCTION_CALL_NOT_PORTABLE"
-CLK_MATH_MODE_MIXED = "CLK_MATH_MODE_MIXED"
 CLK_MATH_FLOOR_DIV = "CLK_MATH_FLOOR_DIV"
-CLK_MATH_FUNC_MODE_MISMATCH = "CLK_MATH_FUNC_MODE_MISMATCH"
-CLK_MATH_NESTING_DEPTH = "CLK_MATH_NESTING_DEPTH"
+# math() checks and the export both report these two.
 CLK_MATH_RANGE_MIXED_BANKS = "CLK_MATH_RANGE_MIXED_BANKS"
 CLK_MATH_RANGE_NOT_CONTIGUOUS = "CLK_MATH_RANGE_NOT_CONTIGUOUS"
-CLK_MATH_MEDIAN_RANGE_TOO_LARGE = "CLK_MATH_MEDIAN_RANGE_TOO_LARGE"
-CLK_MATH_BIT_RANGE_AGGREGATE = "CLK_MATH_BIT_RANGE_AGGREGATE"
-CLK_MATH_SUM_BANK_NOT_AVAILABLE = "CLK_MATH_SUM_BANK_NOT_AVAILABLE"
-
 CLK_PROFILE_UNAVAILABLE = "CLK_PROFILE_UNAVAILABLE"
 CLK_ADDRESS_IDENTITY_CONFLICT = "CLK_ADDRESS_IDENTITY_CONFLICT"
 CLK_NICKNAME_TOO_LONG = "CLK_NICKNAME_TOO_LONG"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
-CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
-CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
-CLK_DRUM_JUMP_STEP_TAG_REQUIRED = "CLK_DRUM_JUMP_STEP_TAG_REQUIRED"
 CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
-CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
-CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
-CLK_IMMEDIATE_CONTACT_MUST_BE_X = "CLK_IMMEDIATE_CONTACT_MUST_BE_X"
 CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
-CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
-CLK_OUT_UNIT_UNSUPPORTED = "CLK_OUT_UNIT_UNSUPPORTED"
-CLK_TIMER_PAIR_MISMATCH = "CLK_TIMER_PAIR_MISMATCH"
 CLK_STATUS_BIT_NOT_PORTABLE = "CLK_STATUS_BIT_NOT_PORTABLE"
 CLK_FORLOOP_NESTING_DEPTH = "CLK_FORLOOP_NESTING_DEPTH"
 CLK_FORLOOP_INNER_ONESHOT = "CLK_FORLOOP_INNER_ONESHOT"
 CLK_FORLOOP_RETURN_INSIDE = "CLK_FORLOOP_RETURN_INSIDE"
 CLK_NESTED_CALL = "CLK_NESTED_CALL"
 CLK_STEP_LIMIT = "CLK_STEP_LIMIT"
-CLK_FORLOOP_COUNT_BANK = "CLK_FORLOOP_COUNT_BANK"
-CLK_RAND_BOUND_TYPE = "CLK_RAND_BOUND_TYPE"
-CLK_RAND_EQUAL_BOUNDS = "CLK_RAND_EQUAL_BOUNDS"
-CLK_MATH_ARG_NOT_PLAIN = "CLK_MATH_ARG_NOT_PLAIN"
-CLK_MATH_WIDE_CONSTANT = "CLK_MATH_WIDE_CONSTANT"
-CLK_TEXT_ORDER_COMPARE = "CLK_TEXT_ORDER_COMPARE"
 CLK_TEXT_PAST_BANK = "CLK_TEXT_PAST_BANK"
 CLK_TEXT_PAST_BLOCK = "CLK_TEXT_PAST_BLOCK"
 CLK_TEXT_WINDOW_NOT_CONTIGUOUS = "CLK_TEXT_WINDOW_NOT_CONTIGUOUS"
 CLK_COPY_WIDE_CONSTANT = "CLK_COPY_WIDE_CONSTANT"
 CLK_COPY_RANGE_NOT_CONSECUTIVE = "CLK_COPY_RANGE_NOT_CONSECUTIVE"
-CLK_MATH_BIT_OPERAND = "CLK_MATH_BIT_OPERAND"
-CLK_MATH_DEST_BANK = "CLK_MATH_DEST_BANK"
-CLK_SEARCH_RANGE_BANK = "CLK_SEARCH_RANGE_BANK"
-CLK_SEARCH_RESULT_NOT_DS = "CLK_SEARCH_RESULT_NOT_DS"
-CLK_TIMER_PRESET_TOO_LOW = "CLK_TIMER_PRESET_TOO_LOW"
-CLK_PTR_PAST_BANK = "CLK_PTR_PAST_BANK"
-CLK_COMPARE_HEX_MIX = "CLK_COMPARE_HEX_MIX"
 CLK_NOP_NO_COIL = "CLK_NOP_NO_COIL"
+__all__ += [
+    "CLK_PTR_CONTEXT_ONLY_COPY",
+    "CLK_PTR_POINTER_MUST_BE_DS",
+    "CLK_PTR_EXPR_NOT_ALLOWED",
+    "CLK_PTR_BLOCK_OFFSET",
+    "CLK_PTR_DS_UNVERIFIED",
+    "CLK_PTR_PAST_BANK",
+    "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED",
+    "CLK_EXPR_ONLY_IN_MATH",
+    "CLK_TILDE_BOOL_CONTACT_ONLY",
+    "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED",
+    "CLK_FUNCTION_CALL_NOT_PORTABLE",
+    "CLK_MATH_FLOOR_DIV",
+    "CLK_MATH_RANGE_MIXED_BANKS",
+    "CLK_MATH_RANGE_NOT_CONTIGUOUS",
+    "CLK_PROFILE_UNAVAILABLE",
+    "CLK_ADDRESS_IDENTITY_CONFLICT",
+    "CLK_NICKNAME_TOO_LONG",
+    "CLK_BANK_UNRESOLVED",
+    "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
+    "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
+    "CLK_STATUS_BIT_NOT_PORTABLE",
+    "CLK_FORLOOP_NESTING_DEPTH",
+    "CLK_FORLOOP_INNER_ONESHOT",
+    "CLK_FORLOOP_RETURN_INSIDE",
+    "CLK_NESTED_CALL",
+    "CLK_STEP_LIMIT",
+    "CLK_TEXT_PAST_BANK",
+    "CLK_TEXT_PAST_BLOCK",
+    "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
+    "CLK_COPY_WIDE_CONSTANT",
+    "CLK_COPY_RANGE_NOT_CONSECUTIVE",
+    "CLK_NOP_NO_COIL",
+]
+
+# Codes that several families raise.
+CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
+CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
+CLK_TIMER_PRESET_TOO_LOW = "CLK_TIMER_PRESET_TOO_LOW"
+CLK_TIMER_PAIR_MISMATCH = "CLK_TIMER_PAIR_MISMATCH"
+CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
+CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
+CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
+__all__ += [
+    "CLK_BANK_NOT_WRITABLE",
+    "CLK_BANK_WRONG_ROLE",
+    "CLK_TIMER_PRESET_TOO_LOW",
+    "CLK_TIMER_PAIR_MISMATCH",
+    "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
+    "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
+]
 
 
 @dataclass(frozen=True, init=False)
@@ -470,25 +500,10 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
             "(copy/math/timer/counter/send/receive)."
         )
 
-    if code == CLK_MATH_MODE_MIXED:
-        return (
-            "Split mixed math into separate decimal and WORD-only math() steps, "
-            "or convert through an intermediate tag so each math() stays one family."
-        )
-
     if code == CLK_MATH_FLOOR_DIV:
         return (
             "Click has no floor-division operator. Use math(a / b, int_dest) instead; "
             "copying the result to an Int or Dint tag truncates toward zero automatically."
-        )
-
-    if code == CLK_MATH_FUNC_MODE_MISMATCH:
-        return ""  # suggestion is built inline with context
-
-    if code == CLK_MATH_NESTING_DEPTH:
-        return (
-            "Click limits parenthetical nesting to 8 levels. "
-            "Break the expression into intermediate math() steps with temporary tags."
         )
 
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
@@ -502,9 +517,6 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
 
     if code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y:
         return "Map the coil to a Y address."
-
-    if code == CLK_IMMEDIATE_CONTACT_MUST_BE_X:
-        return "Map it to an X input, or use a plain contact."
 
     if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
         return "Map the range to consecutive Y addresses, such as Y001..Y004."
@@ -522,17 +534,6 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     return ""
 
 
-# The CLK_ codes that laddercodec's codes replaced, and the codes that took their place.
-_REPLACED_CODES: dict[str, str] = {
-    "CLK_COPY_BANK_INCOMPATIBLE": "copy-bank-incompatible or bank-not-allowed",
-    "CLK_COPY_CONVERTER_INCOMPATIBLE": (
-        "copy-converter-bank, copy-txt-needs-convert or option-not-offered"
-    ),
-    "CLK_COPY_CONSTANT_INTO_BIT": "constant-into-bit or bank-not-allowed",
-    "CLK_PACK_TEXT_BANK_INCOMPATIBLE": "pack-kind-mismatch or copy-bank-incompatible",
-}
-
-
 def check_allowed_codes(allow: Collection[str]) -> None:
     """Raise ``ValueError`` for a name in *allow* that no finding can have.
 
@@ -540,85 +541,24 @@ def check_allowed_codes(allow: Collection[str]) -> None:
     """
     from laddercodec import Code
 
+    from .families import replaced_codes
+    from .legacy import CODES as legacy_codes
+
     if isinstance(allow, str):
         # A string is a collection of its letters, so no letter would match a code.
         raise ValueError(f"allow= is the string {allow!r}. Pass allow= a list of codes.")
     known = {value for name, value in globals().items() if name.startswith("CLK_")}
+    known |= set(legacy_codes)
     known |= {code.value for code in Code}
     for name in allow:
         if name in known:
             continue
-        if name in _REPLACED_CODES:
+        replacement = replaced_codes().get(name)
+        if replacement is not None:
             raise ValueError(
-                f"pyrung no longer reports {name}. Pass {_REPLACED_CODES[name]} to allow= instead."
+                f"pyrung no longer reports {name}. Pass {replacement} to allow= instead."
             )
         raise ValueError(
             f"allow= names {name!r}. It is neither a pyrung code nor a laddercodec code. "
             "Pass the code that the finding names."
         )
-
-
-__all__ = [
-    "ValidationMode",
-    "FindingSeverity",
-    "CLK_PTR_CONTEXT_ONLY_COPY",
-    "CLK_PTR_POINTER_MUST_BE_DS",
-    "CLK_PTR_EXPR_NOT_ALLOWED",
-    "CLK_PTR_BLOCK_OFFSET",
-    "CLK_EXPR_ONLY_IN_MATH",
-    "CLK_TILDE_BOOL_CONTACT_ONLY",
-    "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED",
-    "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED",
-    "CLK_PTR_DS_UNVERIFIED",
-    "CLK_FUNCTION_CALL_NOT_PORTABLE",
-    "CLK_MATH_MODE_MIXED",
-    "CLK_MATH_FLOOR_DIV",
-    "CLK_MATH_FUNC_MODE_MISMATCH",
-    "CLK_MATH_NESTING_DEPTH",
-    "CLK_MATH_RANGE_MIXED_BANKS",
-    "CLK_MATH_RANGE_NOT_CONTIGUOUS",
-    "CLK_MATH_MEDIAN_RANGE_TOO_LARGE",
-    "CLK_MATH_BIT_RANGE_AGGREGATE",
-    "CLK_MATH_SUM_BANK_NOT_AVAILABLE",
-    "CLK_PROFILE_UNAVAILABLE",
-    "CLK_NICKNAME_TOO_LONG",
-    "CLK_BANK_UNRESOLVED",
-    "CLK_BANK_NOT_WRITABLE",
-    "CLK_BANK_WRONG_ROLE",
-    "CLK_DRUM_JUMP_STEP_TAG_REQUIRED",
-    "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
-    "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
-    "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
-    "CLK_IMMEDIATE_CONTACT_MUST_BE_X",
-    "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
-    "CLK_COPY_RANGE_NOT_CONSECUTIVE",
-    "CLK_TIMER_PRESET_OVERFLOW",
-    "CLK_OUT_UNIT_UNSUPPORTED",
-    "CLK_TIMER_PAIR_MISMATCH",
-    "CLK_STATUS_BIT_NOT_PORTABLE",
-    "CLK_FORLOOP_NESTING_DEPTH",
-    "CLK_STEP_LIMIT",
-    "CLK_FORLOOP_INNER_ONESHOT",
-    "CLK_FORLOOP_RETURN_INSIDE",
-    "CLK_NESTED_CALL",
-    "CLK_FORLOOP_COUNT_BANK",
-    "CLK_RAND_BOUND_TYPE",
-    "CLK_RAND_EQUAL_BOUNDS",
-    "CLK_MATH_ARG_NOT_PLAIN",
-    "CLK_MATH_WIDE_CONSTANT",
-    "CLK_TEXT_ORDER_COMPARE",
-    "CLK_TEXT_PAST_BANK",
-    "CLK_TEXT_PAST_BLOCK",
-    "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
-    "CLK_COPY_WIDE_CONSTANT",
-    "CLK_MATH_BIT_OPERAND",
-    "CLK_MATH_DEST_BANK",
-    "CLK_SEARCH_RANGE_BANK",
-    "CLK_SEARCH_RESULT_NOT_DS",
-    "CLK_TIMER_PRESET_TOO_LOW",
-    "CLK_PTR_PAST_BANK",
-    "CLK_COMPARE_HEX_MIX",
-    "CLK_NOP_NO_COIL",
-    "ClickFinding",
-    "ClickValidationReport",
-]

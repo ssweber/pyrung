@@ -385,7 +385,7 @@ def test_each_refused_pointer_has_its_own_finding_and_advice():
 
 
 def test_pointer_advice_for_an_operand_that_no_refusal_names_is_kept():
-    from pyrung.click.validation.fields import CopyFamilyResult, _Refusal
+    from pyrung.click.validation.fields import FamilyResult, _Refusal
     from pyrung.core.validation.display import Frame
 
     def refusal(attribute):
@@ -399,10 +399,10 @@ def test_pointer_advice_for_an_operand_that_no_refusal_names_is_kept():
             detail="",
             click_id=None,
             advice=None,
-            attribute=attribute,
+            attributes=(attribute,),
         )
 
-    result = CopyFamilyResult([], (refusal("source"), refusal("dest")))
+    result = FamilyResult([], (refusal("source"), refusal("dest")))
     on_dest = result.findings({(Code.POINTER_NOT_DS, "dest"): ["Remap the pointer."]})
     assert [f.suggestion for f in on_dest] == [None, "Remap the pointer."]
     # The first refusal of the code takes advice for an operand that no refusal names.
@@ -658,7 +658,7 @@ def test_a_label_shows_a_bank_address_without_a_bracket(write, line, address):
     ids=lambda operand: getattr(operand, "name", None) or f"{operand.block.name}-range",
 )
 def test_each_bank_address_in_a_call_is_named_by_itself(operand):
-    from pyrung.click.validation.fields import _call_names
+    from pyrung.click.validation.fields import _call_names, declared_operands
     from pyrung.click.validation.resolve import _ResolutionCache
 
     # A range spells X001 as X1, and a tag spells it X001. Both are the address.
@@ -666,7 +666,7 @@ def test_each_bank_address_in_a_call_is_named_by_itself(operand):
         instruction = CopyInstruction(operand, ds[101])
     else:
         instruction = BlockCopyInstruction(operand, ds.select(101, 102))
-    names = _call_names(instruction, {}, _ResolutionCache(TagMap()))
+    names = _call_names(declared_operands(instruction, {}), {}, _ResolutionCache(TagMap()))
     assert names
     assert all(name == address for address, name in names.items())
 
@@ -701,7 +701,7 @@ def test_an_export_error_names_each_place_once():
 
 def test_each_copy_family_field_has_an_argument():
     # A field that laddercodec renames or adds would lose its caret.
-    from pyrung.click.validation.fields import _FIELD_ARGUMENTS
+    from pyrung.click.validation.families.copy import _FIELD_ARGUMENTS
 
     fields = {
         f"{cls.__name__}.{field.name}"

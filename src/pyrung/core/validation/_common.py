@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
     from pyrung.core.validation.display import Frame
+    from pyrung.core.validation.render import Call
     from pyrung.core.validation.walker import ProgramLocation
 
 # ---------------------------------------------------------------------------
@@ -1582,7 +1583,9 @@ def instruction_frame(
     instruction: Any,
     *,
     argument: int | str | None = None,
+    item: int | None = None,
     caret_label: str = "",
+    call: Call | None = None,
 ) -> Frame:
     """Build the :func:`location_frame` that shows *instruction* as a DSL call.
 
@@ -1594,19 +1597,24 @@ def instruction_frame(
           |  copy(Count, Valve)
           |              ^^^^^ C1 can't take Count (DS1)
 
-    The frame holds the location alone for an instruction that the renderer cannot write
-    with all its operands, because a bare ``verb()`` would misquote the author's call.
-    With no *argument*, or an argument that the call does not show, it has no caret.
+    With *item*, the caret marks that item of a list argument. The frame shows *call* when
+    it is given, and the renderer's call otherwise. Without
+    *call*, the frame holds the location alone for an instruction that the renderer cannot
+    write with all its operands, because a bare ``verb()`` would misquote the author's
+    call. With no *argument*, or an argument that the call does not show, it has no caret.
     """
     from pyrung.core.validation.render import argument_span, render_instruction, renders_in_full
 
     source = _source_text(
         getattr(instruction, "source_file", None), getattr(instruction, "source_line", None)
     )
+    if call is not None:
+        span = None if argument is None else call.span(argument, item)
+        return location_frame(location, call.text, span, caret_label=caret_label, source=source)
     if not renders_in_full(instruction):
         return location_frame(location, source=source)
     if argument is None:
         code, span = render_instruction(instruction, "")[0], None
     else:
-        code, span = argument_span(instruction, argument)
+        code, span = argument_span(instruction, argument, item)
     return location_frame(location, code, span, caret_label=caret_label, source=source)
