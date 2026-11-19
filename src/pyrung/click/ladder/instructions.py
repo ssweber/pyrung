@@ -6,13 +6,12 @@ import re
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from pyclickplc.addresses import format_address_display, parse_address
-
 from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.click.validation.findings import (
     CLK_COPY_RANGE_NOT_CONSECUTIVE,
     RangeFault,
     RangeProblem,
+    _display_address,
     range_not_consecutive_advice,
     range_not_consecutive_text,
 )
@@ -28,14 +27,6 @@ from pyrung.core.validation.render import operand_name
 
 from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _compact_contiguous_range, _quote
-
-
-def _display_address(name: str) -> str:
-    """Return a tag name as CLICK writes its address, such as Y001 for Y1."""
-    try:
-        return format_address_display(*parse_address(name))
-    except ValueError:
-        return name
 
 
 def _exported_converter(instruction: Any) -> CopyConverter | None:
@@ -317,14 +308,20 @@ class _InstructionMixin:
         if not text.startswith("["):
             return text, None
         addresses = [address for address in text[1:-1].split(",") if address]
+        block_range = value.value if isinstance(value, ImmediateRef) else value
         fault: RangeFault
         if not addresses:
             fault = "empty"
-        elif len(addresses) > 1 and _compact_contiguous_range(addresses[::-1]) is not None:
+        elif (
+            getattr(block_range, "reverse_order", False)
+            and len(addresses) > 1
+            and _compact_contiguous_range(addresses[::-1]) is not None
+        ):
+            # Only a range that the author reversed gets the advice to remove .reverse().
+            # A block mapped onto descending addresses gets the advice to map it again.
             fault = "descending"
         else:
             fault = "scattered"
-        block_range = value.value if isinstance(value, ImmediateRef) else value
         own = [_display_address(tag.name) for tag in block_range.tags()] == addresses
         return text, (operand_name(value), fault, addresses, own)
 

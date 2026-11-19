@@ -34,6 +34,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import rung_label
+from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
@@ -60,7 +61,6 @@ from .findings import (
     CLK_MATH_MODE_MIXED,
     CLK_MATH_NESTING_DEPTH,
     CLK_MATH_RANGE_MIXED_BANKS,
-    CLK_MATH_RANGE_NOT_CONTIGUOUS,
     CLK_MATH_SUM_BANK_NOT_AVAILABLE,
     CLK_MATH_WIDE_CONSTANT,
     CLK_NESTED_CALL,
@@ -88,6 +88,9 @@ from .findings import (
     pointer_block_range_text,
     pointer_expression_text,
     pointer_offset_text,
+    range_aggregate_advice,
+    range_aggregate_problem,
+    range_not_consecutive_text,
 )
 from .resolve import (
     _bank_label,
@@ -711,26 +714,15 @@ def _walk_mode_violations(
 # ends to be in the same address block (OBJ-1015). It limits an MDN range to 1024 bytes
 # (OBJ-1013). The exporter writes ``FUNC ( first : last )`` from the range's first and last
 # mapped tag. Every member in between must therefore map to the addresses CLICK will read.
+# ``range_aggregate_problem`` judges that, for validation and for the export.
 
 _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 # SUM reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, SD in decimal mode and DH, XD, YD in hex
 # mode. CT and TXT are unavailable in both modes. A bank in the wrong mode needs no check
 # here. TagMap ties a tag's type to its bank, and a mixed math() gets CLK_MATH_MODE_MIXED.
 _NO_SUM_BANKS = frozenset({"CT", "TXT"})
-# Banks whose CLICK address space has slot gaps (X001..X016, X101..X116, ...).
-_SLOTTED_BANKS = frozenset({"X", "Y"})
 _MDN_MAX_BYTES = 1024
 _BANK_BYTES: dict[str, int] = {"DD": 4, "DF": 4, "CTD": 4}
-# CLICK's XD and YD banks run XD0, XD0u, then XD1..XD8, at MDB addresses 0, 1, then 2, 4, .. 16.
-# A CLICK range from XD0 on to XD1 therefore includes XD0u, which a pyrung XD block never has.
-_WORD_IO_BANKS = frozenset({"XD", "YD"})
-
-
-def _next_address(bank: str, address: int) -> int:
-    """Return the MDB address that follows *address* in *bank*'s CLICK address space."""
-    if bank in _WORD_IO_BANKS and address >= 2:
-        return address + 2
-    return address + 1
 
 
 def _collect_range_aggregates(expr: Any, out: list[tuple[str, BlockRange]], seen: set[int]) -> None:
@@ -779,20 +771,41 @@ def _evaluate_range_aggregates(
 
     for kind, block_range in aggregates:
         click_name = _RANGE_AGGREGATE_CLICK_NAME[kind]
-        slots = [resolver.resolve_direct_tag(tag) for tag in block_range.tags()]
-        if not slots or any(slot is None for slot in slots):
-            continue  # unresolved mappings are reported by the bank checks
-        resolved = [slot for slot in slots if slot is not None]
-        banks = list(dict.fromkeys(slot.memory_type for slot in resolved))
-        if len(banks) > 1:
-            emit(
-                CLK_MATH_RANGE_MIXED_BANKS,
-                f"{click_name} range spans more than one address block ({', '.join(banks)})",
-                f"Map every member of the {click_name} range into one bank, or split the "
-                "math() into one aggregate per bank.",
+        tags = block_range.tags()
+        resolved: list[tuple[str, int]] = []
+        for tag in tags:
+            slot = resolver.resolve_direct_tag(tag)
+            if slot is None or slot.address is None:
+                break  # unresolved mappings are reported by the bank checks
+            resolved.append((slot.memory_type, slot.address))
+        else:
+            name = operand_name(block_range)
+            judged = range_aggregate_problem(
+                name,
+                [tag.name for tag in tags],
+                [format_address_display(bank, address) for bank, address in resolved],
+                reversed_order=block_range.reverse_order,
             )
+            if judged is not None:
+                code, problem = judged
+                findings.append(
+                    ClickFinding(
+                        code=code,
+                        severity=_route_severity(code, mode),
+                        message=(
+                            f"pyrung cannot export {name}.{kind}() at {location_text} "
+                            "as one CLICK range. "
+                            f"{range_not_consecutive_text([problem])}"
+                        ),
+                        location=location_text,
+                        suggestion=range_aggregate_advice(problem),
+                    )
+                )
+                if code == CLK_MATH_RANGE_MIXED_BANKS:
+                    continue
+        if not resolved or len(resolved) < len(tags):
             continue
-        bank = banks[0]
+        bank = resolved[0][0]
         if kind == "sum":
             if bank in _NO_SUM_BANKS:
                 emit(
@@ -808,27 +821,8 @@ def _evaluate_range_aggregates(
                 f"Use .sum() to count the True bits, or copy the bits into a register "
                 f"bank before taking {click_name}.",
             )
-        addresses = [slot.address for slot in resolved]
-        if any(address is None for address in addresses):
-            continue
-        numbers = [int(address) for address in addresses if address is not None]
-        if bank in _SLOTTED_BANKS:
-            ordered = all(a < b for a, b in zip(numbers, numbers[1:], strict=False))
-        else:
-            ordered = all(
-                _next_address(bank, a) == b for a, b in zip(numbers, numbers[1:], strict=False)
-            )
-        if not ordered:
-            emit(
-                CLK_MATH_RANGE_NOT_CONTIGUOUS,
-                f"{click_name} range does not map to one contiguous low:high run of {bank} "
-                f"addresses (first {format_address_display(bank, numbers[0])}, "
-                f"last {format_address_display(bank, numbers[-1])})",
-                "Map the range to consecutive addresses in ascending order, and drop "
-                ".reverse(): the aggregate does not depend on member order.",
-            )
         if kind == "median":
-            size = len(numbers) * _BANK_BYTES.get(bank, 2)
+            size = len(resolved) * _BANK_BYTES.get(bank, 2)
             if size > _MDN_MAX_BYTES:
                 emit(
                     CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
