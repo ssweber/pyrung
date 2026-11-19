@@ -49,6 +49,8 @@
   Pass the new code to `allow=`. `allow=` now raises `ValueError` for a code that pyrung does not report, and names the codes that replace a removed one.
 - CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
+- The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
+  Map the tags to consecutive addresses in one bank. Drop `.reverse()`.
 - CLICK validation now refuses these forms, which the export wrote and CLICK's editor rejects:
   - A `blockcopy()` of one register, such as `blockcopy(ds.select(1, 1), ds.select(5, 5))`. Use `copy()`.
   - A `pack_bits()` or `unpack_to_bits()` of one bit, such as `pack_bits(c.select(1, 1), ds[1])`. Use a range of two or more bits.

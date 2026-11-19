@@ -30,6 +30,9 @@ from pyrung.click.validation.findings import (
     pointer_block_range_text,
     pointer_expression_text,
     pointer_offset_text,
+    range_aggregate_advice,
+    range_aggregate_problem,
+    range_not_consecutive_text,
 )
 from pyrung.core.condition import (
     AllCondition,
@@ -72,6 +75,7 @@ from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExp
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
+from pyrung.core.validation.render import operand_name
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -703,11 +707,34 @@ class _TranslatorMixin:
         )
 
     def _render_range_aggregate(self, kind: str, br: Any, path: str, source: Any) -> str:
-        """Return ``SUM ( DS1 : DS10 )`` or its MAX, MIN, MDN or AVG form.  Bit banks pass as-is."""
+        """Return ``SUM ( DS1 : DS10 )`` or its MAX, MIN, MDN or AVG form.  Bit banks pass as-is.
+
+        CLICK reads every address from the first to the last.  The export refuses a range
+        that is not one ascending run in one bank, even when its code is allowed.
+        Otherwise CLICK would read registers that the program does not name.
+        """
         tags = br.tags()
-        first = self._resolve_tag(tags[0], path=f"{path}.block_range[0]", source=source)
-        last = self._resolve_tag(tags[-1], path=f"{path}.block_range[-1]", source=source)
-        return _formula_call(_RANGE_AGGREGATE_CLICK_NAME[kind], f"{first} : {last}")
+        addresses = [
+            self._resolve_tag(tag, path=f"{path}.block_range[{index}]", source=source)
+            for index, tag in enumerate(tags)
+        ]
+        judged = range_aggregate_problem(
+            operand_name(br),
+            [tag.name for tag in tags],
+            addresses,
+            reversed_order=bool(getattr(br, "reverse_order", False)),
+        )
+        if judged is not None:
+            code, problem = judged
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"{code}: {range_not_consecutive_text([problem])} "
+                    f"{range_aggregate_advice(problem)}"
+                ),
+                source=source,
+            )
+        return _formula_call(_RANGE_AGGREGATE_CLICK_NAME[kind], f"{addresses[0]} : {addresses[-1]}")
 
     def _render_condition_sequence(self, values: tuple[Any, ...], *, path: str, source: Any) -> str:
         rendered: list[str] = []

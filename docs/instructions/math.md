@@ -159,3 +159,5 @@ In pyrung, the aggregates work anywhere an expression does (`copy()` sources, ru
 | `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
 | `CLK_MATH_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` reject a bit range (X, Y, C, T, CT, SC). `SUM` accepts one. |
 | `CLK_MATH_SUM_BANK_NOT_AVAILABLE` | In decimal mode, `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD or SD. In hex mode, it reads DH, XD or YD. |
+
+The export writes a range as its first and last address, such as `SUM ( DS1 : DS9 )`. CLICK reads every address from the first to the last. So the export rejects a range that `CLK_MATH_RANGE_NOT_CONTIGUOUS` or `CLK_MATH_RANGE_MIXED_BANKS` reports, even with `allow=`.
