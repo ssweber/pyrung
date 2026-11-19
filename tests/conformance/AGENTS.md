@@ -466,7 +466,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] a box rung with no contact in front of its own, drawn from the rail as CLICK redraws pins teed off a bare wire (`cont_box/box_tee_without_trunk`)
 - [x] a For body split at a box into separate body rungs (`paste_risk/loop_body_split`)
 - [x] the drum's correction scan with an enable and a jog of its own (`row_solve/correction_scan_with_free_enable`)
-- [ ] a plain reset of a counter or timer bit (`reset(CT1)`, `reset(T1)`) and the accumulator: the exporter refuses the write (`CLK_BANK_NOT_WRITABLE`), so no case yet
+- [ ] a plain reset of a counter or timer bit (`reset(CT1)`, `reset(T1)`) and the accumulator: the exporter refuses the write (`bank-not-allowed`), so no case yet
 - [ ] whether a NOP or a blank row splits a rung's solve: no drawing tells L from a split (`test_row_solve.py` docstring)
 - [ ] solve order around a `call()` between the rows of one rung (the home exists, `in_main=True`, but no such case yet); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK keeps a contact before NOP and reports it in its Syntax Check (C0003), which `CLK_NOP_NO_COIL` flags. A NOP fed by a bare wire is dropped, so `rungs/nop_rung_takes_snapshot` is retired. The exporter draws an empty rung as a CLICK rung of its own, and a bare NOP round-trips (`tests/click/test_codegen.py`)
