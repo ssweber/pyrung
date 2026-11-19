@@ -24,7 +24,7 @@ from pyrung.click.validation import (
     CLK_COPY_WIDE_CONSTANT,
     validate_click_program,
 )
-from pyrung.core import Word, randint, to_ascii, to_value
+from pyrung.core import Word, randint, to_ascii, to_text, to_value
 from pyrung.core.program import Program, blockcopy, copy, fill, math, out, rung
 from tests.click.helpers import exec_with_source, round_trip_logic
 
@@ -504,3 +504,38 @@ def test_a_copy_click_accepts_exports_and_imports(write, token):
     # RESULTS6.md rows 1c, 2 and 7, and copy-encodings RESULTS.md: CLICK accepts each of
     # these Copies.
     _exports_and_imports_as(write, token)
+
+
+# --- A refusal that holds under allow= names the code that validation reports ----------
+
+
+@pytest.mark.parametrize(
+    "write, code",
+    [
+        (lambda: copy("a" * 10, txt[999]), "text-past-bank"),
+        (lambda: copy(-5, txt[1000]), "text-past-bank"),
+        (lambda: copy(70000, dh[1]), CLK_COPY_WIDE_CONSTANT),
+        (lambda: fill(70000, dh.select(1, 1)), CLK_COPY_WIDE_CONSTANT),
+        (lambda: math(dh[1] + 70000, dh[100]), "CLK_MATH_WIDE_CONSTANT"),
+        (lambda: copy(ds[1], txt[1], convert=to_text(exponential=True)), "option-not-offered"),
+        (lambda: fill("AB", txt.select(5, 5)), "constant-out-of-range"),
+    ],
+    ids=[
+        "text-past-bank",
+        "number-past-bank",
+        "copy-wide-constant",
+        "fill-wide-constant",
+        "math-wide-constant",
+        "exponential-integer",
+        "fill-several-characters",
+    ],
+)
+def test_an_export_refusal_under_allow_names_the_validation_code(write, code):
+    assert code in {f.code for f in _validation_findings(write)}
+    with pytest.raises(LadderExportError, match=rf"{code}: "):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(code,))
+
+
+def _validation_findings(write):
+    report = validate_click_program(_program(write), TagMap(), mode="warn")
+    return (*report.errors, *report.warnings, *report.hints)

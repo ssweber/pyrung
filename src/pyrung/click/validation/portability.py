@@ -14,11 +14,8 @@ from pyrung.core.instruction.control import (
     ReturnInstruction,
     iter_loop_body_rungs,
 )
-from pyrung.core.memory_block import (
-    BlockRange,
-)
 from pyrung.core.rung import dsl_call
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import rung_label
 from pyrung.core.validation.walker import ProgramLocation
 
@@ -28,10 +25,8 @@ from .findings import (
     CLK_FORLOOP_NESTING_DEPTH,
     CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
-    CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
-    CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_MATH_FLOOR_DIV,
@@ -49,9 +44,6 @@ from .findings import (
     ValidationMode,
     _build_suggestion,
     _route_severity,
-    immediate_coil_not_y_text,
-    immediate_coil_operand_text,
-    immediate_coil_range_gap_text,
     immediate_edge_text,
     immediate_misplaced_text,
     pointer_block_range_text,
@@ -63,9 +55,6 @@ from .resolve import (
     _format_location,
     _instruction_location,
     _ResolutionCache,
-    _ResolvedSlot,
-    _unique_slots,
-    _unresolved_finding,
 )
 
 if TYPE_CHECKING:
@@ -254,94 +243,6 @@ def _location_key(
     )
 
 
-def _evaluate_immediate_coil_target(
-    immediate_ref: ImmediateRef,
-    location: ProgramLocation,
-    tag_map: TagMap,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    wrapped = immediate_ref.value
-    findings: list[ClickFinding] = []
-    location_text = _format_location(location)
-    slots: list[_ResolvedSlot] = []
-
-    if isinstance(wrapped, Tag):
-        resolved = resolver.resolve_direct_tag(wrapped)
-        if resolved is None:
-            return [
-                _unresolved_finding(
-                    location,
-                    mode,
-                    "immediate coil target",
-                )
-            ]
-        slots = [resolved]
-    elif isinstance(wrapped, BlockRange):
-        for tag in wrapped.tags():
-            resolved = resolver.resolve_direct_tag(tag)
-            if resolved is None:
-                return [
-                    _unresolved_finding(
-                        location,
-                        mode,
-                        "immediate coil range",
-                    )
-                ]
-            slots.append(resolved)
-    else:
-        findings.append(
-            ClickFinding(
-                code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
-                severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
-                message=immediate_coil_operand_text(type(wrapped).__name__, f" at {location_text}"),
-                location=location_text,
-                suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, None, tag_map),
-            )
-        )
-        return findings
-
-    non_y_slots = [slot for slot in slots if slot.memory_type != "Y"]
-    if non_y_slots:
-        findings.append(
-            ClickFinding(
-                code=CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
-                severity=_route_severity(CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y, mode),
-                message=immediate_coil_not_y_text(
-                    f" at {location_text}",
-                    ", ".join(_bank_label(slot) for slot in _unique_slots(non_y_slots)),
-                ),
-                location=location_text,
-                suggestion=_build_suggestion(CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y, None, tag_map),
-            )
-        )
-
-    if isinstance(wrapped, BlockRange) and len(slots) > 1:
-        addresses = [slot.address for slot in slots]
-        if any(address is None for address in addresses):
-            findings.append(_unresolved_finding(location, mode, "immediate coil range"))
-        else:
-            numeric_addresses = [int(address) for address in addresses if address is not None]
-            contiguous = all(
-                numeric_addresses[idx] + 1 == numeric_addresses[idx + 1]
-                for idx in range(len(numeric_addresses) - 1)
-            )
-            if not contiguous:
-                findings.append(
-                    ClickFinding(
-                        code=CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
-                        severity=_route_severity(CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS, mode),
-                        message=immediate_coil_range_gap_text(f" at {location_text}"),
-                        location=location_text,
-                        suggestion=_build_suggestion(
-                            CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS, None, tag_map
-                        ),
-                    )
-                )
-
-    return findings
-
-
 # The coils that take an immediate() target in CLICK.
 _IMMEDIATE_COILS = frozenset(
     {"OutInstruction", "LatchInstruction", "ResetInstruction", "ToggleInstruction"}
@@ -350,20 +251,12 @@ _IMMEDIATE_COILS = frozenset(
 
 def _evaluate_immediate_usage(
     facts: tuple[OperandFact, ...],
-    instruction_sites: list[tuple[Any, ProgramLocation]],
     tag_map: TagMap,
     mode: ValidationMode,
-    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    from .legacy import table
-
-    immediate_targets = table("IMMEDIATE_COIL_TARGETS")
     findings: list[ClickFinding] = []
     condition_types: dict[
         tuple[tuple[str, str | None, int, tuple[int, ...], int | None, str | None], str], str
-    ] = {}
-    instructions_by_site: dict[
-        tuple[str, str | None, int, tuple[int, ...], int | None, str | None], Any
     ] = {}
 
     for fact in facts:
@@ -373,9 +266,6 @@ def _evaluate_immediate_usage(
         if not isinstance(condition_type, str):
             continue
         condition_types[(_location_key(fact.location), fact.location.arg_path)] = condition_type
-
-    for instruction, location in instruction_sites:
-        instructions_by_site[_location_key(location)] = instruction
 
     for fact in facts:
         if fact.value_kind != "immediate_ref":
@@ -417,14 +307,7 @@ def _evaluate_immediate_usage(
             continue
 
         if loc.instruction_type in _IMMEDIATE_COILS and loc.arg_path == "instruction.target":
-            # pyrung checks the target only while the coil's family is in legacy/. laddercodec
-            # checks the coils of a family that has moved.
-            instruction = instructions_by_site.get(site_key)
-            target = getattr(instruction, "target", None)
-            if loc.instruction_type in immediate_targets and isinstance(target, ImmediateRef):
-                findings.extend(
-                    _evaluate_immediate_coil_target(target, loc, tag_map, mode, resolver)
-                )
+            # laddercodec checks the target of an immediate coil.
             continue
 
         findings.append(

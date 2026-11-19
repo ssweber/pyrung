@@ -90,4 +90,8 @@ FAMILY = Family(
     advice=_advice,
     ranges={name: ("target",) for name in _KINDS},
     call_text=immediate_call,
+    replaced_codes={
+        "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y": "immediate-coil-not-y",
+        "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS": "CLK_COPY_RANGE_NOT_CONSECUTIVE",
+    },
 )

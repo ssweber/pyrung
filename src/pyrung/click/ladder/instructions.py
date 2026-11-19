@@ -22,6 +22,7 @@ from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
+from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.render import operand_name
 
@@ -275,9 +276,9 @@ class _InstructionMixin:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
-                    f"fill({value!r}, ...) writes one register, which CLICK takes as a Copy. "
-                    "A Copy of several characters fills several TXT. "
-                    "Fill one character, or use copy() into the TXT you mean."
+                    f"constant-out-of-range: fill({value!r}, ...) writes one register, "
+                    "which CLICK takes as a Copy. A Copy of several characters fills "
+                    "several TXT. Fill one character, or use copy() into the TXT you mean."
                 ),
                 source=instruction,
             )
@@ -351,9 +352,24 @@ class _InstructionMixin:
             )
         return text
 
+    def _render_coil_target(self, instruction: Any, *, path: str) -> str:
+        """Render a coil's target, and refuse a range that CLICK cannot hold as one.
+
+        The export refuses a range that is not one ascending run in one bank even when
+        CLK_COPY_RANGE_NOT_CONSECUTIVE is allowed, so it never writes a list. CLICK's Out,
+        Set and Reset take no list.
+        """
+        target = instruction.target
+        text = self._render_operand(
+            target, path=path, source=instruction, allow_immediate=True, immediate_context="coil"
+        )
+        if isinstance(target, BlockRange) and text.startswith("["):
+            self._render_run(target, path=path, instruction=instruction)
+        return text
+
     def _refuse_constant_text_past_txt(self, instruction: Any, dest: str, *, path: str) -> None:
         # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it,
-        # even when CLK_TEXT_PAST_BANK is allowed.
+        # even when text-past-bank is allowed.
         match = re.fullmatch(r"TXT(\d+)", dest)
         if match is None:
             return
@@ -362,7 +378,7 @@ class _InstructionMixin:
             self._raise_issue(
                 path=path,
                 message=(
-                    f"copy() into {dest} has a {count}-character constant, which runs past "
+                    f"text-past-bank: copy() into {dest} has a {count}-character constant, which runs past "
                     "TXT1000. CLICK's Copy refuses it (OBJ-003), so this cannot be written "
                     "in CLICK."
                 ),
@@ -378,49 +394,25 @@ class _InstructionMixin:
         if instruction_type == "OutInstruction":
             return self._fn(
                 "out",
-                self._render_operand(
-                    instruction.target,
-                    path=f"{path}.target",
-                    source=instruction,
-                    allow_immediate=True,
-                    immediate_context="coil",
-                ),
+                self._render_coil_target(instruction, path=f"{path}.target"),
                 **oneshot_kw,
             )
         if instruction_type == "ToggleInstruction":
             return self._fn(
                 "toggle",
-                self._render_operand(
-                    instruction.target,
-                    path=f"{path}.target",
-                    source=instruction,
-                    allow_immediate=True,
-                    immediate_context="coil",
-                ),
+                self._render_coil_target(instruction, path=f"{path}.target"),
             )
         if instruction_type in {"DebounceInstruction", "FlasherInstruction", "TimedInstruction"}:
             return self._out_variant_token(instruction, instruction_type, path=path)
         if instruction_type == "LatchInstruction":
             return self._fn(
                 "latch",
-                self._render_operand(
-                    instruction.target,
-                    path=f"{path}.target",
-                    source=instruction,
-                    allow_immediate=True,
-                    immediate_context="coil",
-                ),
+                self._render_coil_target(instruction, path=f"{path}.target"),
             )
         if instruction_type == "ResetInstruction":
             return self._fn(
                 "reset",
-                self._render_operand(
-                    instruction.target,
-                    path=f"{path}.target",
-                    source=instruction,
-                    allow_immediate=True,
-                    immediate_context="coil",
-                ),
+                self._render_coil_target(instruction, path=f"{path}.target"),
             )
         if instruction_type == "CopyInstruction":
             convert_kw = {}

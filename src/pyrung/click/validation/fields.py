@@ -86,7 +86,7 @@ class Family:
     ranges: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     # The (Done, accumulator) attributes of each timer that a class names. A timer is one
     # number on CLICK, so CLK_TIMER_PAIR_MISMATCH reports a Done and an accumulator that
-    # the tag map puts on different numbers. A class's rows go in legacy/ until it moves.
+    # the tag map puts on different numbers.
     timer_pairs: Mapping[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     # Each CLK_ code that the family's move removed, with the codes that replace it.
     # ``allow=`` names them when a caller passes the old code.

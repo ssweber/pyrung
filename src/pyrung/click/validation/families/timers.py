@@ -72,4 +72,5 @@ FAMILY = Family(
     build=_build,
     arguments=_FIELD_ARGUMENTS,
     advice=_advice,
+    replaced_codes={"CLK_TIMER_PRESET_OVERFLOW": "constant-out-of-range"},
 )

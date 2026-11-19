@@ -259,5 +259,8 @@ FAMILY = Family(
     advice=_advice,
     operands=_operands,
     call_text=_call,
-    replaced_codes={"CLK_DRUM_JUMP_STEP_TAG_REQUIRED": "not-an-address"},
+    replaced_codes={
+        "CLK_DRUM_JUMP_STEP_TAG_REQUIRED": "not-an-address",
+        "CLK_TIMER_PRESET_TOO_LOW": "constant-out-of-range",
+    },
 )

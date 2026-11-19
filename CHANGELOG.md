@@ -37,16 +37,49 @@
   If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
 - The CLICK export now refuses a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`).
   Copy the value into a DH and use that DH in the formula.
-- CLICK validation of `copy()`, `blockcopy()`, `fill()` and the pack and unpack calls now reports laddercodec's codes. The old codes change like this:
-  - `CLK_COPY_BANK_INCOMPATIBLE` becomes `copy-bank-incompatible` or `bank-not-allowed`.
-  - `CLK_COPY_CONSTANT_INTO_BIT` becomes `constant-into-bit` or `bank-not-allowed`.
-  - `CLK_COPY_CONVERTER_INCOMPATIBLE` becomes `copy-converter-bank`, `copy-txt-needs-convert` or `option-not-offered`.
-  - `CLK_PACK_TEXT_BANK_INCOMPATIBLE` becomes `pack-kind-mismatch` or `copy-bank-incompatible`.
-  - `CLK_BANK_NOT_WRITABLE` becomes `not-writable` or `bank-not-allowed`.
-  - `CLK_BANK_UNRESOLVED` becomes `pointer-bank-not-allowed` for a pointer into SD as the destination.
-  - In these calls, `CLK_PTR_POINTER_MUST_BE_DS` becomes `pointer-not-ds` and `CLK_PTR_CONTEXT_ONLY_COPY` becomes `pointer-outside-copy`.
+- CLICK validation of these calls now reports new codes for what CLICK refuses, in place of the old ones. Old -> new:
+  - `copy()`, `blockcopy()`, `fill()` and the pack and unpack calls:
+    - `CLK_COPY_BANK_INCOMPATIBLE` -> `copy-bank-incompatible` or `bank-not-allowed`.
+    - `CLK_COPY_CONSTANT_INTO_BIT` -> `constant-into-bit` or `bank-not-allowed`.
+    - `CLK_COPY_CONVERTER_INCOMPATIBLE` -> `copy-converter-bank`, `copy-txt-needs-convert` or `option-not-offered`.
+    - `CLK_PACK_TEXT_BANK_INCOMPATIBLE` -> `pack-kind-mismatch` or `copy-bank-incompatible`.
+    - `CLK_BANK_NOT_WRITABLE` -> `not-writable` or `bank-not-allowed`.
+    - `CLK_BANK_UNRESOLVED` -> `pointer-bank-not-allowed`, for a pointer into SD as the destination.
+    - `CLK_PTR_POINTER_MUST_BE_DS` -> `pointer-not-ds`.
+    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`.
+  - `forloop()`:
+    - `CLK_FORLOOP_COUNT_BANK` -> `for-count-bank`.
+    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`, for a pointer count.
+  - `search()`:
+    - `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS` or `CLK_BANK_NOT_WRITABLE` -> `bank-not-allowed`, for a range, a result or a `found` flag in a bank that CLICK refuses.
+    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`, for a pointer value.
+  - `send()` and `receive()`:
+    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`, for a status bit, an exception response or a destination in a bank that CLICK refuses.
+    - `CLK_BANK_WRONG_ROLE` -> `invalid-modbus-target`, for a device id tag outside DS.
+  - `shift()`: `CLK_BANK_NOT_WRITABLE` -> `bank-not-allowed`, for a range outside C.
+  - `event_drum()`, `time_drum()` and `time_event_drum()`:
+    - `CLK_BANK_WRONG_ROLE` or `CLK_BANK_NOT_WRITABLE` -> `bank-not-allowed`, for an output, completion flag, current step, accumulator, jump step or register preset in a bank that CLICK refuses.
+    - `CLK_BANK_WRONG_ROLE` -> `not-an-address`, for an event that compares a register, such as `DS5 > 3`.
+    - `CLK_DRUM_JUMP_STEP_TAG_REQUIRED` -> `not-an-address`, for a constant jump step such as `.jump(Found, step=2)`.
+    - `CLK_TIMER_PRESET_TOO_LOW` -> `constant-out-of-range`, for a constant preset below 0 in `time_drum()` and `time_event_drum()`.
+  - `on_delay()`, `off_delay()`, `count_up()` and `count_down()`:
+    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`, for a Done bit, an Acc or a preset in a bank that CLICK refuses.
+    - `CLK_TIMER_PAIR_MISMATCH` -> `timer-pair-mismatch`, for a Done bit and an Acc with different numbers, such as T5 with TD7.
+    - `CLK_TIMER_PRESET_OVERFLOW` -> `constant-out-of-range`, for an `on_delay()` or `off_delay()` preset above 32767.
+  - `out()`, `latch()` and `reset()`:
+    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`.
+    - `CLK_BANK_NOT_WRITABLE` -> `not-writable`.
+    - `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y` -> `immediate-coil-not-y`.
+  - `toggle()`, `debounce()`, `flasher()` and `timed()`:
+    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`, for a target, a timer or a Done bit in a wrong bank.
+    - `CLK_BANK_NOT_WRITABLE` -> `not-writable`, for a target that CLICK cannot write.
+    - `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y` -> `immediate-coil-not-y`, for an `immediate()` target outside Y.
+    - `CLK_OUT_UNIT_UNSUPPORTED` -> `coil-time-unit`, for a unit that the coil does not take.
+    - `CLK_TIMER_PRESET_TOO_LOW` or `CLK_TIMER_PRESET_OVERFLOW` -> `constant-out-of-range`, for a constant preset that CLICK's Out dialog refuses.
+    - `debounce()`, `flasher()` and `timed()` still report `CLK_TIMER_PAIR_MISMATCH`.
+  - An `immediate()` coil range: `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS` -> `CLK_COPY_RANGE_NOT_CONSECUTIVE`.
 
-  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that is neither a pyrung code nor a laddercodec code, and names the codes that replace a removed one.
+  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that validation never reports, and names the codes that replace a removed one. `CLK_BANK_NOT_WRITABLE` still reports a `math()` result in a bank that CLICK cannot write. No call reports `CLK_BANK_WRONG_ROLE` now. For the calls above, `allow=["CLK_BANK_NOT_WRITABLE"]` and `allow=["CLK_BANK_WRONG_ROLE"]` are still accepted but no longer let the finding through. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets the finding through for `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
 - CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
 - The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
@@ -64,14 +97,6 @@
   - `pack_bits()` of X, Y, T, CT or SC into DS, DD or DF, and `unpack_to_bits()` of DS, DD or DF into Y. Pack into a DH, or unpack from one.
   - A constant outside its register's range, such as `copy(99999999999, dd[1])`. Use a constant that fits.
   - A `blockcopy()` into X or Y that crosses a 16-point slot, such as `blockcopy(c.select(1, 20), y.select(1, 20))`. Split it at the end of the slot, Y016. 0.17.0 exported this example into Y001..Y016, which is not what the program does. Export such a program again after you split it.
-- CLICK validation of `forloop()` now reports `for-count-bank` for a count in a bank that CLICK refuses (it reported `CLK_FORLOOP_COUNT_BANK`).
-  Pass the new code to `allow=`.
-- CLICK validation of `forloop()` now reports `pointer-outside-copy` for a pointer count (it reported `CLK_PTR_CONTEXT_ONLY_COPY`).
-  Pass the new code to `allow=`.
-- CLICK validation of `search()` now reports `bank-not-allowed` for a range, a result or a `found` flag in a bank that CLICK refuses (it reported `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS` or `CLK_BANK_NOT_WRITABLE`).
-  Pass the new code to `allow=`.
-- CLICK validation of `search()` now reports `pointer-outside-copy` for a pointer value (it reported `CLK_PTR_CONTEXT_ONLY_COPY`).
-  Pass the new code to `allow=`.
 - CLICK validation and the export now refuse these `search()` forms, which CLICK's editor rejects (they exported them):
   - A `found` flag in Y, such as `found=y[2]`. Map it to a C bit.
   - A value that does not suit the range, such as `ds.select(1, 10) == dh[30]`. The `search()` docs list the values that each range takes.
@@ -79,9 +104,6 @@
   - A range of one address, such as `ds.select(5, 5)`. Search two or more addresses.
   - A quote inside the text, such as `'sub"name'`. Write the text without it.
   - A constant outside its range, such as `2147483648` or text of more than 128 characters. Use a constant that fits.
-- CLICK validation of `send()` and `receive()` now reports `bank-not-allowed` for a status bit, an exception response or a destination in a bank that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE`).
-  Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets these findings through.
-  A device id tag outside DS now reports `invalid-modbus-target` (it reported `CLK_BANK_WRONG_ROLE`).
 - CLICK validation and the export now refuse these `send()` and `receive()` forms, which CLICK's editor rejects (they exported them):
   - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
   - A remote start in SD, such as `send(remote_start="SD1", ...)`. Send to another bank.
@@ -89,54 +111,27 @@
   - `word_swap=True` for a form that has no word swap, such as one DS register. Drop `word_swap`.
   - A source or destination range that is not consecutive addresses in one bank. Map the tags to consecutive addresses.
   - An IP address that is not four numbers from 0 to 255, such as `"999.1.1.1"`. Write a valid address.
-- CLICK validation of `shift()` now reports `bank-not-allowed` for a range outside C (it reported `CLK_BANK_NOT_WRITABLE`).
-  Pass the new code to `allow=`. `allow=["CLK_BANK_NOT_WRITABLE"]` no longer lets this finding through.
 - CLICK validation and the export now refuse these `shift()` forms, which CLICK's editor rejects (they exported them):
   - A range in Y, such as `y.select(1, 8)`. Shift over C bits.
   - A range of one address, such as `c.select(2, 2)`. Use two or more bits.
   - A range that is not one run of addresses, such as a block mapped to C1, C5 and C9 or to C1, Y2 and C3. Map the block to consecutive C addresses. Validation reports `CLK_COPY_RANGE_NOT_CONSECUTIVE`.
-- CLICK validation of `event_drum()`, `time_drum()` and `time_event_drum()` now reports `bank-not-allowed` for an output, completion flag, current step, accumulator, jump step or register preset in a bank that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE` or `CLK_BANK_NOT_WRITABLE`).
-  Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` and `allow=["CLK_BANK_NOT_WRITABLE"]` no longer let this finding through.
-- CLICK validation of the drums now reports `not-an-address` for a constant jump step, such as `.jump(Found, step=2)` (it reported `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`).
-  Pass the new code to `allow=`.
-- CLICK validation of `time_drum()` and `time_event_drum()` now reports `constant-out-of-range` for a constant preset below 0 (it reported `CLK_TIMER_PRESET_TOO_LOW`).
-  Pass the new code to `allow=`. `allow=["CLK_TIMER_PRESET_TOO_LOW"]` no longer lets this finding through.
 - CLICK validation and the export now refuse these drum forms, which CLICK's editor rejects (they exported them):
   - A constant preset above 32767, such as `presets=[40000]`. Use a preset from 0 to 32767.
   - A register preset in a bank other than DS, such as `presets=[dd[7]]`. Copy it into a DS first.
   - An event that is not a single bit, such as `~C5`, `rise(C5)` or `Or(C5, C6)`. Copy the condition into a C bit, and use that bit as the event.
   - An output that is also the completion flag, such as `outputs=[y[1], c[9]], completion_flag=c[9]`. Use a different bit for the flag.
-- CLICK validation of a drum event that compares a register, such as `DS5 > 3`, now reports `not-an-address` (it reported `CLK_BANK_WRONG_ROLE`).
-  Copy the condition into a C bit and use that bit as the event. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets this finding through.
-- `pyrung.click.validation` no longer exports the `CLK_` codes of its checks of `math()`, the drums, contacts, `debounce()`, `flasher()` and `timed()`, such as `CLK_MATH_MODE_MIXED`, except `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS`. Validation still reports them.
-  Write the code as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`.
+- `pyrung.click.validation` no longer exports 28 `CLK_` constants. An import of one raises `ImportError`.
+  - The checks of these 13 are gone, so use the new code from the list above: `CLK_COPY_BANK_INCOMPATIBLE`, `CLK_COPY_CONSTANT_INTO_BIT`, `CLK_COPY_CONVERTER_INCOMPATIBLE`, `CLK_PACK_TEXT_BANK_INCOMPATIBLE`, `CLK_FORLOOP_COUNT_BANK`, `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS`, `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`, `CLK_OUT_UNIT_UNSUPPORTED`, `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`, `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`, `CLK_TIMER_PRESET_OVERFLOW` and `CLK_TIMER_PRESET_TOO_LOW`.
+  - Validation still reports these 15 codes of `math()`, `rand()` and contacts. Pass one as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`. The codes are `CLK_MATH_MODE_MIXED`, `CLK_MATH_FUNC_MODE_MISMATCH`, `CLK_MATH_NESTING_DEPTH`, `CLK_MATH_MEDIAN_RANGE_TOO_LARGE`, `CLK_MATH_BIT_RANGE_AGGREGATE`, `CLK_MATH_SUM_BANK_NOT_AVAILABLE`, `CLK_MATH_BIT_OPERAND`, `CLK_MATH_DEST_BANK`, `CLK_MATH_ARG_NOT_PLAIN`, `CLK_MATH_WIDE_CONSTANT`, `CLK_RAND_BOUND_TYPE`, `CLK_RAND_EQUAL_BOUNDS`, `CLK_TEXT_ORDER_COMPARE`, `CLK_COMPARE_HEX_MIX` and `CLK_IMMEDIATE_CONTACT_MUST_BE_X`.
 - The CLICK export now refuses a text constant that holds a quote among other characters in a comparison, `fill()` or `search()`, such as `txt[1] == 'a"b'` (it wrote `"a""b"`).
   Write the text without the quote.
 - Validation and the CLICK export now refuse a `copy()` text that the CSV can't read back (`invalid-text-constant`), such as `'a",b'`, where a quote before a comma ends the text early (it wrote `"a"",b"`).
   Write the text without the quote.
-- CLICK validation of the timer and counter calls now reports `bank-not-allowed` for a Done bit, an Acc or a preset in a bank that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE`).
-  The calls are `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
-  Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets this finding through.
-- CLICK validation of the same four calls now reports `timer-pair-mismatch` for a Done bit and an Acc with different numbers, such as T5 with TD7 (it reported `CLK_TIMER_PAIR_MISMATCH`).
-  Pass the new code to `allow=`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets this finding through for these calls.
-  `debounce()`, `flasher()` and `timed()` still report `CLK_TIMER_PAIR_MISMATCH`.
-- CLICK validation of `on_delay()` and `off_delay()` now reports `constant-out-of-range` for a preset above 32767 (it reported `CLK_TIMER_PRESET_OVERFLOW`).
-  Pass the new code to `allow=`. `allow=["CLK_TIMER_PRESET_OVERFLOW"]` no longer lets this finding through.
 - CLICK validation and the export now refuse these timer and counter forms, which CLICK's editor rejects (they exported them):
   - A negative constant preset on `on_delay()` or `off_delay()`, such as `preset=-1`. Use a preset of 0 or more.
   - A constant preset on `count_up()` or `count_down()` that does not fit 32 bits, such as `preset=2**40`. Use a preset from -2147483648 to 2147483647.
-- CLICK validation of `out()`, `latch()` and `reset()` now reports `bank-not-allowed`, `not-writable` or `immediate-coil-not-y` for a target that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE`, `CLK_BANK_NOT_WRITABLE` or `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`).
-  Pass the new code to `allow=`. `allow=["CLK_BANK_NOT_WRITABLE"]` no longer lets this finding through.
-- CLICK validation of `toggle()`, `debounce()`, `flasher()` and `timed()` now reports laddercodec's codes for what CLICK refuses.
-  - `bank-not-allowed` for a target, a timer or a Done bit in a wrong bank (it reported `CLK_BANK_WRONG_ROLE`).
-  - `not-writable` for a target CLICK cannot write (it reported `CLK_BANK_NOT_WRITABLE`).
-  - `immediate-coil-not-y` for an `immediate()` target outside Y (it reported `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`).
-  - `coil-time-unit` for a unit the coil does not take (it reported `CLK_OUT_UNIT_UNSUPPORTED`).
-  - `constant-out-of-range` for a constant preset the dialog refuses (it reported `CLK_TIMER_PRESET_TOO_LOW` or `CLK_TIMER_PRESET_OVERFLOW`).
-  Pass the new code to `allow=`. `allow=["CLK_OUT_UNIT_UNSUPPORTED"]` now raises `ValueError`. The other old codes no longer let these findings through.
-- CLICK validation and the export now refuse a coil range that is not consecutive ascending addresses in one bank, such as `out(c.select(1, 3).reverse())` (the export wrote a list, which CLICK cannot load).
+- CLICK validation and the export now refuse a coil range that is not consecutive ascending addresses in one bank, such as `out(c.select(1, 3).reverse())` or `out(y.select(15, 21))`, which skips Y017..Y020. 0.17.0 exported either one as a list, which CLICK cannot load. The export refuses such a range even with `allow=["CLK_COPY_RANGE_NOT_CONSECUTIVE"]`.
   Map the tags to consecutive addresses. Drop `.reverse()`.
-  An `immediate()` range reports `CLK_COPY_RANGE_NOT_CONSECUTIVE` in place of `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`.
 - CLICK validation and the export now refuse a coil range of one address, such as `out(c.select(1, 1))`, which CLICK's editor rejects (they exported it).
   Write `out(c[1])`.
 
