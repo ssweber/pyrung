@@ -432,7 +432,7 @@ All [nothing] unless marked.
 - **Some accepted forms never write anything.** Under Sam's fault-only ruling (2026-11-19), a form that raises or
   only sets a fault flag on every data is refused at build. bob/build-refusals left these forms accepted, and they
   still write nothing. Before a refusal, the builder of that change runs each form over several input values and
-  checks that none writes. Each refusal waits on the parse-once work below.
+  checks that none writes. Each refusal waits on "Parse operands once, in the builder", in section 5.
   - `forloop()` with a `randint()` count whose bound is a Real.
   - A `math()` that adds a list (`ds[1] + [ds[2], ds[3]]`) into a Bool or a Char.
   - A `calc()` whose formula takes `sqrt()` of a text tag or a range.
