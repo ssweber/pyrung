@@ -70,6 +70,29 @@ Both instructions accept four status tags. Each is optional, as in CLICK. If you
 - **error** (`BOOL`) — Latches True on failure. The next request clears it.
 - **exception_response** (`INT`) — Modbus exception code on error. The next request clears it.
 
+The bank of the local tag must suit the bank of the remote start. Validation and the CLICK export refuse any other pair, such as `source=x[5]` with `remote_start="DS1"`.
+
+| `send()` source | `remote_start` bank |
+|---|---|
+| X, Y, C, T, CT, SC | C or Y |
+| DS, TD, SD | DS or TD |
+| DD, CTD | DD or CTD |
+| DH, XD, YD | DH or YD |
+| DF | DF |
+| TXT | TXT |
+
+| `receive()` destination | `remote_start` bank |
+|---|---|
+| Y, C | X, Y, C, T, CT or SC |
+| DS | DS, TD or SD |
+| DD | DD or CTD |
+| DF | DF |
+| DH | DH, or XD or YD for one register |
+| YD | DH, XD or YD, for one register |
+| TXT | TXT |
+
+Both tables come from CLICK's editor.
+
 Once a request is submitted, it runs to completion even if `Enable` drops. `sending` / `receiving` stays True until the response (or timeout) is processed. `success` and `error` then latch and persist across disabled scans. They are only cleared when the next request is submitted (the rising-edge of Enable, or any scan where Enable is still high after a previous request finished).
 
 Because the flags latch, checking `success` or `error` directly in downstream logic will fire every scan while the value is stuck True. Use `rise(success)` / `rise(error)` to get a one-scan pulse on the completion edge:
