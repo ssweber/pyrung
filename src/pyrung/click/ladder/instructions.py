@@ -228,7 +228,7 @@ class _InstructionMixin:
         """Render a debounce, flasher or timed coil, with each phase as its Timer's TD and preset.
 
         CLICK's coil names only the TD of the phase. The T of the same number comes with
-        it. Validation reports a Timer whose Done is not that T.
+        it.
         """
         if instruction_type == "TimedInstruction":
             phases = [("on", instruction.timer_acc, instruction.on_preset)]

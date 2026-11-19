@@ -236,7 +236,11 @@ _CHECKS = (
             i, loc, c.tag_map, c.profile, c.mode, c.resolver
         ),
     ),
-    Check("profile", 50, lambda i, loc, c: _evaluate_timer_pairs(i, loc, c.mode, c.resolver)),
+    Check(
+        "profile",
+        50,
+        lambda i, loc, c: _evaluate_timer_pairs(i, loc, c.profile, c.mode, c.resolver),
+    ),
 )
 
 

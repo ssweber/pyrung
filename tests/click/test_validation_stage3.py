@@ -13,7 +13,6 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 from pyrung.click import validation as click_validation
 from pyrung.click.ladder.types import LadderExportError
 from pyrung.click.validation import (
-    CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_EXPR_ONLY_IN_MATH,
@@ -94,7 +93,7 @@ def test_r6_non_writable_target_bank():
     tag_map = TagMap([target.map_to(x[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_NOT_WRITABLE in _codes(report)
+    assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 
 def test_r6_sc_subset_address_aware():
@@ -110,7 +109,7 @@ def test_r6_sc_subset_address_aware():
     tag_map = TagMap([ok.map_to(sc[50]), bad.map_to(sc[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_NOT_WRITABLE in _codes(report)
+    assert _codes(report).count(Code.NOT_WRITABLE) == 1
 
 
 def test_r7_timer_role_validation():
@@ -217,7 +216,7 @@ def test_stage3_recurses_into_forloop_children_for_r6():
     tag_map = TagMap([target.map_to(x[1])], include_system=False)
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_BANK_NOT_WRITABLE in _codes(report)
+    assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 
 def test_stage3_recurses_into_forloop_children_for_r8():
@@ -839,7 +838,7 @@ class TestOutVariants:
                 debounce(Bool("Coil"), on=(timers[1], 10), off=(timers[2], 10))
 
         tag_map = self._map(bad_acc=True, extra=[Bool("In").map_to(x[1])])
-        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+        assert Code.BANK_NOT_ALLOWED in _codes(self._report(body, tag_map))
 
     def test_preset_register_must_be_ds(self) -> None:
         timers = self.Timers
@@ -852,7 +851,7 @@ class TestOutVariants:
                 timed(Bool("Coil"), timers[1], preset)
 
         tag_map = self._map(extra=[preset.map_to(dd[1]), Bool("In").map_to(x[1])])
-        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+        assert Code.BANK_NOT_ALLOWED in _codes(self._report(body, tag_map))
 
     def test_units_follow_the_out_dialog(self) -> None:
         timers = self.Timers
@@ -867,14 +866,12 @@ class TestOutVariants:
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
         report = self._report(body, tag_map)
-        assert _codes(report).count("CLK_OUT_UNIT_UNSUPPORTED") == 3
-        messages = [f.message for f in report.errors if f.code == "CLK_OUT_UNIT_UNSUPPORTED"]
-        assert "debounce coil times in ms/sec, not min" in messages[0]
-        assert "timed coil times in ms/sec/min, not day" in messages[2]
+        assert _codes(report).count(Code.COIL_TIME_UNIT) == 3
+        messages = [f.message for f in report.errors if f.code == Code.COIL_TIME_UNIT]
+        assert "debounce does not support unit='Tm'" in messages[0]
+        assert "timed does not support unit='Td'" in messages[2]
 
     def test_preset_overflow(self) -> None:
-        from pyrung.click.validation import CLK_TIMER_PRESET_OVERFLOW
-
         timers = self.Timers
 
         def body():
@@ -884,18 +881,17 @@ class TestOutVariants:
                 debounce(Bool("Coil"), on=(timers[1], 40_000), off=(timers[2], 50_000))
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
-        assert _codes(self._report(body, tag_map)).count(CLK_TIMER_PRESET_OVERFLOW) == 2
+        assert _codes(self._report(body, tag_map)).count(Code.CONSTANT_OUT_OF_RANGE) == 2
 
     def test_immediate_toggle_needs_y(self) -> None:
         from pyrung import immediate, toggle
-        from pyrung.click.validation import CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y
 
         def body():
             with rung(Bool("In")):
                 toggle(immediate(Bool("Lamp")))
 
         tag_map = self._map(extra=[Bool("In").map_to(x[1])])
-        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y in _codes(self._report(body, tag_map))
+        assert Code.IMMEDIATE_COIL_NOT_Y in _codes(self._report(body, tag_map))
 
 
 def test_timer_done_and_acc_must_share_one_number():
@@ -956,8 +952,7 @@ def test_timer_done_and_acc_must_share_one_number():
     ],
 )
 def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
-    """CLICK's Out, Set and Reset coils take bit memory only (X, Y, C, T, CT, SC)."""
-    coil = {reset: "Reset", latch: "Set", out: "Out"}[instruction]
+    """CLICK's Out, Set and Reset coils take bit memory only (Y, C, SC)."""
 
     def logic():
         with rung(c[1]):
@@ -965,13 +960,13 @@ def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
 
     prog = _build_program(logic)
     report = validate_click_program(prog, TagMap(), mode="strict")
-    wrong = [f for f in report.errors if f.code == CLK_BANK_WRONG_ROLE]
-    assert len(wrong) == 1, _codes(report)
-    message = wrong[0].message
-    assert message.startswith(expected), message
-    assert f"CLICK's {coil} coil takes bit memory only" in message
-    assert message.isascii()
-    with pytest.raises(LadderExportError, match=re.escape(expected)):
+    wrong = [f for f in report.errors if f.code == Code.BANK_NOT_ALLOWED]
+    assert wrong, _codes(report)
+    for finding in wrong:
+        assert f"CLICK refuses {expected}" in finding.message, finding.message
+        assert finding.suggestion == "Write a register with copy() or fill()."
+        assert finding.message.isascii()
+    with pytest.raises(LadderExportError, match=re.escape(expected.split(" at ")[0])):
         pyrung_to_ladder(prog, TagMap())
 
 
@@ -984,4 +979,4 @@ def test_coil_on_bit_memory_passes():
             reset(sc[50])
 
     report = validate_click_program(_build_program(logic), TagMap(), mode="strict")
-    assert CLK_BANK_WRONG_ROLE not in _codes(report)
+    assert Code.BANK_NOT_ALLOWED not in _codes(report)

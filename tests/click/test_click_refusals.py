@@ -319,9 +319,9 @@ def test_a_constant_out_coil_preset_below_the_dialogs_floor_is_refused(build, co
         with rung(x[1]):
             build()
 
-    found = _found(body, CLK_TIMER_PRESET_TOO_LOW, _timer_map())
+    found = _found(body, Code.CONSTANT_OUT_OF_RANGE, _timer_map())
     assert len(found) == count
-    _export_refuses(body, CLK_TIMER_PRESET_TOO_LOW, _timer_map())
+    _export_refuses(body, Code.CONSTANT_OUT_OF_RANGE, _timer_map())
 
 
 def test_out_coil_presets_the_dialog_takes_pass():
@@ -336,7 +336,7 @@ def test_out_coil_presets_the_dialog_takes_pass():
             flasher(y[4], on=(Timers[2], preset), off=(Timers[3], preset))
             timed(y[5], Timers[4], preset)
 
-    assert _found(body, CLK_TIMER_PRESET_TOO_LOW, _timer_map(preset.map_to(ds[1]))) == []
+    assert _found(body, Code.CONSTANT_OUT_OF_RANGE, _timer_map(preset.map_to(ds[1]))) == []
 
 
 def test_a_negative_constant_drum_step_is_refused_and_zero_passes():

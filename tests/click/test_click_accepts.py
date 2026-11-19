@@ -25,7 +25,7 @@ from pyrung.click.validation import (
     validate_click_program,
 )
 from pyrung.core import Word, randint, to_ascii, to_value
-from pyrung.core.program import Program, blockcopy, copy, fill, latch, math, out, reset, rung
+from pyrung.core.program import Program, blockcopy, copy, fill, math, out, rung
 from tests.click.helpers import exec_with_source, round_trip_logic
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -76,29 +76,7 @@ def test_an_out_coil_takes_the_sc_bits_clicks_out_picker_lists(address):
 @pytest.mark.parametrize("address", [1, 77, 307])
 def test_an_out_coil_on_an_sc_click_refuses_is_still_refused(address):
     # editor-answers A6 (SC1) and pickcheck.answers.json (SC77, SC307): OBJ-003.
-    _refused(lambda: out(sc[address]), CLK_BANK_NOT_WRITABLE)
-
-
-def _not_writable_messages(write) -> list[str]:
-    report = validate_click_program(_program(write), TagMap(), mode="strict")
-    return [f.message for f in report.errors if f.code == CLK_BANK_NOT_WRITABLE]
-
-
-@pytest.mark.parametrize(
-    ("write", "call", "advice"),
-    [
-        (lambda: latch(sc[162]), "latch()", "Only out() can write it."),
-        (lambda: reset(sc[162]), "reset()", "Only out() can write it."),
-        (lambda: out(sc[1]), "out()", "Write to another address."),
-    ],
-    ids=["latch-sc", "reset-sc", "out-sc1"],
-)
-def test_a_refused_write_names_the_call_and_the_calls_that_can_write_there(write, call, advice):
-    messages = _not_writable_messages(write)
-    assert messages
-    for message in messages:
-        assert message.startswith(f"CLICK does not let {call} write ")
-        assert message.endswith(f". {advice}")
+    _refused(lambda: out(sc[address]), Code.NOT_WRITABLE)
 
 
 def test_a_block_copy_into_yd_is_refused():

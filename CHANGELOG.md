@@ -118,12 +118,27 @@
   The calls are `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
   Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets this finding through.
 - CLICK validation of the same four calls now reports `timer-pair-mismatch` for a Done bit and an Acc with different numbers, such as T5 with TD7 (it reported `CLK_TIMER_PAIR_MISMATCH`).
-  Pass the new code to `allow=`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets this finding through.
+  Pass the new code to `allow=`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets this finding through for these calls.
+  `debounce()`, `flasher()` and `timed()` still report `CLK_TIMER_PAIR_MISMATCH`.
 - CLICK validation of `on_delay()` and `off_delay()` now reports `constant-out-of-range` for a preset above 32767 (it reported `CLK_TIMER_PRESET_OVERFLOW`).
   Pass the new code to `allow=`. `allow=["CLK_TIMER_PRESET_OVERFLOW"]` no longer lets this finding through.
 - CLICK validation and the export now refuse these timer and counter forms, which CLICK's editor rejects (they exported them):
   - A negative constant preset on `on_delay()` or `off_delay()`, such as `preset=-1`. Use a preset of 0 or more.
   - A constant preset on `count_up()` or `count_down()` that does not fit 32 bits, such as `preset=2**40`. Use a preset from -2147483648 to 2147483647.
+- CLICK validation of `out()`, `latch()` and `reset()` now reports `bank-not-allowed`, `not-writable` or `immediate-coil-not-y` for a target that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE`, `CLK_BANK_NOT_WRITABLE` or `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`).
+  Pass the new code to `allow=`. `allow=["CLK_BANK_NOT_WRITABLE"]` no longer lets this finding through.
+- CLICK validation of `toggle()`, `debounce()`, `flasher()` and `timed()` now reports laddercodec's codes for what CLICK refuses.
+  - `bank-not-allowed` for a target, a timer or a Done bit in a wrong bank (it reported `CLK_BANK_WRONG_ROLE`).
+  - `not-writable` for a target CLICK cannot write (it reported `CLK_BANK_NOT_WRITABLE`).
+  - `immediate-coil-not-y` for an `immediate()` target outside Y (it reported `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`).
+  - `coil-time-unit` for a unit the coil does not take (it reported `CLK_OUT_UNIT_UNSUPPORTED`).
+  - `constant-out-of-range` for a constant preset the dialog refuses (it reported `CLK_TIMER_PRESET_TOO_LOW` or `CLK_TIMER_PRESET_OVERFLOW`).
+  Pass the new code to `allow=`. `allow=["CLK_OUT_UNIT_UNSUPPORTED"]` now raises `ValueError`. The other old codes no longer let these findings through.
+- CLICK validation and the export now refuse a coil range that is not consecutive ascending addresses in one bank, such as `out(c.select(1, 3).reverse())` (the export wrote a list, which CLICK cannot load).
+  Map the tags to consecutive addresses. Drop `.reverse()`.
+  An `immediate()` range reports `CLK_COPY_RANGE_NOT_CONSECUTIVE` in place of `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`.
+- CLICK validation and the export now refuse a coil range of one address, such as `out(c.select(1, 1))`, which CLICK's editor rejects (they exported it).
+  Write `out(c[1])`.
 
 ### Fixes
 
@@ -166,7 +181,7 @@ You can now record a debug session and replay it as a pytest test. Ladder export
 #### Ladder export accepts more of what CLICK's editor accepts
 
 - A rung with contacts and no instruction, written as a NOP.
-- `out()` on the SC bits CLICK's Out coil takes, such as SC162 and SC303.
+- `out()`, `latch()` and `reset()` on the SC bits CLICK's coils take, such as SC162 and SC303. A range such as `sc.select(50, 60)` passes as typed.
 - `math()` into an SD that CLICK lets a program write, such as SD29, SD61 and SD147.
 - A hex `math()` into YD.
 - A `copy()` into YD of an integer or a number register, or of TXT with `to_value` or `to_ascii`.
