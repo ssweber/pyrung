@@ -71,6 +71,8 @@
 - `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
 - `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
 - A constant that you `copy()` or `fill()` into a DH or YD now stores its value on a CLICK. `copy(14, dh[1])` exports as `copy(14,DH1)` (it exported `copy(Eh,DH1)`, and a CLICK stored 0).
+- `generate_circuitpy()` now writes an `IntEnum` member as its number. `copy(Mode.RUN, ds[1])` writes 1 (it raised `RuntimeError`).
+- `run_for()`, `history.at()` and the generated code.py now run a pack, an unpack or a `blockcopy()` with a pointer outside its bank the same way `step()` does. They set the address-error flag only when `step()` sets it (the code.py could raise `ValueError`, and `run_for()` could set the flag when `step()` did not).
 
 ## v0.17.0 (2026-11-18)
 

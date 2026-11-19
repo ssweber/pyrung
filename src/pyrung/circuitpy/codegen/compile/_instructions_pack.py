@@ -29,6 +29,8 @@ from ._primitives import (
     _compile_set_out_of_range_fault_body,
     _compile_value,
     _pack_store_expr,
+    _pointer_check_lines,
+    _refuse,
 )
 
 
@@ -40,9 +42,9 @@ def _compile_pack_bits_instruction(
 ) -> list[str]:
     dest_type = _value_type_name(instr.dest)
     if dest_type not in {"INT", "WORD", "DINT", "REAL"}:
-        raise TypeError("pack_bits destination must be INT, WORD, DINT, or REAL")
+        _refuse(ctx, TypeError, "pack_bits destination must be INT, WORD, DINT, or REAL")
     if _range_type_name(instr.bit_block) != "BOOL":
-        raise TypeError("pack_bits source range must contain BOOL tags")
+        _refuse(ctx, TypeError, "pack_bits source range must contain BOOL tags")
     width = 16 if dest_type in {"INT", "WORD"} else 32
     stem = ctx.next_name("packbits")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
@@ -50,10 +52,12 @@ def _compile_pack_bits_instruction(
     )
     static_len = _static_range_length(instr.bit_block)
     if static_len is not None and static_len > width:
-        raise ValueError(
-            f"pack_bits destination width is {width} bits but block has {static_len} tags"
+        _refuse(
+            ctx,
+            ValueError,
+            f"pack_bits destination width is {width} bits but block has {static_len} tags",
         )
-    enabled_body = [*src_setup]
+    enabled_body = [*_pointer_check_lines(instr.dest, ctx, past_end_drops=True), *src_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -82,17 +86,17 @@ def _compile_pack_words_instruction(
 ) -> list[str]:
     dest_type = _value_type_name(instr.dest)
     if dest_type not in {"DINT", "REAL"}:
-        raise TypeError("pack_words destination must be DINT or REAL")
+        _refuse(ctx, TypeError, "pack_words destination must be DINT or REAL")
     if _range_type_name(instr.word_block) not in {"INT", "WORD"}:
-        raise TypeError("pack_words source range must contain INT/WORD tags")
+        _refuse(ctx, TypeError, "pack_words source range must contain INT/WORD tags")
     stem = ctx.next_name("packwords")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.word_block, ctx, stem=f"{stem}_src", include_addresses=False
     )
     static_len = _static_range_length(instr.word_block)
     if static_len is not None and static_len != 2:
-        raise ValueError(f"pack_words requires exactly 2 source tags; got {static_len}")
-    enabled_body = [*src_setup]
+        _refuse(ctx, ValueError, f"pack_words requires exactly 2 source tags; got {static_len}")
+    enabled_body = [*_pointer_check_lines(instr.dest, ctx, past_end_drops=True), *src_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -130,10 +134,10 @@ def _compile_pack_text_instruction(
 ) -> list[str]:
     source_type = _range_type_name(instr.source_range)
     if source_type != "CHAR":
-        raise TypeError("pack_text source range must contain CHAR tags")
+        _refuse(ctx, TypeError, "pack_text source range must contain CHAR tags")
     dest_type = _value_type_name(instr.dest)
     if dest_type not in {"INT", "DINT", "WORD", "REAL"}:
-        raise TypeError("pack_text destination must be INT, DINT, WORD, or REAL")
+        _refuse(ctx, TypeError, "pack_text destination must be INT, DINT, WORD, or REAL")
     ctx.mark_helper("_parse_pack_text_value")
     ctx.mark_helper("_store_real")
     stem = ctx.next_name("packtext")
@@ -180,9 +184,9 @@ def _compile_unpack_bits_instruction(
 ) -> list[str]:
     source_type = _value_type_name(instr.source)
     if source_type not in {"INT", "WORD", "DINT", "REAL"}:
-        raise TypeError("unpack_to_bits source must be INT, WORD, DINT, or REAL")
+        _refuse(ctx, TypeError, "unpack_to_bits source must be INT, WORD, DINT, or REAL")
     if _range_type_name(instr.bit_block) != "BOOL":
-        raise TypeError("unpack_to_bits destination range must contain BOOL tags")
+        _refuse(ctx, TypeError, "unpack_to_bits destination range must contain BOOL tags")
     width = 16 if source_type in {"INT", "WORD"} else 32
     stem = ctx.next_name("unpackbits")
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
@@ -197,10 +201,12 @@ def _compile_unpack_bits_instruction(
         bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFFFFFF)"
     static_len = _static_range_length(instr.bit_block)
     if static_len is not None and static_len > width:
-        raise ValueError(
-            f"unpack_to_bits source width is {width} bits but block has {static_len} tags"
+        _refuse(
+            ctx,
+            ValueError,
+            f"unpack_to_bits source width is {width} bits but block has {static_len} tags",
         )
-    enabled_body = [*dst_setup]
+    enabled_body = [*_pointer_check_lines(instr.source, ctx, past_end_drops=False), *dst_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -227,10 +233,10 @@ def _compile_unpack_words_instruction(
 ) -> list[str]:
     source_type = _value_type_name(instr.source)
     if source_type not in {"DINT", "REAL"}:
-        raise TypeError("unpack_to_words source must be DINT or REAL")
+        _refuse(ctx, TypeError, "unpack_to_words source must be DINT or REAL")
     dst_type = _range_type_name(instr.word_block)
     if dst_type not in {"INT", "WORD"}:
-        raise TypeError("unpack_to_words destination range must contain INT/WORD tags")
+        _refuse(ctx, TypeError, "unpack_to_words destination range must contain INT/WORD tags")
     stem = ctx.next_name("unpackwords")
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         instr.word_block, ctx, stem=f"{stem}_dst", include_addresses=False
@@ -251,8 +257,12 @@ def _compile_unpack_words_instruction(
         hi_store = f"({hi_expr} & 0xFFFF)"
     static_len = _static_range_length(instr.word_block)
     if static_len is not None and static_len != 2:
-        raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {static_len}")
-    enabled_body = [*dst_setup]
+        _refuse(
+            ctx,
+            ValueError,
+            f"unpack_to_words requires exactly 2 destination tags; got {static_len}",
+        )
+    enabled_body = [*_pointer_check_lines(instr.source, ctx, past_end_drops=False), *dst_setup]
     if static_len is None:
         enabled_body.extend(
             [

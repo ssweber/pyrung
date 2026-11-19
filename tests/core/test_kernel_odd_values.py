@@ -10,6 +10,7 @@ scans and its replays.
 
 from __future__ import annotations
 
+import enum
 import math as pymath
 import warnings
 from collections.abc import Callable
@@ -34,6 +35,15 @@ class Motor:
 class Pair:
     a = 0
     b = 0
+
+
+class Mode(enum.IntEnum):
+    IDLE = 0
+    RUN = 1
+
+
+class Name(enum.StrEnum):
+    SEVEN = "7"
 
 
 # DS100 points at TXT1, and TXT1 and TXT2 hold digits.  DS102 points below every bank,
@@ -91,6 +101,7 @@ KERNEL_FORMS: dict[str, tuple[Callable[[], Any], dict[str, Any]]] = {
         lambda: copy(ds[ds[102]], txt[ds[103]], convert=to_text()),
         {},
     ),
+    "IntEnum member": (lambda: math(ds[1] + Mode.RUN, ds[3]), {"DS3": 5}),
     "copy from past DS to below DS": (
         lambda: copy(ds[ds[103]], ds[ds[102]]),
         {"fault.address_error": True},
@@ -110,6 +121,8 @@ DECLINED_FORMS: dict[str, Callable[[], Any]] = {
     "inf into an Int": lambda: copy(float("inf"), ds[3]),
     "nan into a Bool": lambda: copy(float("nan"), c[3]),
     "bytes into an Int": lambda: copy(b"7", ds[3]),
+    # Stepping stores the member itself, which a code.py cannot hold.
+    "StrEnum member into a Char": lambda: copy(Name.SEVEN, txt[3]),
 }
 
 
