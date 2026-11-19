@@ -79,6 +79,16 @@
   - A range of one address, such as `ds.select(5, 5)`. Search two or more addresses.
   - A quote inside the text, such as `'sub"name'`. Write the text without it.
   - A constant outside its range, such as `2147483648` or text of more than 128 characters. Use a constant that fits.
+- CLICK validation of `send()` and `receive()` now reports `bank-not-allowed` for a status bit, an exception response or a destination in a bank that CLICK refuses (it reported `CLK_BANK_WRONG_ROLE`).
+  Pass the new code to `allow=`. `allow=["CLK_BANK_WRONG_ROLE"]` no longer lets these findings through.
+  A device id tag outside DS now reports `invalid-modbus-target` (it reported `CLK_BANK_WRONG_ROLE`).
+- CLICK validation and the export now refuse these `send()` and `receive()` forms, which CLICK's editor rejects (they exported them):
+  - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
+  - A remote start in SD, such as `send(remote_start="SD1", ...)`. Send to another bank.
+  - More registers than one request holds, such as `source=ds.select(1, 128)`. Split the transfer.
+  - `word_swap=True` for a form that has no word swap, such as one DS register. Drop `word_swap`.
+  - A source or destination range that is not consecutive addresses in one bank. Map the tags to consecutive addresses.
+  - An IP address that is not four numbers from 0 to 255, such as `"999.1.1.1"`. Write a valid address.
 - `pyrung.click.validation` no longer exports the `CLK_` codes of its checks of `math()`, the drums, contacts, `debounce()`, `flasher()` and `timed()`, such as `CLK_MATH_MODE_MIXED`, except `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS`. Validation still reports them.
   Write the code as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`.
 - The CLICK export now refuses a text constant that holds a quote among other characters in a comparison, `fill()` or `search()`, such as `txt[1] == 'a"b'` (it wrote `"a""b"`).

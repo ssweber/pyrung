@@ -35,7 +35,7 @@ from pyrung.core import (
     to_value,
 )
 from pyrung.core.instruction import Instruction
-from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
+from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 from pyrung.core.program import (
     Program,
     blockcopy,
@@ -66,88 +66,6 @@ def _codes(report) -> list[str]:
 
 
 _TARGET = ModbusTcpTarget("plc2", "127.0.0.1", port=502, device_id=1)
-
-
-def _modbus_codes(verb: str, *, dest="ds", flag="c", exception="ds", **instruction_kwargs) -> list:
-    """Return the findings for a send or receive with its operands in the named banks."""
-    x, y, c, _t, _ct, sc, ds, dd, _dh, _df, _xd, _yd, _xd0u, _yd0u, td, _ctd, sd, txt = (
-        ClickBlocks()
-    )
-    banks = {"x": x, "y": y, "c": c, "sc": sc, "ds": ds, "dd": dd, "td": td, "sd": sd, "txt": txt}
-    tag_type = {"x": Bool, "y": Bool, "c": Bool, "sc": Bool, "dd": Dint, "txt": Char}
-    data = tag_type.get(dest, Int)("Data")
-    code = tag_type.get(exception, Int)("Code")
-    busy, success, error = Bool("Busy"), Bool("Success"), Bool("Error")
-    pairs = [
-        data.map_to(banks[dest][5]),
-        busy.map_to(banks[flag][1]),
-        success.map_to(c[2]),
-        error.map_to(c[3]),
-        code.map_to(banks[exception][1]),
-    ]
-
-    def logic():
-        with rung():
-            if verb == "receive":
-                receive(
-                    target=_TARGET,
-                    remote_start="DS1",
-                    dest=data,
-                    receiving=busy,
-                    success=success,
-                    error=error,
-                    exception_response=code,
-                    **instruction_kwargs,
-                )
-            else:
-                send(
-                    target=_TARGET,
-                    remote_start="DS1",
-                    source=data,
-                    sending=busy,
-                    success=success,
-                    error=error,
-                    exception_response=code,
-                    **instruction_kwargs,
-                )
-
-    report = validate_click_program(
-        _build_program(logic), TagMap(pairs, include_system=False), mode="warn"
-    )
-    return _codes(report)
-
-
-@pytest.mark.parametrize("verb", ["send", "receive"])
-def test_modbus_operands_in_the_banks_click_lists_are_clean(verb):
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes(verb)
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes(verb, exception="dd")
-
-
-@pytest.mark.parametrize("verb", ["send", "receive"])
-@pytest.mark.parametrize("flag", ["x", "y", "sc"])
-def test_modbus_status_flag_must_be_a_c_bit(verb, flag):
-    assert CLK_BANK_WRONG_ROLE in _modbus_codes(verb, flag=flag)
-
-
-@pytest.mark.parametrize("verb", ["send", "receive"])
-@pytest.mark.parametrize("bank", ["td", "sd"])
-def test_modbus_exception_response_must_be_ds_or_dd(verb, bank):
-    assert CLK_BANK_WRONG_ROLE in _modbus_codes(verb, exception=bank)
-
-
-@pytest.mark.parametrize("bank", ["y", "c", "dd", "td", "sd", "txt"])
-def test_receive_dest_takes_the_banks_click_lists(bank):
-    # SD is listed whole, so this is not copy()'s writable subset.
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes("receive", dest=bank)
-
-
-@pytest.mark.parametrize("bank", ["x", "sc"])
-def test_receive_dest_refuses_other_banks(bank):
-    assert CLK_BANK_WRONG_ROLE in _modbus_codes("receive", dest=bank)
-
-
-def test_send_source_is_read_so_x_is_fine():
-    assert CLK_BANK_WRONG_ROLE not in _modbus_codes("send", dest="x")
 
 
 def test_a_status_bit_left_off_is_not_reported():

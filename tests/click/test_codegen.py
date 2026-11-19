@@ -2604,7 +2604,9 @@ class TestRoundTrip:
         assert instruction.remote_address.register_type.name == register_type
         assert instruction.remote_address.address == raw
 
-        rows = pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows
+        # This test is about how the address is written. It pairs a coil or discrete-input
+        # address with DS1, so it lets the pairing finding through.
+        rows = pyrung_to_ladder(ns["logic"], ns["mapping"], allow=("bank-not-allowed",)).main_rows
         assert f"remote_start={csv_address}," in rows[1][-1]
 
     @pytest.mark.parametrize(

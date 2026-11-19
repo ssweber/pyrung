@@ -2360,7 +2360,7 @@ def test_device_id_outside_ds_is_refused(register):
                         remote_start="DS1", dest=DS1)
         """
     )
-    with pytest.raises(LadderExportError, match="invalid for device_id.*CLICK takes DS"):
+    with pytest.raises(LadderExportError, match="device_id: must be a number or a DS address"):
         pyrung_to_ladder(logic, mapping)
 
 
