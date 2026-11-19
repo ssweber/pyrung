@@ -20,7 +20,7 @@ from pyrung.click.validation import (
     CLK_PTR_CONTEXT_ONLY_COPY,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Dint, Int, TagType
+from pyrung.core import Block, Bool, Dint, Int, TagType, udt
 from pyrung.core.copy_converters import to_value
 from pyrung.core.program import (
     Program,
@@ -558,6 +558,53 @@ def test_a_refusal_with_no_explanation_keeps_laddercodecs_message():
     assert finding.display.hint == finding.suggestion
 
 
+def test_a_label_names_an_address_without_quotes_when_the_map_names_none():
+    # laddercodec quotes each address when it gets no names at all.
+    prog = _program(lambda: copy(ds[2], c[2]))
+    (finding,) = validate_click_program(prog, TagMap(include_system=False), mode="strict").errors
+    label = finding.display.frames[0].caret_label
+    assert "C2" in label
+    assert "'C2'" not in label
+    assert "'DS2'" not in label
+
+
+def test_a_label_spells_a_field_as_the_call_does():
+    @udt()
+    class Motor:
+        speed: Int
+
+    valve = Bool("Valve")
+    prog = _program(lambda: copy(Motor.speed, valve))
+    mapping = TagMap([Motor.speed.map_to(ds[1]), valve.map_to(c[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].lines == ("copy(Motor.speed, Valve)",)
+    assert "Motor.speed (DS1)" in finding.display.frames[0].caret_label
+
+
+def test_a_label_spells_a_range_as_the_call_does():
+    (finding,) = _named_errors(lambda count, valve: pack_bits(x.select(1, 16), count))
+    assert "X1..X16" in finding.display.frames[0].caret_label
+
+
+def test_a_problem_line_names_the_tags():
+    count = Int("Count")
+    prog = _program(lambda: copy(count, txt[1], convert=to_value))
+    mapping = TagMap([count.map_to(ds[1])], include_system=False)
+    (finding,) = validate_click_program(prog, mapping, mode="strict").errors
+    assert finding.display.frames[0].caret_label == ""
+    assert "Count (DS1)" in finding.display.problem
+    assert "Count (DS1)" in finding.message
+
+
+def test_an_export_error_names_each_place_once():
+    prog = _program(lambda: copy(sd[10], sd[1]))
+    with pytest.raises(LadderExportError) as exc_info:
+        pyrung_to_ladder(prog, TagMap())
+    text = str(exc_info.value)
+    assert " --> Main:R1" in text
+    assert _at("CopyInstruction") not in text
+
+
 def test_each_copy_family_field_has_an_argument():
     # A field that laddercodec renames or adds would lose its caret.
     from pyrung.click.validation.fields import _FIELD_ARGUMENTS
@@ -566,8 +613,8 @@ def test_each_copy_family_field_has_an_argument():
         f"{cls.__name__}.{field.name}"
         for cls in (Copy, BlockCopy, Fill, Pack, Unpack)
         for field in dataclasses.fields(cls)
-        # The verb is the kind, and the call does not show oneshot.
-        if field.name not in ("kind", "oneshot")
+        # The verb is the kind.
+        if field.name != "kind"
     }
     assert set(_FIELD_ARGUMENTS) == fields
 

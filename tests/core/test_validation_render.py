@@ -119,10 +119,10 @@ def test_pack_and_unpack_render_both_operands() -> None:
     )
 
 
-def test_location_frame_shows_the_call_with_a_caret_on_one_argument() -> None:
+def test_instruction_frame_shows_the_call_with_a_caret_on_one_argument() -> None:
     from pyrung import Int
     from pyrung.core.instruction import CopyInstruction
-    from pyrung.core.validation._common import location_frame
+    from pyrung.core.validation._common import instruction_frame
     from pyrung.core.validation.display import Frame
     from pyrung.core.validation.walker import ProgramLocation
 
@@ -138,7 +138,7 @@ def test_location_frame_shows_the_call_with_a_caret_on_one_argument() -> None:
         arg_path="instruction",
     )
 
-    assert location_frame(location, copy, argument=1, caret_label="refused") == Frame(
+    assert instruction_frame(location, copy, argument=1, caret_label="refused") == Frame(
         location="Mixer:R3.1",
         lines=("copy(Count, Count)",),
         caret=(0, 12, 5),
@@ -146,14 +146,12 @@ def test_location_frame_shows_the_call_with_a_caret_on_one_argument() -> None:
     )
     # With no argument, or an argument that the call does not show, there is no caret.
     for argument in (None, "convert"):
-        frame = location_frame(location, copy, argument=argument, caret_label="refused")
+        frame = instruction_frame(location, copy, argument=argument, caret_label="refused")
         assert (frame.lines, frame.caret, frame.caret_label) == (("copy(Count, Count)",), None, "")
-    # With no instruction, the frame holds the location alone.
-    assert location_frame(location) == Frame(location="Mixer:R3.1")
 
 
-def test_location_frame_leaves_out_a_call_that_it_cannot_write_in_full() -> None:
-    from pyrung.core.validation._common import location_frame
+def test_instruction_frame_leaves_out_a_call_that_it_cannot_write_in_full() -> None:
+    from pyrung.core.validation._common import instruction_frame
     from pyrung.core.validation.display import Frame
     from pyrung.core.validation.walker import ProgramLocation
 
@@ -162,18 +160,57 @@ def test_location_frame_leaves_out_a_call_that_it_cannot_write_in_full() -> None
 
     location = ProgramLocation("main", None, 0, (), 0, "CustomInstruction", "instruction")
 
-    assert location_frame(location, CustomInstruction(), argument=0) == Frame(location="Main:R1")
+    assert instruction_frame(location, CustomInstruction(), argument=0) == Frame(location="Main:R1")
 
 
-def test_location_frame_names_the_source_line_of_the_instruction() -> None:
+def test_instruction_frame_names_the_source_line_of_the_instruction() -> None:
     from pyrung import Int
     from pyrung.core.instruction import CopyInstruction
-    from pyrung.core.validation._common import location_frame
+    from pyrung.core.validation._common import instruction_frame
     from pyrung.core.validation.walker import ProgramLocation
 
     copy = CopyInstruction(1, Int("Count"))
     copy.source_file, copy.source_line = "plant.py", 12
     location = ProgramLocation("main", None, 0, (), 0, "CopyInstruction", "instruction")
 
-    frame = location_frame(location, copy)
+    frame = instruction_frame(location, copy)
     assert (frame.location, frame.source) == ("Main:R1", "plant.py:12")
+
+
+def test_location_frame_marks_a_span_of_its_line() -> None:
+    from pyrung.core.validation._common import location_frame
+    from pyrung.core.validation.display import Frame
+    from pyrung.core.validation.walker import ProgramLocation
+
+    location = ProgramLocation("main", None, 4, (), 0, "CopyInstruction", "instruction")
+
+    assert location_frame(location, "DS[Ptr]", (3, 3), caret_label="unguarded") == Frame(
+        location="Main:R5", lines=("DS[Ptr]",), caret=(0, 3, 3), caret_label="unguarded"
+    )
+    assert location_frame(location, "DS[Ptr]", caret_label="unguarded") == Frame(
+        location="Main:R5", lines=("DS[Ptr]",)
+    )
+    # With no line, the frame holds the location alone.
+    assert location_frame(location) == Frame(location="Main:R5")
+
+
+def test_a_call_shows_what_its_author_wrote() -> None:
+    from pyrung.click import ClickBlocks
+    from pyrung.core.copy_converters import to_text
+    from pyrung.core.instruction import BlockCopyInstruction, CopyInstruction
+    from pyrung.core.validation.render import argument_span, render_instruction
+
+    blocks = ClickBlocks()
+    ds, txt = blocks.ds, blocks.txt
+
+    terminated = CopyInstruction(ds[1], txt[1], convert=to_text(termination_code="$0D"))
+    assert render_instruction(terminated, "")[0] == (
+        "copy(DS1, TXT1, convert=to_text(termination_code='$0D'))"
+    )
+    # blockcopy() stores a dest tag as the range it writes.
+    into_tag = BlockCopyInstruction(ds.select(1, 3), ds[10])
+    assert argument_span(into_tag, 1) == ("blockcopy(DS1..DS3, DS10)", (20, 4))
+    assert argument_span(CopyInstruction(ds[1], ds[2], oneshot=True), "oneshot") == (
+        "copy(DS1, DS2, oneshot=True)",
+        (23, 4),
+    )

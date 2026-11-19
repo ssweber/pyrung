@@ -66,15 +66,14 @@ def _issue_place(issue: Issue) -> str:
 def _issue_preview(issue: Issue) -> str:
     """Return the lines of the exception text for *issue*.
 
-    A CLICK finding renders as several lines, and its ``-->`` frame line names the place.
-    Such a message prints without the place in front of it, so the place shows once.
-    The later lines of any message are indented so that they read as part of the issue.
+    A message with a `` --> `` frame line already names its place, so it prints with no
+    place in front of it. Any other message prints after its place. The later lines of a
+    message are indented so that they read as part of the issue.
     """
-    place = _issue_place(issue)
     message = str(issue["message"])
-    if f" --> {place}" in message.splitlines():
+    if any(line.startswith(" --> ") for line in message.splitlines()):
         return "  " + message.replace("\n", "\n  ")
-    return f"  {place}: " + message.replace("\n", "\n    ")
+    return f"  {_issue_place(issue)}: " + message.replace("\n", "\n    ")
 
 
 # ---- Export summary ----

@@ -15,7 +15,7 @@
 
 ### What's new
 
-- A CLICK finding for `copy()`, `blockcopy()`, `fill()` or a pack or unpack call now shows your call with a caret under the argument that CLICK refuses. The finding names each address by its tag, such as `Count (DS1)`. Each value that CLICK refuses has a finding of its own.
+- When CLICK refuses a value in `copy()`, `blockcopy()`, `fill()` or a pack or unpack call, the finding now prints your call with a caret under that value. Its text names a mapped address by its tag, such as `Count (DS1)`. Each refused value gets a finding of its own.
 
 ### Behaviour changes
 

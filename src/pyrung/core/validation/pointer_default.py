@@ -11,11 +11,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.condition import CompareEq, CompareGt, CompareLt
-from pyrung.core.validation._common import (
-    _conjunction_satisfiable,
-    compact_location,
-)
-from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
+from pyrung.core.validation._common import _conjunction_satisfiable, location_frame
+from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.render import caret_of
 from pyrung.core.validation.severity import Severity
 from pyrung.core.validation.walker import OperandFact, ProgramLocation, walk_program
@@ -59,18 +56,6 @@ class PointerDefaultReport:
         if not self.findings:
             return "No pointer default violations."
         return f"{len(self.findings)} pointer default violation(s)."
-
-
-def _location_frame(
-    site: ProgramLocation, code: str, span: tuple[int, int] | None, label: str
-) -> Frame:
-    """A diagnostic frame for a walker dereference site."""
-    return Frame(
-        location=compact_location(site.scope, site.subroutine, site.rung_index, site.branch_path),
-        lines=(code,),
-        caret=(0, span[0], span[1]) if span else None,
-        caret_label=label if span else "",
-    )
 
 
 def _grouped_pointer_facts(program: Program) -> dict[tuple[str, str], list[OperandFact]]:
@@ -193,7 +178,9 @@ def validate_pointer_defaults(
             display = FindingDisplay(
                 code=code,
                 severity=severity,
-                frames=tuple(_location_frame(f.location, target_name, span, label) for f in sites),
+                frames=tuple(
+                    location_frame(f.location, target_name, span, caret_label=label) for f in sites
+                ),
                 hint=hint,
             )
             findings.append(

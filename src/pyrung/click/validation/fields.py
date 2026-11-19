@@ -20,9 +20,9 @@ from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.core.expression import Expression
 from pyrung.core.memory_block import BlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.validation._common import location_frame
+from pyrung.core.validation._common import instruction_frame
 from pyrung.core.validation.display import FindingDisplay, Frame
-from pyrung.core.validation.render import render_instruction
+from pyrung.core.validation.render import operand_name, render_instruction
 
 from .findings import (
     CLK_COPY_RANGE_NOT_CONSECUTIVE,
@@ -60,9 +60,10 @@ _COPY_FAMILY_FIELDS: dict[str, tuple[str, str]] = {
     "UnpackToWordsInstruction": ("source", "word_block"),
 }
 
-# The argument of the pyrung call that holds each field of laddercodec's Copy family: the
-# index of a positional argument, or the name of a keyword argument. The export writes a
-# fill() of one register as a Copy, so Copy.source is then the value of fill().
+# The argument of the pyrung call that holds each field of laddercodec's Copy family. An
+# int is the index of a positional argument, and a str is the name of a keyword argument.
+# The export writes a fill() of one register as a Copy, so Copy.source is then the value
+# of fill().
 _FIELD_ARGUMENTS: dict[str, int | str] = {
     "Copy.source": 0,
     "Copy.dest": 1,
@@ -70,22 +71,27 @@ _FIELD_ARGUMENTS: dict[str, int | str] = {
     "Copy.suppress_zero": "convert",
     "Copy.exponential": "convert",
     "Copy.termination_code": "convert",
+    "Copy.oneshot": "oneshot",
     "BlockCopy.source_start": 0,
     "BlockCopy.source_end": 0,
     "BlockCopy.dest_start": 1,
     "BlockCopy.dest_end": 1,
     "BlockCopy.convert": "convert",
     "BlockCopy.termination_code": "convert",
+    "BlockCopy.oneshot": "oneshot",
     "Fill.value": 0,
     "Fill.dest_start": 1,
     "Fill.dest_end": 1,
+    "Fill.oneshot": "oneshot",
     "Pack.source_start": 0,
     "Pack.source_end": 0,
     "Pack.dest": 1,
     "Pack.allow_whitespace": "allow_whitespace",
+    "Pack.oneshot": "oneshot",
     "Unpack.source": 0,
     "Unpack.dest_start": 1,
     "Unpack.dest_end": 1,
+    "Unpack.oneshot": "oneshot",
 }
 
 # The fields of each Copy family instruction that hold a range of addresses.
@@ -373,41 +379,68 @@ def _call_text(instruction: Any) -> str:
     return render_instruction(instruction, "")[0]
 
 
-def _operand_addresses(operand: Any, resolver: _ResolutionCache) -> set[tuple[str, int]]:
-    """Return the CLICK addresses of the tags that *operand* names, as ``(bank, number)``.
+def _operand_tags(operand: Any) -> list[tuple[Tag, str]]:
+    """Return each tag that *operand* names, with the name that the call spells for it.
 
-    A pointer such as ``DS[Ptr]`` names the tag ``Ptr``.
+    A pointer such as ``DS[Ptr]`` names ``Ptr``. A range such as ``X1..X16`` spells each
+    tag by the block's name and the tag's address.
     """
     if isinstance(operand, ImmediateRef):
         operand = operand.value
     if isinstance(operand, IndirectRef):
-        tags = [operand.pointer]
-    elif isinstance(operand, Tag):
-        tags = [operand]
-    elif isinstance(operand, BlockRange):
-        tags = list(operand.tags())
-    else:
-        tags = []
-    addresses: set[tuple[str, int]] = set()
-    for tag in tags:
-        slot = resolver.resolve_direct_tag(tag)
-        if slot is not None and slot.address is not None:
-            addresses.add((slot.memory_type, slot.address))
-    return addresses
+        return [(operand.pointer, operand_name(operand.pointer))]
+    if isinstance(operand, Tag):
+        return [(operand, operand_name(operand))]
+    if isinstance(operand, BlockRange):
+        name = operand.block.name
+        return [(operand.block[addr], f"{name}{addr}") for addr in operand.addresses]
+    return []
+
+
+def _address_text(address: str) -> str:
+    """Return a CLICK address in CLICK's form, such as ``X001`` for ``X1``."""
+    return format_address_display(*parse_address(address))
+
+
+def _tag_address(tag: Tag, resolver: _ResolutionCache) -> str | None:
+    """Return the CLICK address of *tag* in CLICK's form, or None if it has none."""
+    slot = resolver.resolve_direct_tag(tag)
+    if slot is None or slot.address is None:
+        return None
+    return format_address_display(slot.memory_type, slot.address)
 
 
 def tag_names(tag_map: TagMap) -> dict[str, str]:
-    """Return the tag name of each mapped CLICK address, for laddercodec's text."""
-    return {slot.hardware_address: slot.logical_name for slot in tag_map.mapped_slots()}
+    """Return the name of each mapped CLICK address, for laddercodec's text.
+
+    A tag of the program is named as a call spells it, such as ``Motor.speed`` for a field
+    of a structure.
+    """
+    names = {slot.hardware_address: slot.logical_name for slot in tag_map.mapped_slots()}
+    for entry in tag_map.tags():
+        names[_address_text(tag_map.resolve(entry.logical))] = operand_name(entry.logical)
+    for block in tag_map.blocks():
+        for index in block.logical_addresses:
+            address = _address_text(tag_map.resolve(block.logical, index))
+            names[address] = operand_name(block.logical[index])
+    return names
 
 
-def _names_without(names: Mapping[str, str], addresses: set[tuple[str, int]]) -> dict[str, str]:
-    """Return *names* without the entries for *addresses*."""
-    if not addresses:
-        return dict(names)
-    return {
-        address: name for address, name in names.items() if parse_address(address) not in addresses
-    }
+def _call_names(
+    instruction: Any, names: Mapping[str, str], resolver: _ResolutionCache
+) -> dict[str, str]:
+    """Return *names*, with each address in the call named as the call spells it.
+
+    laddercodec quotes every address when it gets no names, so each address of the call
+    has an entry. An address that the call spells as an address is named by itself.
+    """
+    call = dict(names)
+    for attribute in _COPY_FAMILY_FIELDS[type(instruction).__name__]:
+        for tag, name in _operand_tags(getattr(instruction, attribute)):
+            address = _tag_address(tag, resolver)
+            if address is not None:
+                call[address] = name
+    return call
 
 
 def _sentence(text: str) -> str:
@@ -434,7 +467,8 @@ class _Refusal:
     detail: str
     click_id: str | None
     advice: str | None
-    # The instruction attribute that holds the refused operand, or None.
+    # The instruction attribute that holds the refused operand, or the name of the refused
+    # keyword argument. It is None for a field that no argument holds.
     attribute: str | None
 
     def finding(self, extra_advice: Sequence[str] = ()) -> ClickFinding:
@@ -519,19 +553,26 @@ def _refusal(
     else:
         # A keyword argument, such as the converter, holds no address.
         attribute = argument
-    frame = location_frame(base_location, instruction, argument=argument)
-    # A family that laddercodec has not converted has no detail, and its short text is
-    # the whole message. Such a refusal keeps the message as its problem line.
-    detail = refusal.detail(names) if frame.caret is not None else ""
+    frame = instruction_frame(base_location, instruction, argument=argument)
+    call_names = _call_names(instruction, names, resolver)
+    text = refusal.message(call_names)
+    # A refusal of a family that laddercodec has not converted has no detail. Its short
+    # text is then the whole message, so the message stays as the problem line.
+    detail = refusal.detail(call_names) if frame.caret is not None else ""
     if detail:
-        # The caret marks the operand, so the label leaves out the operand's name.
-        own = _operand_addresses(operand, resolver)
-        frame = replace(frame, caret_label=refusal.short(_names_without(names, own)))
+        # The caret marks the operand, so the label gives the operand's addresses and not
+        # its names.
+        own = {
+            address: address
+            for tag, _name in _operand_tags(operand)
+            if (address := _tag_address(tag, resolver)) is not None
+        }
+        frame = replace(frame, caret_label=refusal.short({**call_names, **own}))
         problem = ""
     else:
-        problem = str(refusal)
-    message = f"CLICK refuses {_call_text(instruction)} at {location_text}. {refusal}"
-    if refusal.click_id and refusal.click_id not in str(refusal):
+        problem = text
+    message = f"CLICK refuses {_call_text(instruction)} at {location_text}. {text}"
+    if refusal.click_id and refusal.click_id not in text:
         message += f" CLICK's error is {refusal.click_id}."
     return _Refusal(
         code=code,

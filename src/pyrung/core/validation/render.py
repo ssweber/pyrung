@@ -256,8 +256,8 @@ def with_rung_line(conds: Any) -> str:
 # Instructions
 # ---------------------------------------------------------------------------
 
-# Each instruction whose operands render in place: the DSL's name for each operand, and
-# the instruction attribute that holds it, in the order the call takes them.
+# The operands of each instruction that renders in full, in the order the call takes them.
+# Each operand pairs the DSL's name for it with the instruction attribute that holds it.
 _OPERANDS: dict[str, tuple[tuple[str, str], ...]] = {
     "CopyInstruction": (("source", "source"), ("target", "dest")),
     "BlockCopyInstruction": (("source", "source"), ("dest", "dest")),
@@ -280,7 +280,9 @@ def _converter_text(converter: Any) -> str:
     if converter.exponential:
         options.append("exponential=True")
     if converter.termination_code is not None:
-        options.append(f"termination_code={converter.termination_code}")
+        written = converter.written_termination_code
+        code = converter.termination_code if written is None else written
+        options.append(f"termination_code={code!r}")
     return f"to_text({', '.join(options)})"
 
 
@@ -313,15 +315,20 @@ def _arguments(instr: Any, target_name: str) -> tuple[str, list[tuple[str, str, 
     if itype in ("OutInstruction", "LatchInstruction", "ResetInstruction"):
         return verb, [("target", operand_name(instr.target), False)]
     if itype in _OPERANDS:
+        # An instruction can hold an operand or a converter in another form than the
+        # author wrote. For example, blockcopy() holds a dest tag as the range it writes.
+        # The call shows what the author wrote.
         args = [
-            (name, operand_name(getattr(instr, attr)), False) for name, attr in _OPERANDS[itype]
+            (name, operand_name(getattr(instr, f"authored_{attr}", getattr(instr, attr))), False)
+            for name, attr in _OPERANDS[itype]
         ]
-        # A copy across text runs a converter that the author may not have written.
         converter = getattr(instr, "authored_convert", getattr(instr, "convert", None))
         if converter is not None:
             args.append(("convert", _converter_text(converter), True))
         if getattr(instr, "allow_whitespace", False):
             args.append(("allow_whitespace", "True", True))
+        if getattr(instr, "oneshot", False):
+            args.append(("oneshot", "True", True))
         return verb, args
     if itype == "CalcInstruction":
         written = getattr(instr, "source_expression", instr.expression)
