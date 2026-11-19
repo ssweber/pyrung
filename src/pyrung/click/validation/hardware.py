@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from laddercodec import Code
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import (
@@ -650,14 +651,65 @@ def _evaluate_timer_preset_floor(
 _PAIRED_BANKS = {"T": "TD", "CT": "CTD"}
 
 
+def _evaluate_done_bits(
+    instruction: Any,
+    pairs: tuple[tuple[str, str], ...],
+    base_location: ProgramLocation,
+    profile: HardwareProfile,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """Report a Done bit that has no address or sits in a bank that CLICK refuses.
+
+    laddercodec checks the accumulator of an Out variant timer and never sees its Done bit,
+    so the Done bit is checked here as a timer done bit.
+    """
+    code = str(Code.BANK_NOT_ALLOWED)
+    findings: list[ClickFinding] = []
+    for done_field, _acc_field in pairs:
+        location = _instruction_location(base_location, f"instruction.{done_field}")
+        resolution = resolver.resolve_operand_slots(getattr(instruction, done_field))
+        if resolution.unresolved:
+            findings.append(_unresolved_finding(location, mode, "operand"))
+            continue
+        for slot in resolution.slots:
+            if profile.valid_for_role(slot.memory_type, "timer_done_bit"):
+                continue
+            location_text = _format_location(location)
+            findings.append(
+                ClickFinding(
+                    code=code,
+                    severity=_route_severity(code, mode),
+                    message=_wrong_role_text(
+                        slot,
+                        "timer done bit",
+                        location_text,
+                        _role_banks(profile, "timer_done_bit"),
+                    ),
+                    location=location_text,
+                )
+            )
+    return findings
+
+
 def _evaluate_timer_pairs(
     instruction: Any,
     base_location: ProgramLocation,
+    profile: HardwareProfile,
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     findings: list[ClickFinding] = []
-    pairs = _family_rows("TIMER_PAIR_FIELDS").get(type(instruction).__name__, ())
+    from .families import family_of
+
+    family = family_of(instruction)
+    if family is not None:
+        pairs = family.timer_pairs.get(type(instruction).__name__, ())
+        findings.extend(
+            _evaluate_done_bits(instruction, pairs, base_location, profile, mode, resolver)
+        )
+    else:
+        pairs = _family_rows("TIMER_PAIR_FIELDS").get(type(instruction).__name__, ())
     for done_field, acc_field in pairs:
         done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
         done_slots = resolver.resolve_operand_slots(done).slots

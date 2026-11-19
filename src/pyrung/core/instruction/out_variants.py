@@ -88,6 +88,8 @@ class ToggleInstruction(Instruction):
     _conditions = ("enable_condition",)
     _structural_fields = ()
     _exclusive_fields = ("target",)
+    _call_operands = (("target", "target"),)
+    _call_keywords = ()
 
     def __init__(self, target: Tag | ImmediateRef, enable_condition: Any = None):
         self.target = target

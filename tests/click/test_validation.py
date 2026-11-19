@@ -11,9 +11,9 @@ from pyrung.click import ClickBlocks, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click.validation import (
+    CLK_COPY_RANGE_NOT_CONSECUTIVE,
     CLK_EXPR_ONLY_IN_MATH,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
-    CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
@@ -1654,7 +1654,7 @@ class TestImmediateValidation:
         report = validate_click_program(prog, tag_map, mode="strict")
         codes = _finding_codes(report)
         assert CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED not in codes
-        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y not in codes
+        assert Code.IMMEDIATE_COIL_NOT_Y not in codes
 
     def test_out_immediate_contiguous_range_has_no_immediate_findings(self):
         Start = Bool("Start")
@@ -1673,7 +1673,7 @@ class TestImmediateValidation:
         report = validate_click_program(prog, tag_map, mode="strict")
         codes = _finding_codes(report)
         assert CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS not in codes
-        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y not in codes
+        assert Code.IMMEDIATE_COIL_NOT_Y not in codes
 
     def test_immediate_non_contiguous_range_is_error(self):
         Start = Bool("Start")
@@ -1696,7 +1696,13 @@ class TestImmediateValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS for f in report.errors)
+        assert any(f.code == CLK_COPY_RANGE_NOT_CONSECUTIVE for f in report.errors)
+
+        from pyrung.click import pyrung_to_ladder
+        from pyrung.click.ladder import LadderExportError
+
+        with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE"):
+            pyrung_to_ladder(prog, tag_map)
 
     def test_immediate_in_copy_is_error(self):
         Start = Bool("Start")
@@ -1742,7 +1748,7 @@ class TestImmediateValidation:
         tag_map = TagMap([Start.map_to(x[1]), Coil.map_to(c[2])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y for f in report.errors)
+        assert any(f.code == Code.IMMEDIATE_COIL_NOT_Y for f in report.errors)
 
     @pytest.mark.parametrize("bank", ["c", "y"])
     @pytest.mark.parametrize("contact", ["no", "nc"])
