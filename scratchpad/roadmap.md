@@ -271,6 +271,20 @@ the VS Code extension release together. [nothing, with a joint release]
   export refuses it unless the hand check allows it. Remove the unreachable indirect-dest code in
   `CalcInstruction.execute` and `_dest_type`. [nothing]
 
+- **Parse operands once, in the builder.** Four places each decide which operands are valid: each instruction's
+  `execute()`, the compiled kernel's code generator, laddercodec's CLICK rules, and the operand declarations
+  (`_operands`) that bob/build-refusals adds. Sam wants no fourth copy (2026-11-19, "parse, don't validate sounds like a
+  winner"). [nothing]
+  - Each builder turns its arguments into checked operand objects, once. `execute()`, the kernel, CircuitPython codegen
+    and the CLICK export accept only those objects, so their defensive code goes.
+  - The split, in Sam's words to the planner: "get the 80% via 20% and then let laddercodec get the long tail". pyrung's
+    parse checks the shape of each operand: its kind, its type, a range against a tag, and a count. laddercodec keeps
+    every CLICK rule (which banks, which addresses, which constants), and the export passes it the checked objects.
+  - The operand declarations become pyrung's one grammar.
+  - Why: build-refusals took three review rounds and kernel-agree two. Every finding was one copy disagreeing with
+    another.
+  - Start after both branches land.
+
 ## how(): after the recording core
 
 `how()` stays and grows. The last resort stays small. A goal reached only through it is a missed connection in the
