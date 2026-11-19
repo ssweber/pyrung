@@ -14,6 +14,7 @@ A blank text constant is ``$00``, CLICK's ASCII-code constant for NUL (a TXT bla
 
 from __future__ import annotations
 
+import json
 import math as pymath
 
 import pytest
@@ -22,7 +23,8 @@ from pyrung import PLC
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.translator import click_real_literal
 from pyrung.click.ladder.types import LadderBundle, LadderExportError
-from pyrung.core import Program, rung
+from pyrung.click.validation import validate_click_program
+from pyrung.core import Int, Program, rung
 from pyrung.core.expression import lsh
 from pyrung.core.program import copy, fill, math, out, search
 from tests.click.helpers import exec_with_source, round_trip_logic, strip_pyrung_boilerplate
@@ -324,7 +326,8 @@ def test_blank_text_constants_export_as_ascii_code():
 def test_a_quote_on_its_own_exports_as_its_ascii_code():
     """Check that the export writes a text constant of one quote as ``$22``.
 
-    laddercodec can't yet read a quote inside a quoted text constant.
+    CLICK saves no end address for a Copy of a lone quote between outer quotes. So each
+    instruction keeps ``$22`` until a PLC run shows what CLICK writes.
     """
     with Program() as logic:
         with rung():
@@ -346,14 +349,118 @@ def test_a_quote_on_its_own_exports_as_its_ascii_code():
     assert after == before, code
 
 
-def test_a_text_constant_with_a_quote_among_other_characters_is_rejected():
-    # laddercodec can't yet read a quote inside quotes, and it reads $22 inside quotes as
-    # four characters.
+_TYPED_QUOTES = ['A"B', 'A""B', '"A', 'A"', '""', 'say "hi"']
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
+def test_a_copy_writes_a_quote_inside_its_text_as_typed(value, tmp_path):
+    # RESULTS9-10.md c10: CLICK saves a Copy's text as typed, with no escape for a quote.
+    from laddercodec import read_csv
+
     with Program() as logic:
-        with rung(txt[1] == 'a"b'):
+        with rung():
+            copy(value, txt[1])
+        with rung():
+            copy(value, txt[ds[1]])
+    bundle = pyrung_to_ladder(logic, TagMap())
+    assert _tokens(logic)[:2] == [f'copy("{value}",TXT1)', f'copy("{value}",TXT[DS1])']
+    bundle.write(tmp_path)
+    sources = [
+        instruction.source
+        for loaded in read_csv(tmp_path / "main.csv")
+        for instruction in loaded.instructions
+        if hasattr(instruction, "source")
+    ]
+    assert sources == [f'"{value}"', f'"{value}"']
+
+
+def _quoted_copies(value):
+    with Program() as logic:
+        with rung():
+            copy(value, txt[1])
+        with rung():
+            copy(value, txt[ds[1]])
+    return logic
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
+def test_a_copy_text_with_a_quote_round_trips(value):
+    code, before, after = round_trip_logic(_quoted_copies(value), TagMap())
+    assert after == before, code
+    assert f"copy({json.dumps(value)}, " in code
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
+def test_a_copy_text_with_a_quote_imports_from_a_click_project(value, tmp_path):
+    # laddercodec encodes the CSV as CLICK saves it, then decodes the CLICK form back.
+    from laddercodec import decode, encode, read_csv, write_csv
+
+    pyrung_to_ladder(_quoted_copies(value), TagMap()).write(tmp_path / "export")
+    click_form = encode(read_csv(tmp_path / "export" / "main.csv"))
+    (tmp_path / "click").mkdir()
+    write_csv(tmp_path / "click" / "main.csv", decode(click_form))
+    code = ladder_to_pyrung(tmp_path / "click")
+    namespace: dict[str, object] = {}
+    exec_with_source(code, namespace)
+    imported = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    tokens = [cell for row in imported.main_rows for cell in row if cell.startswith("copy(")]
+    assert tokens == [f'copy("{value}",TXT1)', f'copy("{value}",TXT[DS1])'], code
+
+
+# Each copy() text that laddercodec 8d117a1 reads back from the CSV as another text.
+_UNREADABLE = ['A",B', 'A" ,B', 'A" , B', '"["', 'A",TXT1', 'A=",B', 'A",oneshot=1', '","']
+
+
+def _unreadable_copy(value, form):
+    pointer = Int("P")
+    target = txt[pointer] if form == "pointer" else txt[1]
+    with Program() as logic:
+        with rung(x[1]):
+            copy(value, target, oneshot=form == "oneshot")
+    return logic, TagMap([pointer.map_to(ds[100])], include_system=False)
+
+
+@pytest.mark.parametrize("form", ["txt1", "pointer", "oneshot"])
+@pytest.mark.parametrize("value", _UNREADABLE)
+def test_a_copy_text_that_reads_back_as_another_is_refused_with_a_code(value, form):
+    logic, mapping = _unreadable_copy(value, form)
+    report = validate_click_program(logic, mapping, mode="strict")
+    assert [finding.code for finding in report.errors] == ["invalid-text-constant"]
+    with pytest.raises(LadderExportError, match=r"\[invalid-text-constant\]"):
+        pyrung_to_ladder(logic, mapping)
+    # The export refuses it even when the finding is allowed, so the CSV always reads back.
+    with pytest.raises(LadderExportError, match="invalid-text-constant: copy"):
+        pyrung_to_ladder(logic, mapping, allow=["invalid-text-constant"])
+
+
+def _quoted_compare(value):
+    with Program() as logic:
+        with rung(txt[1] == value):
             out(c[1])
+    return logic
+
+
+def _quoted_fill(value):
+    with Program() as logic:
+        with rung():
+            fill(value, txt.select(1, 4))
+    return logic
+
+
+def _quoted_search(value):
+    with Program() as logic:
+        with rung():
+            search(txt.select(1, 4) == value, result=ds[1], found=c[3])
+    return logic
+
+
+@pytest.mark.parametrize("build", [_quoted_compare, _quoted_fill, _quoted_search])
+def test_other_instructions_refuse_a_quote_among_other_characters(build):
+    # No one has yet checked on a CLICK how Fill, compare and search read a quote.
     with pytest.raises(LadderExportError, match="holds a quote among other characters"):
-        pyrung_to_ladder(logic, TagMap())
+        pyrung_to_ladder(
+            build('a"b'), TagMap(), allow=["invalid-text-constant", "constant-out-of-range"]
+        )
 
 
 def test_text_constant_with_embedded_nul_rejected():

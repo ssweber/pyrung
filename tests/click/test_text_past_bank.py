@@ -173,25 +173,15 @@ def test_a_constant_typed_within_txt1000_only_warns(store, start):
     assert any(f"TXT{start}" in cell for row in bundle.main_rows for cell in row)
 
 
-_QUOTE_REFUSED = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "laddercodec refuses a quote inside a text constant (invalid-text-constant). "
-        "CLICK accepts it (RESULTS9-10.md)."
-    ),
-)
-
-
 @pytest.mark.parametrize(
     ("store", "refused"),
     [
-        # RESULTS9-10.md: a doubled quote counts twice, so 'A"B' saves 4 characters.
-        pytest.param(
-            lambda level: copy('A"B', txt[998]), True, id="quote-at-998", marks=_QUOTE_REFUSED
-        ),
-        pytest.param(
-            lambda level: copy('A"B', txt[997]), False, id="quote-at-997", marks=_QUOTE_REFUSED
-        ),
+        # RESULTS9-10.md c10: CLICK saves a Copy's text as typed and counts each quote once,
+        # so 'A"B' saves 3 characters and 'A""B' saves 4.
+        pytest.param(lambda level: copy('A"B', txt[999]), True, id="quote-at-999"),
+        pytest.param(lambda level: copy('A"B', txt[998]), False, id="quote-at-998"),
+        pytest.param(lambda level: copy('A""B', txt[998]), True, id="two-quotes-at-998"),
+        pytest.param(lambda level: copy('A""B', txt[997]), False, id="two-quotes-at-997"),
         pytest.param(
             lambda level: copy(123456789.0, txt[989], convert=to_text()), False, id="real-at-989"
         ),

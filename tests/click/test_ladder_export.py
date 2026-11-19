@@ -815,7 +815,7 @@ def _quote_search(value):
 
 
 def test_a_quote_on_its_own_exports_as_its_character_code():
-    # laddercodec can't yet read a quote inside a quoted text constant. $22 is the quote.
+    # No one has yet checked on a CLICK how search reads a quote. $22 is the quote.
     bundle = pyrung_to_ladder(*_quote_search('"'))
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
@@ -842,8 +842,8 @@ def test_a_quote_on_its_own_loads_from_the_csv(tmp_path: Path):
 
 
 def test_the_export_refuses_a_quote_among_other_characters():
-    # laddercodec can't yet read a quote inside a quoted text constant. So the export
-    # refuses the text even when the finding is allowed.
+    # No one has yet checked on a CLICK how search reads a quote, so the export refuses a
+    # quote among other characters there, even when the finding is allowed.
     logic, mapping = _quote_search('sub"name')
     with pytest.raises(LadderExportError, match="holds a quote among other characters"):
         pyrung_to_ladder(logic, mapping, allow=["invalid-text-constant"])

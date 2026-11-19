@@ -46,7 +46,7 @@ def test_a_refused_table_marks_the_comparison():
     assert finding.suggestion == (
         "Copy the values into a range in one of those banks and search that."
     )
-    assert "Search.table_start takes DS, DD, DH, DF, TD, CTD, TXT." in finding.display.hint
+    assert "This field takes DS, DD, DH, DF, TD, CTD, TXT." in finding.display.hint
     assert finding.location == "main.rung[1].instruction[0](SearchInstruction).instruction"
 
 

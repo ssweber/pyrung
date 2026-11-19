@@ -32,6 +32,7 @@ from .hardware import (
     _evaluate_timer_pairs,
     _evaluate_timer_preset_floor,
     _evaluate_timer_preset_overflow,
+    _evaluate_unreadable_copy_text,
     _evaluate_wide_copy_constant,
     _evaluate_write_targets,
 )
@@ -222,6 +223,7 @@ _CHECKS = (
         110,
         lambda i, loc, c: _evaluate_wide_copy_constant(i, loc, c.mode, c.resolver),
     ),
+    Check("instruction", 120, lambda i, loc, c: _evaluate_unreadable_copy_text(i, loc, c.mode)),
     Check(
         "profile",
         10,

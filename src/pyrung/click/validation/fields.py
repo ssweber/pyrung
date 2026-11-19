@@ -163,6 +163,10 @@ class Operand:
     # Each instruction attribute that the argument holds, with its value. A finding's
     # location names the attribute.
     values: tuple[tuple[str, Any], ...]
+    # Each tag of the argument with the name that the call spells for it, where the value
+    # is a range that the call wrote as one tag. With None, ``tags()`` reads the tags from
+    # the values.
+    spelled: tuple[tuple[Tag, str], ...] | None = None
 
     @property
     def attributes(self) -> tuple[str, ...]:
@@ -171,6 +175,8 @@ class Operand:
 
     def tags(self) -> list[tuple[Tag, str]]:
         """Return each tag that the argument names, with the name that the call spells."""
+        if self.spelled is not None:
+            return list(self.spelled)
         return [found for _attribute, value in self.values for found in _value_tags(value)]
 
 
@@ -190,13 +196,43 @@ def declared_operands(instruction: Any, words: Mapping[str, str]) -> tuple[Opera
             (attribute, getattr(instruction, attribute, None)) for attribute in attributes
         )
         if any(value is not None for _attribute, value in values):
-            found.append(Operand(argument, words.get(attributes[0], name), values))
+            spelled = _authored_range_tags(instruction, *values[0]) if len(values) == 1 else None
+            found.append(Operand(argument, words.get(attributes[0], name), values, spelled))
 
     for index, (name, attribute) in enumerate(cls._call_operands or ()):
         add(index, name, _attributes(attribute))
     for name, attribute in (*cls._call_keyword_operands, *cls._call_chained):
         add(name, name, (attribute,))
     return tuple(found)
+
+
+def _authored_range_tags(
+    instruction: Any, attribute: str, value: Any
+) -> tuple[tuple[Tag, str], ...] | None:
+    """Return the tags of a range that the call wrote as one tag, or None.
+
+    A blockcopy() into one tag writes the range that starts at that tag, and keeps the tag
+    in ``authored_dest``. The range's first address takes that tag's name. Each later
+    address takes the name of its own tag, such as ``X003``. Where the first name spells
+    its own address, as ``x1`` spells X001, each later name takes the same form, such as
+    ``x3``. So the two ends of the range read alike.
+    """
+    authored = getattr(instruction, f"authored_{attribute}", None)
+    if not isinstance(authored, Tag) or not isinstance(value, BlockRange):
+        return None
+    first = operand_name(authored)
+    start = f"{value.block.name}{value.addresses[0]}"
+    form = _ADDRESS_FORM.fullmatch(first)
+    tags = [(value.block[address], address) for address in value.addresses[1:]]
+    if form is None or not _spells(first, start):
+        return ((authored, first), *((tag, operand_name(tag)) for tag, _address in tags))
+    letters, digits = form.groups()
+    width = len(digits) if digits.startswith("0") else 0
+    return ((authored, first), *((tag, f"{letters}{address:0{width}d}") for tag, address in tags))
+
+
+# A name in the form of a CLICK address, such as ``x1`` or ``X001``.
+_ADDRESS_FORM = re.compile(r"([A-Za-z]+)(\d+)")
 
 
 class Unbuildable(Exception):
@@ -217,8 +253,12 @@ def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) 
         return exporter._render_operand(value, path=f"instruction.{attribute}", source=instruction)
     except _RenderError as exc:
         if isinstance(value, str) and '"' in value:
-            # The export refuses a text that holds a quote among other characters. laddercodec
-            # refuses the quote with its own text, so validation hands it the quote doubled.
+            # The export refused the text. Fill and search hand laddercodec the quote doubled,
+            # which it refuses in its own words. A Copy hands it the text as typed, so
+            # laddercodec judges the rest of the text. A pyrung check in hardware.py reports a
+            # quote that the CSV can't hold.
+            if type(instruction).__name__ == "CopyInstruction":
+                return f'"{value}"'
             return '"{}"'.format(value.replace('"', '""'))
         raise Unbuildable from exc
 
@@ -358,20 +398,19 @@ def _call_names(
     """Return *names*, with each address of *operands* named as the call spells it.
 
     laddercodec quotes every address when it gets no names, so each address of the call
-    has an entry. An address that the call spells as an address, such as ``X1`` for
-    ``X001``, is named by itself. laddercodec would show any other name with the address
-    after it in brackets.
+    has an entry. laddercodec shows a name that spells its own address, such as ``X1``
+    for ``X001``, with no address in brackets after it.
     """
     call = dict(names)
     for tag, name in (found for operand in operands for found in operand.tags()):
         address = _tag_address(tag, resolver)
         if address is not None:
-            call[address] = address if _spells(name, address) else name
+            call[address] = name
     return call
 
 
 def _spells(name: str, address: str) -> bool:
-    """Return True if *name* is a spelling of the CLICK address *address*."""
+    """Return True if *name* spells the CLICK address *address*, as ``X1`` spells ``X001``."""
     try:
         return parse_address(name) == parse_address(address)
     except ValueError:
@@ -498,11 +537,12 @@ def _refusal(
     # text is then the whole message, so it stays as the problem line.
     detail = refusal.detail(call_names) if frame.caret is not None else ""
     if detail:
-        # The caret marks the operand, so the label gives the operand's addresses and not
-        # its names.
+        # The caret marks the operand, so the label gives the addresses of its tags and not
+        # their names. A name that spells its own address, such as X1 in X1..X3 or a tag
+        # named ds1 on DS1, stays as the call spells it.
         own = {
-            address: address
-            for tag, _name in (operand.tags() if operand is not None else ())
+            address: name if _spells(name, address) else address
+            for tag, name in (operand.tags() if operand is not None else ())
             if (address := _tag_address(tag, resolver)) is not None
         }
         frame = replace(frame, caret_label=refusal.short({**call_names, **own}))

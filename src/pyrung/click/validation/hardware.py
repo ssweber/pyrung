@@ -366,8 +366,8 @@ def _saved_constant_length(value: Any) -> int | None:
 
     CLICK sets a text Copy's end address from this length, not from the text it writes
     (1.5 into TXT1 ends at TXT3). Text and a whole number count in the export's spelling,
-    which is CLICK's saved form. A doubled quote counts twice, so "A""B" ends at TXT4
-    (clicknick ``buildbot/jobs/lc-diff-click/RESULTS9-10.md``).
+    which is CLICK's saved form. CLICK saves a Copy's text as typed and counts each quote
+    once, so "A"B" ends at TXT3 (clicknick ``buildbot/jobs/lc-diff-click/RESULTS9-10.md``).
 
     A Real keeps at most 7 digits, so 3.4028235E+38 saves as 3.402823E+38. From 1e7 up,
     CLICK saves a Real in E form: 123456789.0 as 1.234568E+08 and 1e10 as 1E+10
@@ -380,10 +380,7 @@ def _saved_constant_length(value: Any) -> int | None:
     if isinstance(value, ImmediateRef):
         value = value.value
     if isinstance(value, str):
-        if value == '"':
-            # The export writes a quote on its own as $22, one character.
-            return 1
-        return len(value.replace('"', '""'))
+        return len(value)
     if isinstance(value, bool):
         return 1
     if isinstance(value, int):
@@ -536,6 +533,41 @@ def _evaluate_text_past_bank(
                 if lowest >= bank.min_addr
                 else None
             ),
+        )
+    ]
+
+
+def _evaluate_unreadable_copy_text(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """Report a copy() text with a quote that the CSV can't hold.
+
+    laddercodec 8d117a1 accepts such a text in a Copy, but its CSV reader ends the text at
+    a quote before a comma. The export refuses the text, so validation reports it with
+    laddercodec's code for a text it refuses.
+    """
+    from laddercodec import Code
+
+    from pyrung.click.ladder.translator import UNREADABLE_COPY_TEXT, unreadable_copy_text
+
+    if type(instruction).__name__ != "CopyInstruction":
+        return []
+    if not unreadable_copy_text(instruction.source):
+        return []
+    code = Code.INVALID_TEXT_CONSTANT.value
+    location_text = _format_location(_instruction_location(base_location, "instruction.source"))
+    return [
+        ClickFinding(
+            code=code,
+            severity=_route_severity(code, mode),
+            message=(
+                f"copy() of the text {instruction.source!r} at {location_text} can't be "
+                f"written to the CSV. {UNREADABLE_COPY_TEXT}"
+            ),
+            location=location_text,
+            suggestion="Write the text without the quote.",
         )
     ]
 

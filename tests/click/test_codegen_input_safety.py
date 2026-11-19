@@ -32,7 +32,6 @@ def _bundle(token: str, condition: str = "-") -> LadderBundle:
         "math([x for x in []],DS1)",
         "math((x := 1),DS1)",
         "math(DS1.__class__,DS2)",
-        'copy("a"+str(1)+"b",TXT1)',
         'copy(f"{len([])}",TXT1)',
         """copy('"' + len([]) + '"',TXT1)""",
         'math(1 # "quoted comment",DS1)',
@@ -56,25 +55,42 @@ def test_condition_cannot_introduce_python_calls() -> None:
         ladder_to_pyrung(_bundle("out(Y001)", "len([])==0"))
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        'a "quoted" value, with (parentheses)',
-        "C:\\new\\test\\",
-        '";len([]);#',
-        "Unicode: \u03bb",
-    ],
-)
-def test_click_string_values_remain_literal_data(value: str) -> None:
-    token = 'copy("' + value.replace('"', '""') + '",TXT1)'
-    tree = ast.parse(ladder_to_pyrung(_bundle(token)))
-    copy_call = next(
+def _text_argument(code: str, name: str) -> object:
+    tree = ast.parse(code)
+    call = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "copy"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
     )
-    assert isinstance(copy_call.args[0], ast.Constant)
-    assert copy_call.args[0].value == value
+    assert isinstance(call.args[0], ast.Constant)
+    return call.args[0].value
+
+
+_STRING_VALUES = [
+    'a "quoted" value, with (parentheses)',
+    "C:\\new\\test\\",
+    '";len([]);#',
+    "Unicode: \u03bb",
+]
+
+
+@pytest.mark.parametrize("value", _STRING_VALUES)
+def test_click_string_values_remain_literal_data(value: str) -> None:
+    # A Copy keeps its text as typed, with no escape for a quote.
+    token = 'copy("' + value + '",TXT1)'
+    assert _text_argument(ladder_to_pyrung(_bundle(token)), "copy") == value
+
+
+@pytest.mark.parametrize("value", _STRING_VALUES)
+def test_a_fill_text_reads_a_doubled_quote_as_one(value: str) -> None:
+    token = 'fill("' + value.replace('"', '""') + '",TXT1..TXT2)'
+    assert _text_argument(ladder_to_pyrung(_bundle(token)), "fill") == value
+
+
+def test_a_copy_text_that_looks_like_python_stays_text() -> None:
+    # laddercodec reads this source as the text a"+str(1)+"b, so the import does too.
+    code = ladder_to_pyrung(_bundle('copy("a"+str(1)+"b",TXT1)'))
+    assert _text_argument(code, "copy") == 'a"+str(1)+"b'
 
 
 def test_raw_instruction_fields_are_literal_data() -> None:

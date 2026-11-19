@@ -87,7 +87,7 @@ _CLICK_BANK_NAMES: frozenset[str] = frozenset(BANKS)
 #: CLICK's ASCII-code constant for the TXT blank (NUL).  ``""`` writes no TXT.
 BLANK_TEXT_CONSTANT = "$00"
 
-#: CLICK's ASCII-code constant for a quote.  laddercodec can't yet read a quote inside quotes.
+#: CLICK's ASCII-code constant for a quote.  A quote on its own exports as this constant.
 QUOTE_TEXT_CONSTANT = "$22"
 
 # ---- Expression/condition operator maps ----
@@ -487,24 +487,39 @@ class _TranslatorMixin:
         NUL inside quotes would end the constant early.  pyrung's ``""`` is the
         blank too (a CHAR stores it as NUL), so it exports the same way.
 
-        CLICK's editor accepts a quote inside a quoted constant, but laddercodec
-        can't yet read one.  So a quote on its own exports as ``$22``, and the
-        export refuses a text that holds a quote among other characters.
+        CLICK keeps a Copy's text as typed and has no escape for a quote.  So a
+        ``copy()`` text with a quote exports between plain outer quotes.  No one has yet
+        checked on a CLICK how Fill, compare and search read a quote, so the export
+        refuses a quote among other characters there.  A quote on its own exports as
+        ``$22``.
         """
         if value in ("", BLANK_CHAR):
             return BLANK_TEXT_CONSTANT
         if value == '"':
             return QUOTE_TEXT_CONSTANT
         if '"' in value:
-            self._raise_issue(
-                path=path,
-                message=(
-                    f"Text constant {value!r} holds a quote among other characters, "
-                    "which the CLICK export can't write. Write the text without the "
-                    f"quote. A quote on its own exports as {QUOTE_TEXT_CONSTANT}."
-                ),
-                source=source,
-            )
+            if type(source).__name__ != "CopyInstruction":
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"Text constant {value!r} holds a quote among other characters, "
+                        "which the CLICK export can't write. Write the text without the "
+                        f"quote. A quote on its own exports as {QUOTE_TEXT_CONSTANT}."
+                    ),
+                    source=source,
+                )
+            if unreadable_copy_text(value):
+                # The export refuses it even when the finding is allowed, so the CSV
+                # always reads back.
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"invalid-text-constant: copy() of the text {value!r} can't be "
+                        f"written to the CSV. {UNREADABLE_COPY_TEXT} Write the text "
+                        "without the quote."
+                    ),
+                    source=source,
+                )
         if BLANK_CHAR in value:
             self._raise_issue(
                 path=path,
@@ -515,7 +530,7 @@ class _TranslatorMixin:
                 ),
                 source=source,
             )
-        return _quote(value)
+        return f'"{value}"' if '"' in value else _quote(value)
 
     def _render_contact_token(self, value: Any, *, path: str, source: Any) -> str:
         return self._render_operand(
@@ -1023,6 +1038,32 @@ def click_real_literal(value: float) -> str | None:
     if "." not in mantissa:
         mantissa += ".0"
     return f"{mantissa}E{'+' if exponent >= 0 else '-'}{abs(exponent):02d}"
+
+
+#: Why the CSV can't hold a copy() text that ``unreadable_copy_text()`` finds.
+UNREADABLE_COPY_TEXT = "A quote in the text ends it early when the CSV is read."
+
+
+def unreadable_copy_text(value: Any) -> bool:
+    """Return True if *value* is a copy() source text that the CSV can't hold."""
+    if not isinstance(value, str) or '"' not in value or value == '"':
+        return False
+    return not _copy_text_reads_back(value)
+
+
+def _copy_text_reads_back(value: str) -> bool:
+    """Return True if laddercodec reads ``copy("<value>",TXT1)`` back as the text *value*.
+
+    A Copy keeps a quote inside its text as typed.  A quote before a comma can then end
+    the text early when the CSV is read.  Validation reports laddercodec's other
+    refusals of the text, such as its length, so this check skips them.
+    """
+    from laddercodec import Copy
+    from laddercodec.csv.converter import reads_back
+    from laddercodec.operands.unchecked import unchecked
+
+    with unchecked():
+        return reads_back(Copy(f'"{value}"', "TXT1"))
 
 
 def _quote(value: str) -> str:
