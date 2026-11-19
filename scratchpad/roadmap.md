@@ -429,6 +429,24 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **Some accepted forms never write anything.** Under Sam's fault-only ruling (2026-11-19), a form that raises or
+  only sets a fault flag on every data is refused at build. bob/build-refusals left these forms accepted, and they
+  still write nothing. Each one needs a run over several data before a refusal.
+  - `forloop()` with a `randint()` count whose bound is a Real.
+  - `+ [list]` into a Bool or a Char.
+  - `calc(sqrt(...))` over text or a range.
+  - A copy with a converter (`convert=`) whose every data only faults.
+- **Odd forms that write something, for Sam to rule on.** They run, so refusing one is Sam's call.
+  - `math(range, Bool)` always writes True.
+  - `copy(Timer[1], txt)` stores the Timer object in the TXT.
+- **More checks show the caret under the first match only.** #103 marks the refused argument in each copy-family
+  finding. These checks still mark the first place the text matches, which can be the wrong argument:
+  `core/validation/_common.py:1536`, `choices_violation.py:165`, `cmp_conditions.py:723`, `physical_realism.py:286`
+  and `math_conditions.py:150`.
+- **The kernel declines an `IntFlag` constant.** Stepping stores its number (`Fl.A | Fl.B` gives 3), so the kernel
+  could compile it as it compiles an `IntEnum`. The decline is safe and only costs speed.
+- **An aggregate outside `math()` gets one finding only.** A `.sum()` in a `copy()` source or a compare is reported as
+  `CLK_EXPR_ONLY_IN_MATH`, and the range check does not run on it. The export still refuses a scattered range there.
 - **A rung over CLICK's 32 rows can export.** pyrung's Click export counts one row for each CSV row. In CLICK many
   boxes are taller than one row. On 2026-11-18 the export of `plc_stores` wrote a rung of 17 CSV rows, a Fill and
   16 Copies. laddercodec counted 34 rows, and its `encode()` refused the rung. The bob/hw-split branch split that
