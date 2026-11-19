@@ -31,6 +31,8 @@
   Write `copy(5, txt[1])`, which stores the digit "5".
 - `copy()`, `blockcopy()` and `fill()` forms that raised when their rung ran are now refused when you build the program.
   Write the form that the message names.
+- `generate_circuitpy()` now raises `NotImplementedError` for a value that a code.py cannot hold, such as `Timer[1]`, a whole block, a `.select()` range, `float("inf")` or `b"7"` (the code.py raised `NameError` or `TypeError` on the board).
+  Pass a tag, a pointer, a finite number or text in its place.
 - A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
   If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
 - The CLICK export now refuses a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`).
@@ -63,6 +65,11 @@
 
 ### Fixes
 
+- `history.at()` and `fork_from()` now return an older scan of a program with one of these forms (they raised `TypeError` or `NameError` once the scan had left the recent-state cache):
+  - `math(None, ...)`.
+  - Text or a TXT in `math()` into a DF, such as `math(txt[1] + txt[2], df[1])`.
+  - A value that is not a tag, a pointer, a finite number or text, such as `copy(Timer[1], txt[1])` or `copy(float("inf"), ds[1])`.
+- `copy()` with `convert=to_text()` or `convert=to_binary` into a register that is not a TXT now sets the out-of-range flag and writes nothing in `run_for()`, `run_until()`, `history.at()` and the generated code.py, as stepping does (they wrote one digit into each register from the target on, with no flag).
 - `fill()` into two or more YD registers now exports, as a CLICK does (it was refused).
 - A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does (it raised `ValueError` on a letter or a blank TXT).
 - `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.

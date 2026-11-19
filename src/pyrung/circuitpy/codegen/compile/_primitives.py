@@ -155,7 +155,7 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
         )
     if isinstance(expr, LiteralExpr):
-        return repr(expr.value)
+        return _compile_constant(expr.value)
 
     if isinstance(expr, BinaryExpr):
         left = _compile_expression_impl(
@@ -1430,6 +1430,49 @@ def _past_end_keeps(value: Any) -> bool:
     return isinstance(value, (IndirectRef, IndirectExprRef)) and value.block._past_end_keeps
 
 
+def _target_address_error_lines(target: Any, ctx: CodegenContext) -> list[str]:
+    """Return lines that raise IndexError for a target pointer below its bank or in a gap.
+
+    The index helper sets the address-error flag before it raises, and the guard drops
+    the copy.  A pointer past the bank's end passes, so the source is still read.
+    Stepping checks the target this way before it reads the source.
+    """
+    if isinstance(target, ImmediateRef):
+        target = target.tag
+    if not isinstance(target, (IndirectRef, IndirectExprRef)):
+        return []
+    binding = ctx.block_bindings.get(id(target.block))
+    if binding is None:
+        raise RuntimeError(f"Missing block binding for indirect target {target.block.name!r}")
+    helper = ctx.use_indirect_block(binding.block_id)
+    if isinstance(target, IndirectRef):
+        addr_expr = _compile_value(target.pointer, ctx)
+    else:
+        addr_expr = _compile_expression_impl(target.expr, ctx)
+    return [
+        f"_copy_target_addr = int({addr_expr})",
+        f"if _copy_target_addr <= {binding.end}:",
+        f"    {helper}(_copy_target_addr)",
+    ]
+
+
+def _copy_source_past_end_test(value: Any, ctx: CodegenContext) -> str | None:
+    """Return a test that a Copy's source pointer is past the end of its bank.
+
+    Return ``None`` for a source that :func:`_past_end_keeps` does not hold.
+    """
+    if not _past_end_keeps(value):
+        return None
+    binding = ctx.block_bindings.get(id(value.block))
+    if binding is None:
+        raise RuntimeError(f"Missing block binding for indirect ref {value.block.name!r}")
+    if isinstance(value, IndirectRef):
+        addr_expr = _compile_value(value.pointer, ctx)
+    else:
+        addr_expr = _compile_expression_impl(value.expr, ctx)
+    return f"int({addr_expr}) > {binding.end}"
+
+
 def _compile_copy_source(value: Any, ctx: CodegenContext) -> str:
     """Return a Copy's source, read as :func:`_compile_value` reads it.
 
@@ -1557,4 +1600,48 @@ def _compile_value(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-    return repr(value)
+    return _compile_constant(value)
+
+
+class UnsupportedValue(NotImplementedError):
+    """Raised when generated code cannot hold a value that the program reads.
+
+    The runner treats it as a kernel it cannot build and steps the scans.
+    ``compile_instruction`` adds the call and its place to the message, and sets
+    ``located``.
+    """
+
+    located = False
+
+
+def _compile_constant(value: Any) -> str:
+    """Return *value* as a Python literal, or raise :class:`UnsupportedValue`.
+
+    Only the constants that generated code reads the way stepping does pass.  The repr()
+    of anything else, such as a range, a structure, a Block, Inf, NaN or bytes, either
+    names something that generated code does not define or computes something else.
+    """
+    if type(value) in (bool, int, str) or (type(value) is float and math.isfinite(value)):
+        return repr(value)
+    raise UnsupportedValue(f"It reads {_shown_value(value)} as a value.")
+
+
+def _shown_value(value: Any) -> str:
+    """Return how the program wrote *value*, as far as it can be told."""
+    from enum import Enum
+
+    from pyrung.core.memory_block import Block, RangeSlotView, SlotView
+    from pyrung.core.structure import InstanceView
+
+    if isinstance(value, Enum):
+        return f"{type(value).__name__}.{value.name}"
+    if isinstance(value, InstanceView):
+        return f"{value._owner.name}[{value._index}]"
+    if isinstance(value, (SlotView, RangeSlotView)):
+        return "a .slot() view"
+    if isinstance(value, (BlockRange, IndirectBlockRange)):
+        return "a range from .select()"
+    if isinstance(value, Block):
+        return f"the whole block {value.name}"
+    name = getattr(value, "name", None)
+    return name if isinstance(name, str) else repr(value)
