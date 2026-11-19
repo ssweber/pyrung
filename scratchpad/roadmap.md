@@ -433,10 +433,19 @@ All [nothing] unless marked.
   only sets a fault flag on every data is refused at build. bob/build-refusals left these forms accepted, and they
   still write nothing. Before a refusal, the builder of that change runs each form over several input values and
   checks that none writes. Each refusal waits on "Parse operands once, in the builder", in section 5.
-  - `forloop()` with a `randint()` count whose bound is a Real.
-  - A `math()` that adds a list (`ds[1] + [ds[2], ds[3]]`) into a Bool or a Char.
-  - A `calc()` whose formula takes `sqrt()` of a text tag or a range.
-  - A copy with a converter (`convert=`) whose every data only faults.
+  - A converter that cannot convert the source or target type, such as `copy(ds[1], ds[3], convert=to_value)`.
+  - A `search()` operator or value that does not fit the range type, such as `search(txt.select(1, 2) >= "A", ...)`
+    or `search(ds.select(1, 2) >= "A", ...)`.
+  - An expression whose operation fails for its types, such as `math(ds[1] + "5", ds[3])`. Others:
+    - A `math()` that adds a list (`ds[1] + [ds[2], ds[3]]`) into a Bool or a Char.
+    - A `calc()` whose formula takes `sqrt()` of a text tag or a range.
+  - An empty range, such as `shift(x.select(17, 20))` or `fill(5, x.select(17, 20))`.
+  - Text of two or more characters into a Char range, such as `fill("AB", txt.select(3, 4))`.
+  - A `run_function()` or `run_enabled_function()` input in `ins` that the scan cannot read, such as
+    `ins={"a": ds[1] + None}`.
+  - A `forloop()` count that is always 0, such as `forloop("0")` or `forloop(randint(df[1], 5))`. A `randint()`
+    count whose bound is a Real is one.
+  - The full cases are in the r4 section of `../pyrung-wt/buildbot/jobs/build-refusals/REVIEW.md`.
 - **Odd forms that write something, for Sam to rule on.** They run, so refusing one is Sam's call.
   - `math(range, Bool)` always writes True.
   - `copy(Timer[1], txt)` stores the Timer object in the TXT.

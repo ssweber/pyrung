@@ -141,11 +141,9 @@ def _value_sides() -> Iterator[Side]:
     yield from _point_sides(WRD, "P")
 
 
-# One case: a function that builds the instruction from the pointer tags, the pointer
-# values, and whether the instruction's types are wrong.  pyrung builds a program with the
-# wrong types, and stepping raises only when the instruction reaches the type check.  The
-# kernel declines such a program, and generate_circuitpy() refuses it.
-Case = tuple[Callable[[dict[str, Any]], Any], dict[str, int], bool]
+# One case: a function that builds the instruction from the pointer tags, and the pointer
+# values.
+Case = tuple[Callable[[dict[str, Any]], Any], dict[str, int]]
 
 
 def _pairs(
@@ -153,8 +151,6 @@ def _pairs(
     build: Callable[[Any, Any], Any],
     firsts: Iterator[Side],
     seconds: Iterator[Side],
-    *,
-    wrong_type: bool = False,
 ) -> Iterator[tuple[str, Case]]:
     second_sides = list(seconds)
     for first_label, first, first_places in firsts:
@@ -171,7 +167,6 @@ def _pairs(
                         (
                             lambda p, first=first, second=second: build(first(p), second(p)),
                             ptrs,
-                            wrong_type,
                         ),
                     )
 
@@ -195,9 +190,6 @@ def _cases() -> Iterator[tuple[str, Case]]:
     yield from _pairs("pack_bits", pack_bits, gap_bits, _point_sides(SPW, "Q"))
     words = list(_range_sides(WRD, "A", "B", 2))
     yield from _pairs("pack_words", pack_words, iter(words), _point_sides(DNT, "Q"))
-    yield from _pairs(
-        "pack_words", pack_words, iter(words), _point_sides(WRD, "Q"), wrong_type=True
-    )
     texts = _range_sides(TXT, "A", "B", 3)
     yield from _pairs("pack_text", pack_text, texts, _point_sides(WRD, "Q"))
     bits = _range_sides(BIT, "A", "B", 3)
@@ -205,14 +197,11 @@ def _cases() -> Iterator[tuple[str, Case]]:
     gap_bits = _range_sides(SPB, "A", "B", 3)
     yield from _pairs("unpack_to_bits", unpack_to_bits, _point_sides(SPW, "Q"), gap_bits)
     yield from _pairs("unpack_to_words", unpack_to_words, _point_sides(DNT, "Q"), iter(words))
-    yield from _pairs(
-        "unpack_to_words", unpack_to_words, _point_sides(WRD, "Q"), iter(words), wrong_type=True
-    )
 
 
 def _program(case: Case) -> Program | None:
     """Return the program of one rung that runs *case*, or None if pyrung refuses it."""
-    build, ptrs, _ = case
+    build, ptrs = case
     pointers = {name: Int(name, default=value) for name, value in ptrs.items()}
     try:
         with warnings.catch_warnings():
@@ -293,11 +282,7 @@ def test_the_kernel_runs_the_scan_as_stepping_does(label: str) -> None:
     case = CASES[label]
     program = _program(case)
     assert program is not None
-    compiled = _outcome(program, CompiledPLC)
-    if case[2]:
-        assert compiled == ("declined",)
-    else:
-        assert compiled == _outcome(program, PLC)
+    assert _outcome(program, CompiledPLC) == _outcome(program, PLC)
 
 
 @pytest.mark.parametrize("label", list(CASES))
@@ -307,11 +292,7 @@ def test_the_code_py_runs_the_scan_as_stepping_does(
     case = CASES[label]
     program = _program(case)
     assert program is not None
-    code_py = _code_py_outcome(program, monkeypatch)
-    if case[2]:
-        assert code_py == ("refused",)
-    else:
-        assert code_py == _outcome(program, PLC)
+    assert _code_py_outcome(program, monkeypatch) == _outcome(program, PLC)
 
 
 def _long_run(label: str) -> Any:
@@ -352,9 +333,14 @@ def test_a_long_run_runs_in_the_kernel_and_lands_where_stepping_does(
     assert stats.scans["undone"] == 0
 
 
-def test_a_long_run_of_a_wrong_type_steps_with_no_warning(loop_from_first_scan: None) -> None:
-    with warnings.catch_warnings():
-        # The kernel declines without the warning about a bug in pyrung.
-        warnings.simplefilter("error", RuntimeWarning)
-        stats = _long_run("pack_words(wrd[A..B] in, wrd[Q] past)")
-    assert stats.scans["interpreted"] == 30
+def _wrong_type_cases() -> Iterator[tuple[str, Case]]:
+    """Yield each pack of words into an Int, and each unpack of an Int into words."""
+    words = list(_range_sides(WRD, "A", "B", 2))
+    yield from _pairs("pack_words", pack_words, iter(words), _point_sides(WRD, "Q"))
+    yield from _pairs("unpack_to_words", unpack_to_words, _point_sides(WRD, "Q"), iter(words))
+
+
+def test_pyrung_refuses_words_through_an_int_when_you_build_it() -> None:
+    # An Int holds one word.  Each of these forms raises or writes nothing on every scan.
+    built = [label for label, case in _wrong_type_cases() if _program(case) is not None]
+    assert built == []

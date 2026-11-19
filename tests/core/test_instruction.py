@@ -706,35 +706,39 @@ class TestPackBitsInstruction:
         new_state = execute(instr, SystemState())
         assert new_state.tags["Dest"] == 0
 
-    def test_pack_bits_17_into_16_bit_dest_raises(self):
+    # A range without pointers that is too long is refused at build
+    # (tests/core/test_build_refusals.py).  A range with pointers has its length only
+    # at scan time.
+    def test_pack_bits_17_through_pointers_into_16_bit_dest_raises(self):
         from pyrung.core.instruction import PackBitsInstruction
 
         C = Block("C", TagType.BOOL, 1, 100)
         Dest = Int("Dest")
-        instr = PackBitsInstruction(C.select(1, 17), Dest)
+        instr = PackBitsInstruction(C.select(Int("Lo"), Int("Hi")), Dest)
 
         with pytest.raises(ValueError, match="width is 16"):
-            execute(instr, SystemState())
+            execute(instr, SystemState().with_tags({"Lo": 1, "Hi": 17}))
 
-    def test_pack_bits_33_into_32_bit_dest_raises(self):
+    def test_pack_bits_33_through_pointers_into_32_bit_dest_raises(self):
         from pyrung.core.instruction import PackBitsInstruction
 
         C = Block("C", TagType.BOOL, 1, 100)
         Dest = Dint("Dest")
-        instr = PackBitsInstruction(C.select(1, 33), Dest)
+        instr = PackBitsInstruction(C.select(Int("Lo"), Int("Hi")), Dest)
 
         with pytest.raises(ValueError, match="width is 32"):
-            execute(instr, SystemState())
+            execute(instr, SystemState().with_tags({"Lo": 1, "Hi": 33}))
 
-    def test_pack_bits_invalid_dest_type_raises(self):
-        from pyrung.core.instruction import PackBitsInstruction
+    def test_pack_bits_invalid_dest_type_is_refused(self):
+        from pyrung import Program, pack_bits, rung
 
         C = Block("C", TagType.BOOL, 1, 100)
         Dest = Bool("Dest")
-        instr = PackBitsInstruction(C.select(1, 8), Dest)
 
-        with pytest.raises(TypeError, match="destination"):
-            execute(instr, SystemState())
+        with Program():
+            with rung():
+                with pytest.raises(TypeError, match="got the Bool tag Dest as dest"):
+                    pack_bits(C.select(1, 8), Dest)
 
     def test_pack_bits_oneshot(self):
         from pyrung.core.instruction import PackBitsInstruction
@@ -816,35 +820,37 @@ class TestPackWordsInstruction:
 
         assert new_state.tags["Dest"] == -65536
 
-    def test_pack_words_length_not_two_raises(self):
+    def test_pack_words_length_not_two_through_pointers_raises(self):
         from pyrung.core.instruction import PackWordsInstruction
 
         DS = Block("DS", TagType.INT, 1, 100)
         Dest = Dint("Dest")
-        instr = PackWordsInstruction(DS.select(1, 3), Dest)
+        instr = PackWordsInstruction(DS.select(Int("Lo"), Int("Hi")), Dest)
 
         with pytest.raises(ValueError, match="exactly 2"):
-            execute(instr, SystemState())
+            execute(instr, SystemState().with_tags({"Lo": 1, "Hi": 3}))
 
-    def test_pack_words_invalid_dest_type_raises(self):
-        from pyrung.core.instruction import PackWordsInstruction
+    def test_pack_words_invalid_dest_type_is_refused(self):
+        from pyrung import Program, pack_words, rung
 
         DS = Block("DS", TagType.INT, 1, 100)
         Dest = Int("Dest")
-        instr = PackWordsInstruction(DS.select(1, 2), Dest)
 
-        with pytest.raises(TypeError, match="destination"):
-            execute(instr, SystemState())
+        with Program():
+            with rung():
+                with pytest.raises(TypeError, match="got the Int tag Dest as dest"):
+                    pack_words(DS.select(1, 2), Dest)
 
-    def test_pack_words_invalid_source_type_raises(self):
-        from pyrung.core.instruction import PackWordsInstruction
+    def test_pack_words_invalid_source_type_is_refused(self):
+        from pyrung import Program, pack_words, rung
 
         C = Block("C", TagType.BOOL, 1, 100)
         Dest = Dint("Dest")
-        instr = PackWordsInstruction(C.select(1, 2), Dest)
 
-        with pytest.raises(TypeError, match="source tags"):
-            execute(instr, SystemState())
+        with Program():
+            with rung():
+                with pytest.raises(TypeError, match="of 2 Bool tags as word_block"):
+                    pack_words(C.select(1, 2), Dest)
 
     def test_pack_words_oneshot(self):
         from pyrung.core.instruction import PackWordsInstruction
@@ -953,35 +959,36 @@ class TestUnpackToBitsInstruction:
         for i in range(1, 33):
             assert new_state.tags[f"C{i}"] is True
 
-    def test_unpack_int_to_17_bits_raises(self):
+    def test_unpack_int_to_17_bits_through_pointers_raises(self):
         from pyrung.core.instruction import UnpackToBitsInstruction
 
         Source = Int("Source")
         C = Block("C", TagType.BOOL, 1, 100)
-        instr = UnpackToBitsInstruction(Source, C.select(1, 17))
+        instr = UnpackToBitsInstruction(Source, C.select(Int("Lo"), Int("Hi")))
 
         with pytest.raises(ValueError, match="width is 16"):
-            execute(instr, SystemState().with_tags({"Source": 0}))
+            execute(instr, SystemState().with_tags({"Source": 0, "Lo": 1, "Hi": 17}))
 
-    def test_unpack_dint_to_33_bits_raises(self):
+    def test_unpack_dint_to_33_bits_through_pointers_raises(self):
         from pyrung.core.instruction import UnpackToBitsInstruction
 
         Source = Dint("Source")
         C = Block("C", TagType.BOOL, 1, 100)
-        instr = UnpackToBitsInstruction(Source, C.select(1, 33))
+        instr = UnpackToBitsInstruction(Source, C.select(Int("Lo"), Int("Hi")))
 
         with pytest.raises(ValueError, match="width is 32"):
-            execute(instr, SystemState().with_tags({"Source": 0}))
+            execute(instr, SystemState().with_tags({"Source": 0, "Lo": 1, "Hi": 33}))
 
-    def test_unpack_to_bits_invalid_source_type_raises(self):
-        from pyrung.core.instruction import UnpackToBitsInstruction
+    def test_unpack_to_bits_invalid_source_type_is_refused(self):
+        from pyrung import Program, rung, unpack_to_bits
 
         Source = Bool("Source")
         C = Block("C", TagType.BOOL, 1, 100)
-        instr = UnpackToBitsInstruction(Source, C.select(1, 8))
 
-        with pytest.raises(TypeError, match="source"):
-            execute(instr, SystemState())
+        with Program():
+            with rung():
+                with pytest.raises(TypeError, match="got the Bool tag Source as source"):
+                    unpack_to_bits(Source, C.select(1, 8))
 
     def test_unpack_to_bits_oneshot(self):
         from pyrung.core.instruction import UnpackToBitsInstruction
@@ -1068,35 +1075,37 @@ class TestUnpackToWordsInstruction:
         assert new_state.tags["DS1"] == -1
         assert new_state.tags["DS2"] == -1
 
-    def test_unpack_to_words_length_not_two_raises(self):
+    def test_unpack_to_words_length_not_two_through_pointers_raises(self):
         from pyrung.core.instruction import UnpackToWordsInstruction
 
         Source = Dint("Source")
         DS = Block("DS", TagType.INT, 1, 100)
-        instr = UnpackToWordsInstruction(Source, DS.select(1, 3))
+        instr = UnpackToWordsInstruction(Source, DS.select(Int("Lo"), Int("Hi")))
 
         with pytest.raises(ValueError, match="exactly 2"):
-            execute(instr, SystemState().with_tags({"Source": 0}))
+            execute(instr, SystemState().with_tags({"Source": 0, "Lo": 1, "Hi": 3}))
 
-    def test_unpack_to_words_invalid_source_type_raises(self):
-        from pyrung.core.instruction import UnpackToWordsInstruction
+    def test_unpack_to_words_invalid_source_type_is_refused(self):
+        from pyrung import Program, rung, unpack_to_words
 
         Source = Int("Source")
         DS = Block("DS", TagType.INT, 1, 100)
-        instr = UnpackToWordsInstruction(Source, DS.select(1, 2))
 
-        with pytest.raises(TypeError, match="source"):
-            execute(instr, SystemState())
+        with Program():
+            with rung():
+                with pytest.raises(TypeError, match="got the Int tag Source as source"):
+                    unpack_to_words(Source, DS.select(1, 2))
 
-    def test_unpack_to_words_invalid_dest_type_raises(self):
-        from pyrung.core.instruction import UnpackToWordsInstruction
+    def test_unpack_to_words_invalid_dest_type_is_refused(self):
+        from pyrung import Program, rung, unpack_to_words
 
         Source = Dint("Source")
         C = Block("C", TagType.BOOL, 1, 100)
-        instr = UnpackToWordsInstruction(Source, C.select(1, 2))
 
-        with pytest.raises(TypeError, match="destination tags"):
-            execute(instr, SystemState().with_tags({"Source": 0}))
+        with Program():
+            with rung():
+                with pytest.raises(TypeError, match="of 2 Bool tags as word_block"):
+                    unpack_to_words(Source, C.select(1, 2))
 
     def test_unpack_to_words_oneshot(self):
         from pyrung.core.instruction import UnpackToWordsInstruction
@@ -1426,30 +1435,24 @@ class TestSearchInstruction:
     """Test SEARCH instruction."""
 
     def test_search_found_must_be_bool(self):
-        from pyrung.core.instruction import SearchInstruction
+        from pyrung import Program, rung, search
 
         DS = Block("DS", TagType.INT, 1, 10)
-        Result = Int("Result")
 
-        with pytest.raises(TypeError, match="found= must be a BOOL tag"):
-            SearchInstruction(
-                DS.select(1, 3) == 1,
-                result=Result,
-                found=Int("Found"),
-            )
+        with pytest.raises(TypeError, match=r"^search\(\) got the Int tag Found as found\."):
+            with Program(strict=False):
+                with rung():
+                    search(DS.select(1, 3) == 1, result=Int("Result"), found=Int("Found"))
 
     def test_search_result_must_be_int_or_dint(self):
-        from pyrung.core.instruction import SearchInstruction
+        from pyrung import Program, rung, search
 
         DS = Block("DS", TagType.INT, 1, 10)
-        Found = Bool("Found")
 
-        with pytest.raises(TypeError, match="result= must be an INT or DINT tag"):
-            SearchInstruction(
-                DS.select(1, 3) == 1,
-                result=Real("Result"),
-                found=Found,
-            )
+        with pytest.raises(TypeError, match=r"^search\(\) got the Real tag Result as result\."):
+            with Program(strict=False):
+                with rung():
+                    search(DS.select(1, 3) == 1, result=Real("Result"), found=Bool("Found"))
 
     def test_search_invalid_condition_rejected(self):
         from pyrung.core.instruction import SearchInstruction

@@ -18,6 +18,7 @@ from pyrung.click.capabilities import (
 )
 from pyrung.click.validation import validate_click_program
 from pyrung.core import to_value
+from pyrung.core.instruction import Instruction
 from pyrung.core.program import (
     Program,
     blockcopy,
@@ -117,6 +118,29 @@ _ds, _dd, _dh, _df, _yd, _txt = (
 )
 
 
+# pyrung refuses these forms when the program is built.  The test builds each one again
+# with that check turned off, so CLICK validation still sees it.
+REFUSED_WHEN_BUILT = {
+    "pack_bits 17 C->DS",
+    "pack_bits 32 C->DH",
+    "pack_bits 33 C->DD",
+    "pack_words DD->DF",
+    "unpack_bits DD->DS",
+    "unpack_bits DS->32 C",
+    "unpack_bits DH->32 C",
+    "unpack_bits DD->33 C",
+    "unpack_words DS->DH",
+}
+
+
+def _build(write) -> Program:
+    prog = Program(strict=False)
+    with prog:
+        with rung(_x[1]):
+            write()
+    return prog
+
+
 @pytest.mark.parametrize(
     ("case", "write", "expected"),
     [
@@ -196,11 +220,14 @@ _ds, _dd, _dh, _df, _yd, _txt = (
     ],
     ids=lambda value: value if isinstance(value, str) else "",
 )
-def test_copy_compatibility(case: str, write, expected: str | None):
-    prog = Program(strict=False)
-    with prog:
-        with rung(_x[1]):
-            write()
+def test_copy_compatibility(
+    case: str, write, expected: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    if case in REFUSED_WHEN_BUILT:
+        with pytest.raises((TypeError, ValueError), match=r"got "):
+            _build(write)
+        monkeypatch.setattr(Instruction, "check_values", classmethod(lambda *_: None))
+    prog = _build(write)
     report = validate_click_program(prog, TagMap(), mode="strict")
     codes = [f.code for f in report.errors]
     assert codes == ([] if expected is None else [expected])

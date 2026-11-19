@@ -30,6 +30,7 @@ from .conversions import (
     copy_source_kind,
     copy_store_transform,
 )
+from .operands import TAG, VALUE, NumberInto
 from .resolvers import (
     _sequential_tags,
     _set_fault_address_error,
@@ -248,6 +249,8 @@ class CopyInstruction(OneShotMixin, Instruction):
     _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ("convert",)
+    _operands = {"source": VALUE, "dest": TAG.of(arg="target")}
+    _operand_rules = (NumberInto(value="source", dest="dest"),)
 
     def __init__(
         self,
@@ -618,6 +621,8 @@ class FillInstruction(OneShotMixin, Instruction):
     _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ()
+    _operands = {"value": VALUE}
+    _operand_rules = (NumberInto(value="value", dest="dest"),)
 
     def __init__(self, value: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)

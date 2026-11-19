@@ -186,13 +186,14 @@ def test_the_export_refuses_a_range_of_scattered_tags_even_when_allowed(write):
     [
         lambda: fill(1, y.select(1, 21)),
         lambda: blockcopy(ds.select(1, 17), y.select(1, 21)),
-        lambda: pack_bits(x.select(1, 21), dh[1]),
-        lambda: unpack_to_bits(dh[1], y.select(1, 21)),
+        lambda: pack_bits(x.select(10, 21), dh[1]),
+        lambda: unpack_to_bits(dh[1], y.select(10, 21)),
     ],
     ids=["fill", "blockcopy", "pack", "unpack"],
 )
 def test_an_x_or_y_range_across_a_slot_is_refused(write):
-    # y.select(1, 21) holds Y001..Y016 and Y021, because Y017..Y020 do not exist.
+    # y.select(1, 21) holds Y001..Y016 and Y021, because Y017..Y020 do not exist.  A pack
+    # takes at most 16 bits, so its ranges start at address 10.
     (finding,) = _errors(write)
     assert finding.code == CLK_COPY_RANGE_NOT_CONSECUTIVE
 
@@ -245,7 +246,7 @@ _LISTS = {
 @pytest.mark.parametrize("write", _LISTS.values(), ids=_LISTS.keys())
 def test_a_pack_or_unpack_of_a_list_is_refused_when_built(write):
     # These built, then raised TypeError on their first scan.
-    with pytest.raises(TypeError, match=r"a range from \.select\(\)"):
+    with pytest.raises(TypeError, match=r"Pass a range of .* from \.select\(\)"):
         _program(write)
 
 

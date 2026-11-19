@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.crossing import Constraint, Eq
 from pyrung.core.memory_block import BlockRange
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from .advance import (
     AdvanceProfile,
@@ -17,6 +17,7 @@ from .advance import (
     constraint_holds,
 )
 from .base import Instruction, OneShotMixin
+from .operands import RANGE, TAG
 from .resolvers import (
     _set_fault_address_error,
     reads_indexed_element,
@@ -42,6 +43,10 @@ _SEARCH_OPERATOR_MAP = {
     ">": gt,
     ">=": ge,
 }
+
+
+# search() writes only into a tag, so a pointer refusal says how to reach one.
+_POINTER_HINT = "Then copy() that tag to the pointer."
 
 
 class SearchInstruction(OneShotMixin, Instruction):
@@ -81,6 +86,13 @@ class SearchInstruction(OneShotMixin, Instruction):
         "continuous",
     )  # condition is RangeComparison, not a Condition tree
 
+    _operands = {
+        "found": TAG.of(TagType.BOOL, pointers=False, immediate=False, pointer_hint=_POINTER_HINT),
+        "result": TAG.of(
+            TagType.INT, TagType.DINT, pointers=False, immediate=False, pointer_hint=_POINTER_HINT
+        ),
+    }
+
     def __init__(
         self,
         comparison: RangeComparison,
@@ -91,7 +103,6 @@ class SearchInstruction(OneShotMixin, Instruction):
         oneshot: bool = False,
     ):
         from pyrung.core.memory_block import BlockRange, IndirectBlockRange, RangeComparison
-        from pyrung.core.tag import TagType
 
         if not isinstance(comparison, RangeComparison):
             raise TypeError(
@@ -107,14 +118,6 @@ class SearchInstruction(OneShotMixin, Instruction):
             raise TypeError(
                 "search() comparison must use a .select() range, "
                 f"got {type(comparison.search_range).__name__}."
-            )
-        if found.type != TagType.BOOL:
-            raise TypeError(
-                f"search() found= must be a BOOL tag. {found.name} is {found.type.name}."
-            )
-        if result.type not in {TagType.INT, TagType.DINT}:
-            raise TypeError(
-                f"search() result= must be an INT or DINT tag. {result.name} is {result.type.name}."
             )
 
         OneShotMixin.__init__(self, oneshot)
@@ -297,6 +300,7 @@ class ShiftInstruction(Instruction):
     _writes = ("bit_range",)
     _conditions = ("data_condition", "clock_condition", "reset_condition")
     _structural_fields = ()
+    _operands = {"bit_range": RANGE.of(TagType.BOOL, immediate=False)}
 
     def __init__(
         self,
@@ -305,14 +309,6 @@ class ShiftInstruction(Instruction):
         clock_condition: Any,
         reset_condition: Any,
     ):
-        from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-        if not isinstance(bit_range, (BlockRange, IndirectBlockRange)):
-            raise TypeError(
-                f"shift bit_range must be BlockRange or IndirectBlockRange, "
-                f"got {type(bit_range).__name__}"
-            )
-
         self.bit_range = bit_range
         self.data_condition = to_condition(data_condition)
         self.clock_condition = to_condition(clock_condition)

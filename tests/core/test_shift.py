@@ -207,20 +207,17 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C2"] is True
         assert runner.current_state.tags["C3"] is True
 
-    def test_non_bool_range_raises(self):
-        """Shift requires a BOOL range."""
+    def test_non_bool_range_is_refused_at_build(self):
+        """Shift requires a Bool range, and the program refuses another when it is built."""
         Data = Bool("Data")
         Clock = Bool("Clock")
         Reset = Bool("Reset")
         DS = Block("DS", TagType.INT, 1, 100)
 
-        with Program() as logic:
+        with Program():
             with rung(Data):
-                shift(DS.select(1, 3)).clock(Clock).reset(Reset)
-
-        state = SystemState().with_tags({"Data": True, "Clock": True, "Reset": False})
-        with pytest.raises(TypeError, match="BOOL"):
-            evaluate_program(logic, state)
+                with pytest.raises(TypeError, match="of Int tags as bit_range"):
+                    shift(DS.select(1, 3)).clock(Clock).reset(Reset)
 
     def test_indirect_reversed_bounds_raises(self):
         """Indirect resolved range with start > end is invalid."""

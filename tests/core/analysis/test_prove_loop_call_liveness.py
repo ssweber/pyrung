@@ -245,19 +245,6 @@ def _always_called_loop():
     return logic, {"Btn": _BOOL, "G": _BOOL}
 
 
-def _zero_count_loop():
-    # A REAL constant is read through 16 bits, so 65536.0 runs no iteration
-    # and work is never called. An integer constant always runs (forloop()
-    # rejects one outside 1..2 ** 31 - 1).
-    with Program(strict=False) as logic:
-        with rung():
-            with forloop(65536.0):
-                call("work")
-        _read_y2()
-        _coil_work()
-    return logic, {"Btn": _BOOL, "G": _BOOL}
-
-
 def _return_in_outer():
     # A return_early() ahead of the call in the calling subroutine skips it.
     with Program(strict=False) as logic:
@@ -479,7 +466,6 @@ _SHAPES = {
     "guarded_outer_loop": _guarded_outer_loop,
     "guarded_outer_copy": _guarded_outer_copy,
     "always_called_loop": _always_called_loop,
-    "zero_count_loop": _zero_count_loop,
     "return_in_outer": _return_in_outer,
     "return_in_outer_loop": _return_in_outer_loop,
     "oneshot_loop": _oneshot_loop,
@@ -498,8 +484,8 @@ _SHAPES = {
 
 
 def test_expected_reachability() -> None:
-    """Check that each shape behaves as its name says. Only the two controls are safe."""
-    safe = {"always_called_loop", "zero_count_loop"}
+    """Check that each shape behaves as its name says. Only always_called_loop is safe."""
+    safe = {"always_called_loop"}
     for name, build in _SHAPES.items():
         logic, space = build()
         assert _concrete_reaches(logic, space, _violates) is (name not in safe), name
@@ -517,12 +503,6 @@ def test_caller_map_sees_calls_in_loop_bodies() -> None:
     logic, _space = _loop_rung_guard()
     (entry,) = _build_caller_map(logic)["work"]
     assert [condition.tag.name for condition in entry[4]] == ["G"]
-
-
-def test_constant_zero_count_loop_calls_nothing() -> None:
-    logic, _space = _zero_count_loop()
-    assert "work" not in _build_caller_map(logic)
-    assert _scope_reach_chains(logic)["work"] == ()
 
 
 def test_reach_chains_cross_loops_and_subroutines() -> None:

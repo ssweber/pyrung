@@ -23,14 +23,14 @@
   If a test expects the number in the TXT, expect the digits.
 - The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, which CLICK cannot hold).
   Export the program again before you paste it into CLICK.
-- A pack or unpack given a list, a tuple or one tag in place of a range is now refused when you build the program (it raised on its first scan).
-  Pass a `.select()` range, such as `c.select(1, 16)`.
 - `fill()` of a TXT into number registers is now refused when you build the program (it raised on a blank TXT and could not be exported).
   Copy the TXT into a number register with `convert=to_value`, then fill from that register.
 - The CLICK export now refuses `fill()` of a number into one TXT, such as `fill(5, txt.select(1, 1))` (it exported `copy(5,TXT1)`, which a CLICK runs as a conversion to digits).
   Write `copy(5, txt[1])`, which stores the digit "5".
-- `copy()`, `blockcopy()` and `fill()` forms that raised when their rung ran are now refused when you build the program.
+- An operand of the wrong kind is now refused when you build the program, such as a list in place of a `.select()` range or a constant as the destination (the program raised on the first scan, or only set an error flag). The check covers `copy()`, `blockcopy()`, `fill()`, `math()`, `forloop()`, `run_function()`, `run_enabled_function()`, `shift()`, `pack_bits()`, `pack_words()`, `pack_text()`, `unpack_to_bits()` and `unpack_to_words()`.
   Write the form that the message names.
+- A constant `forloop()` count with a decimal point, such as `forloop(5.0)`, is now refused when you build the program (`forloop(3.5)` ran 3 times). CLICK's editor refuses it too.
+  Pass a whole number or a tag. Write `forloop(5)`, not `forloop(5.0)`.
 - `generate_circuitpy()` now raises `NotImplementedError` for a value that a code.py cannot hold, such as `Timer[1]`, a whole block, a `.select()` range, `float("inf")` or `b"7"` (the code.py raised `NameError` or `TypeError` on the board).
   Pass a tag, a pointer, a finite number or text in its place.
 - A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
@@ -68,7 +68,6 @@
 ### Fixes
 
 - `history.at()` and `fork_from()` now return an older scan of a program with one of these forms (they raised `TypeError` or `NameError` once the scan had left the recent-state cache):
-  - `math(None, ...)`.
   - Text or a TXT in `math()` into a DF, such as `math(txt[1] + txt[2], df[1])`.
   - A value that is not a tag, a pointer, a finite number or text, such as `copy(Timer[1], txt[1])` or `copy(float("inf"), ds[1])`.
 - `copy()` with `convert=to_text()` or `convert=to_binary` into a register that is not a TXT now sets the out-of-range flag and writes nothing in `run_for()`, `run_until()`, `history.at()` and the generated code.py, as stepping does (they wrote one digit into each register from the target on, with no flag).

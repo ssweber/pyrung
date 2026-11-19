@@ -61,7 +61,6 @@ DATA = {
 
 # Each form, and what some tags hold after a scan.  A flag the form does not name is off.
 KERNEL_FORMS: dict[str, tuple[Callable[[], Any], dict[str, Any]]] = {
-    "None": (lambda: math(None, ds[1]), {"DS1": 4, "fault.address_error": True}),
     "text '1.5'": (lambda: math("1.5", df[3]), {"DF3": 1.5}),
     "text '1e3'": (lambda: math("1e3", df[3]), {"DF3": 1000.0}),
     "text '1e40'": (lambda: math("1e40", df[3]), {"DF3": pymath.inf}),

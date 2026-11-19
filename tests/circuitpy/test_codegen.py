@@ -1838,17 +1838,6 @@ class TestBoardPeripheralsAndRunStop:
             assert repr(value) == repr(stored)
             assert flag is False
 
-    def test_math_of_none_writes_nothing_and_sets_the_address_error_on_every_backend(
-        self, monkeypatch
-    ):
-        dest = Int("Dest", default=7)
-        with Program(strict=False) as prog:
-            with rung():
-                math(None, dest)
-
-        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.address_error), scans=1)
-        assert results == {name: (7, True) for name in results}
-
     @pytest.mark.parametrize(
         "source,convert", [(7, to_text()), (55, to_binary)], ids=["to_text", "to_binary"]
     )

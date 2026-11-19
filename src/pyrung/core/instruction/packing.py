@@ -7,7 +7,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef, PastBankError
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from .base import Instruction, OneShotMixin
 from .conversions import (
@@ -18,7 +18,7 @@ from .conversions import (
     _store_copy_value_to_tag_type,
     _truncate_to_tag_type,
 )
-from .data_transfer import _is_range
+from .operands import RANGE, TAG, FitsRegister
 from .resolvers import (
     _set_fault_address_error,
     _set_fault_out_of_range,
@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 
 # Pack and Unpack are Copy tabs on a CLICK, so their flags follow them as Copy's flags do.
 _COPY_FAULTS = ("fault.address_error", "fault.out_of_range")
+
+_REGISTER = TAG.of(TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL)
+_WIDE_REGISTER = TAG.of(TagType.DINT, TagType.REAL)
+_BITS = RANGE.of(TagType.BOOL, example="c.select(1, 16)")
+_TWO_WORDS = RANGE.of(TagType.INT, TagType.WORD, count=2, example="ds.select(1, 2)")
 
 
 def _skip_on_bad_pointer(func: Callable[..., None]) -> Callable[..., None]:
@@ -65,18 +70,6 @@ def _unpack_source_tag(source: Tag | IndirectRef | IndirectExprRef, ctx: ScanCon
     return resolve_tag_ctx(source, ctx)
 
 
-def _require_range(call: str, action: str, example: str, value: Any) -> None:
-    """Refuse a block operand that is not a range, as blockcopy() does.
-
-    Without this check, a list or one tag builds and then raises on its first scan.
-    """
-    if not _is_range(value):
-        raise TypeError(
-            f"{call}() {action} a range from .select(), such as {example}. Pass the tags as "
-            "one range, not as a list or one tag."
-        )
-
-
 class PackBitsInstruction(OneShotMixin, Instruction):
     """Pack BOOL tags from a BlockRange into a destination register."""
 
@@ -86,9 +79,10 @@ class PackBitsInstruction(OneShotMixin, Instruction):
     _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
+    _operands = {"bit_block": _BITS, "dest": _REGISTER}
+    _operand_rules = (FitsRegister(bits="bit_block", register="dest"),)
 
     def __init__(self, bit_block: Any, dest: Any, *, oneshot: bool = False):
-        _require_range("pack_bits", "reads", "c.select(1, 16)", bit_block)
         OneShotMixin.__init__(self, oneshot)
         self.bit_block = bit_block
         self.dest = dest
@@ -99,6 +93,8 @@ class PackBitsInstruction(OneShotMixin, Instruction):
         from pyrung.core.tag import TagType
 
         dest_tag = resolve_tag_ctx(self.dest, ctx)
+        # The build refuses the other types too.  This check keeps the scan raising on them
+        # when a test builds the program with the build check turned off.
         assert_tag_type(
             dest_tag,
             (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
@@ -140,9 +136,9 @@ class PackWordsInstruction(OneShotMixin, Instruction):
     _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
+    _operands = {"word_block": _TWO_WORDS, "dest": _WIDE_REGISTER}
 
     def __init__(self, word_block: Any, dest: Any, *, oneshot: bool = False):
-        _require_range("pack_words", "reads", "ds.select(1, 2)", word_block)
         OneShotMixin.__init__(self, oneshot)
         self.word_block = word_block
         self.dest = dest
@@ -153,6 +149,8 @@ class PackWordsInstruction(OneShotMixin, Instruction):
         from pyrung.core.tag import TagType
 
         dest_tag = resolve_tag_ctx(self.dest, ctx)
+        # The build refuses the other types too.  This check keeps the scan raising on them
+        # when a test builds the program with the build check turned off.
         assert_tag_type(dest_tag, (TagType.DINT, TagType.REAL), label="pack_words destination")
 
         word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
@@ -191,11 +189,14 @@ class PackTextInstruction(OneShotMixin, Instruction):
     _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ("allow_whitespace",)
+    _operands = {
+        "source_range": RANGE.of(TagType.CHAR, example="txt.select(1, 4)"),
+        "dest": _REGISTER,
+    }
 
     def __init__(
         self, source_range: Any, dest: Any, *, allow_whitespace: bool = False, oneshot: bool = False
     ):
-        _require_range("pack_text", "reads", "txt.select(1, 4)", source_range)
         OneShotMixin.__init__(self, oneshot)
         self.source_range = source_range
         self.dest = dest
@@ -212,6 +213,8 @@ class PackTextInstruction(OneShotMixin, Instruction):
             if isinstance(self.dest, (IndirectRef, IndirectExprRef))
             else resolve_tag_ctx(self.dest, ctx)
         )
+        # The build refuses the other types too.  This check keeps the scan raising on them
+        # when a test builds the program with the build check turned off.
         assert_tag_type(
             dest_type,
             (TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL),
@@ -258,9 +261,10 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
     _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
+    _operands = {"source": _REGISTER, "bit_block": _BITS}
+    _operand_rules = (FitsRegister(bits="bit_block", register="source"),)
 
     def __init__(self, source: Any, bit_block: Any, *, oneshot: bool = False):
-        _require_range("unpack_to_bits", "writes", "c.select(1, 16)", bit_block)
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.bit_block = bit_block
@@ -279,6 +283,8 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
         from pyrung.core.tag import TagType
 
         source_tag = _unpack_source_tag(self.source, ctx)
+        # The build refuses the other types too.  This check keeps the scan raising on them
+        # when a test builds the program with the build check turned off.
         assert_tag_type(
             source_tag,
             (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
@@ -321,9 +327,9 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
     _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ()
+    _operands = {"source": _WIDE_REGISTER, "word_block": _TWO_WORDS}
 
     def __init__(self, source: Any, word_block: Any, *, oneshot: bool = False):
-        _require_range("unpack_to_words", "writes", "ds.select(1, 2)", word_block)
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.word_block = word_block
@@ -342,6 +348,8 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
         from pyrung.core.tag import TagType
 
         source_tag = _unpack_source_tag(self.source, ctx)
+        # The build refuses the other types too.  This check keeps the scan raising on them
+        # when a test builds the program with the build check turned off.
         assert_tag_type(
             source_tag,
             (TagType.DINT, TagType.REAL),

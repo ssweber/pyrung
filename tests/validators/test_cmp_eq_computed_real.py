@@ -211,7 +211,7 @@ def test_calc_into_pointer_destination_raises_type_error():
     idx = Int("Idx")
     raw = Real("Raw", external=True)
     for dest in (blk[idx], blk[idx + 1]):
-        with pytest.raises(TypeError, match="not a pointer address"):
+        with pytest.raises(TypeError, match=r"copy\(\) that tag to the pointer"):
             with Program(strict=False):
                 with rung(Bool("En", external=True)):
                     math(raw * 0.5, dest)

@@ -58,8 +58,9 @@ with rung():
         copy(Counter + 1, Counter)
 ```
 
-The count can be a positive literal or a tag, read once when the loop starts.
-As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
+The count can be a positive whole number or a tag, read once when the loop starts.
+A constant count with a decimal point, such as `forloop(5.0)`, raises when you
+build the program. As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
 iterations (a scan of a second or more on a CLICK). A `Dint` count is read whole
 and signed, so 65536 runs 65536 and -1 runs none. A literal is read whole, so
 `forloop(70000)` runs 70000. A count of 0 runs none.
