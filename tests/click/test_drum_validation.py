@@ -305,12 +305,11 @@ def test_allow_with_a_shared_old_code_no_longer_lets_the_finding_through(code):
     pyrung_to_ladder(_program(write), TagMap(), allow=(Code.BANK_NOT_ALLOWED,))
 
 
-def test_allow_with_the_old_preset_code_no_longer_lets_the_finding_through():
-    # CLK_TIMER_PRESET_TOO_LOW is still a code of the timers, so allow= takes it. A drum no
-    # longer reports it.
+def test_allow_names_what_replaced_the_old_preset_code():
     write = lambda: _time(presets=(100, -1)).reset(x[4])  # noqa: E731
-    with pytest.raises(LadderExportError, match=Code.CONSTANT_OUT_OF_RANGE):
-        pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_TIMER_PRESET_TOO_LOW",))
+    code = "CLK_TIMER_PRESET_TOO_LOW"
+    with pytest.raises(ValueError, match=f"no longer reports {code}. Pass constant-out-of-range"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(code,))
     pyrung_to_ladder(_program(write), TagMap(), allow=(Code.CONSTANT_OUT_OF_RANGE,))
 
 

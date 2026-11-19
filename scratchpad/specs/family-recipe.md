@@ -56,17 +56,15 @@ Some codes do not belong to one family. No family branch deletes them.
 - `CLK_PTR_CONTEXT_ONLY_COPY` and `CLK_PTR_POINTER_MUST_BE_DS` stay in pyrung. They cover
   conditions and the families in `legacy/`. Validation drops one of them where laddercodec
   reports the same fault on that operand. Its advice joins laddercodec's finding.
-- `CLK_BANK_NOT_WRITABLE`, `CLK_BANK_WRONG_ROLE`, `CLK_TIMER_PRESET_TOO_LOW`,
-  `CLK_TIMER_PAIR_MISMATCH` and `CLK_TIMER_PRESET_OVERFLOW` belong to the checks in
-  `hardware.py`. Those checks read their rows from the modules in `legacy/`. When you delete
-  your module, its rows go with it, and the checks stop reporting the code for your
-  family.
-- `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y` and `CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED` belong
-  to the immediate check in `portability.py`. It checks a coil's target only while the
-  coil's family has its row in `IMMEDIATE_COIL_TARGETS` in `legacy/`.
+- `CLK_BANK_NOT_WRITABLE`, `CLK_BANK_WRONG_ROLE` and `CLK_TIMER_PAIR_MISMATCH` belong to the
+  checks in `hardware.py`. Those checks read their rows from the modules in `legacy/`, and
+  from `timer_pairs` of a family. When you delete your module, its rows go with it, and the
+  checks stop reporting the code for your family.
+- `CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED` belongs to the immediate check in
+  `portability.py`.
 
-The change after the last family deletes the checks and codes of the last two items, with
-the bank tables. The orchestrator owns that change.
+The change after the last family deletes those checks and codes, with the bank tables. The
+orchestrator owns that change.
 
 ## 1. Find the classes and the fields
 
@@ -285,6 +283,42 @@ that the test expects, and only in your family's tests. If a test then fails, th
 changed, and step 5 says what to do. In the docs, name the new code, and state the rule
 that an author needs.
 
+## 4b. Account for what the module fed to shared code
+
+Your module's `TABLES` hold rows that shared checks in `hardware.py` and `portability.py`
+read. When you delete the module, its rows go too. A shared check then reports nothing for
+your family, and no family test fails. The coils branch lost four checks this way and
+restored them: the bank role of a Done bit, the report of a Done bit that is not mapped, the
+timer pair and the immediate range.
+
+List what the module fed before you delete it:
+
+```sh
+grep -n "^TABLES" -A12 src/pyrung/click/validation/legacy/<family>.py
+grep -rn "_family_rows(\|table(" src/pyrung/click/validation/*.py
+```
+
+Write down every table the module defines, every field in each of its rows, and every shared
+check that reads them. Then decide where each one goes:
+
+- Into the family. `timer_pairs`, `ranges` and `classes` of your `Family` carry the rows that a
+  shared check still reads.
+- To laddercodec, when its check reports the same fault.
+- Nowhere, when no form reaches the check any more. Do not delete a shared check yourself.
+  Tell the orchestrator, who owns those files.
+
+Put one line for each table and each field in your hand-back, saying where it went. A table or
+field with no line is one that you did not account for.
+
+Three tests in `tests/click/test_families.py` check part of this.
+
+- The first fails when a module in `legacy/` defines a table that no shared check reads.
+- The second fails when a shared check reads a table that no module in `legacy/` defines.
+- The third fails when a table in `_WAITING_FOR_THE_BANK_TABLES` is no longer read, or a module in `legacy/` defines it again.
+
+A failure of the first two means that this step is not finished. Contacts and math follow this
+step when they move.
+
 ## 5. Test
 
 ### The shared tests
@@ -446,6 +480,7 @@ Your hand-back gives the orchestrator these:
 - The cases sent to laddy, with the test that pins each one.
 - The sweep's counts: forms tried and forms changed.
 - The commands that you ran and their counts.
+- Where each table and field of your legacy module went (step 4b).
 - Each step of this recipe that did not fit the family, and what you did.
 
 ## Steps that no family has tried

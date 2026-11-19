@@ -48,7 +48,6 @@ CLK_ADDRESS_IDENTITY_CONFLICT = "CLK_ADDRESS_IDENTITY_CONFLICT"
 CLK_NICKNAME_TOO_LONG = "CLK_NICKNAME_TOO_LONG"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
 CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
-CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
 CLK_STATUS_BIT_NOT_PORTABLE = "CLK_STATUS_BIT_NOT_PORTABLE"
 CLK_FORLOOP_NESTING_DEPTH = "CLK_FORLOOP_NESTING_DEPTH"
 CLK_FORLOOP_INNER_ONESHOT = "CLK_FORLOOP_INNER_ONESHOT"
@@ -81,7 +80,6 @@ __all__ += [
     "CLK_NICKNAME_TOO_LONG",
     "CLK_BANK_UNRESOLVED",
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
-    "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_STATUS_BIT_NOT_PORTABLE",
     "CLK_FORLOOP_NESTING_DEPTH",
     "CLK_FORLOOP_INNER_ONESHOT",
@@ -99,18 +97,12 @@ __all__ += [
 # Codes that several families raise.
 CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
 CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
-CLK_TIMER_PRESET_TOO_LOW = "CLK_TIMER_PRESET_TOO_LOW"
 CLK_TIMER_PAIR_MISMATCH = "CLK_TIMER_PAIR_MISMATCH"
-CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
-CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
 CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
 __all__ += [
     "CLK_BANK_NOT_WRITABLE",
     "CLK_BANK_WRONG_ROLE",
-    "CLK_TIMER_PRESET_TOO_LOW",
     "CLK_TIMER_PAIR_MISMATCH",
-    "CLK_TIMER_PRESET_OVERFLOW",
-    "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
 ]
 
@@ -246,11 +238,12 @@ def immediate_coil_operand_text(got: str, at: str = "") -> str:
     return f"immediate() on a coil{at} needs a tag or a block range, got {got}."
 
 
-def immediate_coil_not_y_text(at: str = "", found: str | None = None) -> str:
-    """Return the message for an immediate coil that is not mapped to Y."""
-    if found is None:
-        return f"immediate() on a coil{at} needs a Y output."
-    return f"immediate() on a coil{at} needs a Y output, but it is mapped to {found}."
+def immediate_coil_not_y_text(found: str) -> str:
+    """Return the message for an immediate coil that is mapped to *found*, not to Y."""
+    return (
+        f"immediate-coil-not-y: immediate() on a coil needs a Y output, but it is mapped to {found}. "
+        "Map the coil to a Y address."
+    )
 
 
 RangeFault = Literal["empty", "descending", "scattered"]
@@ -371,11 +364,6 @@ def range_aggregate_problem(
 def range_aggregate_advice(problem: RangeProblem) -> str:
     """Return the advice for a math() aggregate range that is not one CLICK range."""
     return _AGGREGATE_ADVICE[problem[1]]
-
-
-def immediate_coil_range_gap_text(at: str = "") -> str:
-    """Return the message for an immediate coil range whose Y addresses have a gap."""
-    return f"immediate() on a coil range{at} needs consecutive Y addresses."
 
 
 def pointer_expression_text(at: str = " here") -> str:
@@ -514,15 +502,6 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
 
     if code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED:
         return "Use rise(tag)/fall(tag) without immediate(...), or use a plain immediate contact."
-
-    if code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y:
-        return "Map the coil to a Y address."
-
-    if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
-        return "Map the range to consecutive Y addresses, such as Y001..Y004."
-
-    if code == CLK_TIMER_PRESET_OVERFLOW:
-        return "Use a larger time unit to keep the preset within INT range (max 32,767)."
 
     if code == CLK_STATUS_BIT_NOT_PORTABLE:
         return (

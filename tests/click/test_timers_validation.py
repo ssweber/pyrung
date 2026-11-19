@@ -168,7 +168,6 @@ def test_the_export_refuses_a_form_that_click_refuses():
     [
         ("CLK_BANK_WRONG_ROLE", Code.BANK_NOT_ALLOWED, {"done": c[1]}, 5),
         ("CLK_TIMER_PAIR_MISMATCH", Code.TIMER_PAIR_MISMATCH, {"acc": td[2]}, 5),
-        ("CLK_TIMER_PRESET_OVERFLOW", Code.CONSTANT_OUT_OF_RANGE, {}, 40000),
     ],
 )
 def test_the_old_code_no_longer_lets_the_finding_through(old, new, mapping, preset):
@@ -179,3 +178,12 @@ def test_the_old_code_no_longer_lets_the_finding_through(old, new, mapping, pres
     with pytest.raises(LadderExportError, match=new):
         pyrung_to_ladder(program, TagMap(mappings), allow=(old,))
     pyrung_to_ladder(program, TagMap(mappings), allow=(new,))
+
+
+def test_allow_names_what_replaced_the_removed_preset_code():
+    timer, mappings = _timer()
+    program = _program(lambda: on_delay(timer, preset=40000))
+    code = "CLK_TIMER_PRESET_OVERFLOW"
+    with pytest.raises(ValueError, match=f"no longer reports {code}. Pass constant-out-of-range"):
+        pyrung_to_ladder(program, TagMap(mappings), allow=(code,))
+    pyrung_to_ladder(program, TagMap(mappings), allow=(Code.CONSTANT_OUT_OF_RANGE,))

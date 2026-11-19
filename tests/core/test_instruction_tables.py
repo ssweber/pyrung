@@ -1,8 +1,8 @@
 """Every lookup keyed on an instruction's type knows about every instruction.
 
 Validators and exporters read tables keyed by class, and most of those lookups
-are silent on a miss: ``_TIMER_PRESET_FIELDS.get(name, ())`` returns nothing, so a
-new timer that is not in the table simply never gets its preset checked, and an
+are silent on a miss: ``table.get(name, ())`` returns nothing, so a new instruction that
+is not in the table simply never gets checked, and an
 exporter's ``_pin_specs`` drops a pin.  Nothing fails, here or anywhere else.
 
 So a new instruction fails ``test_every_instruction_has_a_kind`` until it is given
@@ -165,10 +165,6 @@ TABLES = [
         frozenset(next(f for f in FAMILIES if f.name == "copy").classes),
         _of_kinds("copies_data"),
     ),
-    _legacy_table("COIL_TARGET_INSTRUCTIONS", "coil"),
-    _legacy_table("TIMER_PRESET_FIELDS", "timer", "out_timer"),
-    _legacy_table("TIMER_PAIR_FIELDS", "timer", "out_timer", "counter"),
-    _legacy_table("OUT_VARIANT_UNITS", "out_timer"),
     Table(
         "circuitpy _evaluate_timer_resolution",
         _named_in_function(_evaluate_timer_resolution),
@@ -228,10 +224,6 @@ def _family_operands() -> set[tuple[str, str]]:
 _FIELDS_OF_ROW: dict[str, Callable[[Any], Iterable[str]]] = {
     "WRITE_TARGET_FIELDS": lambda fields: fields,
     "ROLE_ASSIGNMENT_FIELDS": lambda roles: [field for field, _role in roles],
-    "IMMEDIATE_COIL_TARGETS": lambda field: [field],
-    "TIMER_PRESET_FIELDS": lambda fields: fields,
-    "TIMER_PAIR_FIELDS": lambda pairs: [field for pair in pairs for field in pair],
-    "CONSTANT_PRESET_FLOORS": lambda spec: spec[2],
 }
 
 
@@ -251,14 +243,11 @@ def _checked_writes() -> set[tuple[str, str]]:
     # Timers, counters and drums reach the write check through a role. Send and Receive
     # reach it through the banks that CLICK's help pages list for them. laddercodec checks
     # every operand of an instruction in one of its families.
-    return (
-        _legacy_fields("WRITE_TARGET_FIELDS", "ROLE_ASSIGNMENT_FIELDS", "MODBUS_BANKS")
-        | _family_operands()
-    )
+    return _legacy_fields("WRITE_TARGET_FIELDS", "ROLE_ASSIGNMENT_FIELDS") | _family_operands()
 
 
 def _hardware_fields() -> list[tuple[str, str]]:
-    return sorted(_legacy_fields(*_FIELDS_OF_ROW, "MODBUS_BANKS") | _family_operands())
+    return sorted(_legacy_fields(*_FIELDS_OF_ROW) | _family_operands())
 
 
 def _assigned_fields(cls: type) -> set[str]:

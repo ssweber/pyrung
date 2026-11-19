@@ -555,8 +555,7 @@ All [nothing] unless marked.
 - **A randint whose expression is garbage-collected** while a rung reads its `.tag` is drawn by neither engine.
 - **Loop coverage.** The guarded loop declines a Copy to text through a DS pointer, and a read through `dd[ZERO]`.
 - **reload NB3.** A leg-only edit fires at most once on the reload scan. Put legs into the `_match_sites` identity.
-- **Immediate leftovers.** CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y's message isn't in pyrung terms.
-  `calc(expr, immediate(D))` and `search(result=immediate(R))` raise AttributeError at build instead of a clear
+- **Immediate leftovers.** `calc(expr, immediate(D))` and `search(result=immediate(R))` raise AttributeError at build instead of a clear
   refusal.
 - **CompiledPLC raises OverflowError** on a huge Dint product outside calc, where the PLC gives 0.0
   (`_primitives.py:564`).

@@ -14,17 +14,15 @@ from pyclickplc.banks import BANKS
 from pyrung.click.capabilities import HEX_CONSTANT_BANKS
 from pyrung.click.tag_map._map import unmapped_tag_text
 from pyrung.click.validation.findings import (
-    CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_COPY_WIDE_CONSTANT,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
-    CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     _bank_pointer_advice,
     _build_suggestion,
     immediate_coil_not_y_text,
     immediate_coil_operand_text,
-    immediate_coil_range_gap_text,
     immediate_edge_text,
     immediate_misplaced_text,
     pointer_block_range_text,
@@ -34,6 +32,7 @@ from pyrung.click.validation.findings import (
     range_aggregate_problem,
     range_not_consecutive_text,
 )
+from pyrung.click.validation.legacy.math import CLK_MATH_WIDE_CONSTANT
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -166,7 +165,6 @@ class _TranslatorMixin:
         return f"{message} {advice}" if advice else message
 
     _tag_map: TagMap
-
     # How integer constants are spelled right now (see _hex_constants).
     # - None: decimal.
     # - "word": hex, for a Fill into a Word, with -32768..-1 written as its 16 bits.  Any other value outside 0..FFFFh is an export error, since no CLICK hex
@@ -212,6 +210,12 @@ class _TranslatorMixin:
     def _render_number(self, value: int | float, *, path: str, source: Any) -> str:
         """Spell an int or float constant the way CLICK writes it."""
         mode = self._hex_constant_mode
+        # A compare constant has no validation code, so only the other modes name one.
+        wide_code = (
+            ""
+            if mode == "exact"
+            else f"{CLK_MATH_WIDE_CONSTANT if mode == 'math' else CLK_COPY_WIDE_CONSTANT}: "
+        )
         if mode == "copy" and isinstance(value, float) and not value.is_integer():
             # A CLICK was read storing 1.5 as 1 and -1.5 as FFFFh in a Word.  No one has
             # read a CLICK store a fraction outside 16 bits, so the export refuses one.
@@ -219,7 +223,8 @@ class _TranslatorMixin:
                 self._raise_issue(
                     path=path,
                     message=(
-                        f"Constant {value!r} does not fit in 16 bits. Copy a value from "
+                        f"{wide_code}Constant {value!r} does not fit in 16 "
+                        "bits. Copy a value from "
                         "-32768 to 65535 into a Word."
                     ),
                     source=source,
@@ -231,7 +236,7 @@ class _TranslatorMixin:
                     self._raise_issue(
                         path=path,
                         message=(
-                            f"Constant {value!r} is not an integer; CLICK hex constants "
+                            f"{wide_code}Constant {value!r} is not an integer; CLICK hex constants "
                             "are whole 16-bit values (0h..FFFFh)."
                         ),
                         source=source,
@@ -250,7 +255,7 @@ class _TranslatorMixin:
                 self._raise_issue(
                     path=path,
                     message=(
-                        f"Constant {value} does not fit in 16 bits. A CLICK hex constant is "
+                        f"{wide_code}Constant {value} does not fit in 16 bits. A CLICK hex constant is "
                         "0h..FFFFh, so this cannot be written in CLICK."
                     ),
                     source=source,
@@ -571,10 +576,7 @@ class _TranslatorMixin:
                 if parsed is None or parsed[0] != "Y":
                     self._raise_issue(
                         path=path,
-                        message=self._with_advice(
-                            immediate_coil_not_y_text(found=address),
-                            CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
-                        ),
+                        message=immediate_coil_not_y_text(address),
                         source=source,
                     )
                 return self._fn("immediate", address)
@@ -596,22 +598,11 @@ class _TranslatorMixin:
                     if parsed is None or parsed[0] != "Y":
                         self._raise_issue(
                             path=path,
-                            message=self._with_advice(
-                                immediate_coil_not_y_text(found=address),
-                                CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
-                            ),
+                            message=immediate_coil_not_y_text(address),
                             source=source,
                         )
-                compact = _compact_contiguous_range(addresses)
-                # Immediate coil ranges must map to one contiguous Y-bank range.
-                compact = self._require_compact_range(
-                    compact,
-                    path=path,
-                    source=source,
-                    message=self._with_advice(
-                        immediate_coil_range_gap_text(), CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS
-                    ),
-                )
+                # CLICK has no list form, so a range with a gap is refused even under allow=.
+                compact = self._render_run(wrapped, path=path, instruction=source)
                 return self._fn("immediate", compact)
 
             self._raise_issue(
@@ -638,7 +629,7 @@ class _TranslatorMixin:
                 self._raise_issue(
                     path=path,
                     message=(
-                        "to_text(exponential=True) needs a Real source, such as a DF or a "
+                        "option-not-offered: to_text(exponential=True) needs a Real source, such as a DF or a "
                         f"Real constant. The source here is {source_text}. Remove "
                         "exponential=True, or use suppress_zero for an integer source."
                     ),
