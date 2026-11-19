@@ -45,6 +45,7 @@ from pyrung.core.condition import (
 from pyrung.core.expression import (
     ExprCompare,
     Expression,
+    LiteralExpr,
 )
 from pyrung.core.instruction import (
     BlockCopyInstruction,
@@ -96,11 +97,13 @@ from pyrung.core.tag import ImmediateRef, Tag
 from ._emit import emit_cmp, emit_if_enabled, emit_mem_set, emit_prev, emit_truth
 from ._primitives import (
     CALC_FLAGS,
+    UnsupportedValue,
     _appends_flags,
     _calc_store_expr,
     _compile_assignment_lines,
     _compile_expression_impl,
     _compile_guarded_instruction,
+    _compile_set_address_error_fault_body,
     _compile_set_out_of_range_fault_body,
     _compile_value,
     _snapshot_tag_symbol,
@@ -352,6 +355,30 @@ def compile_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    try:
+        return _compile_instruction(instr, enabled_expr, ctx, indent)
+    except UnsupportedValue as error:
+        raise _located(error, dsl_call(instr), instr) from None
+
+
+def _located(error: UnsupportedValue, what: str, owner: Any) -> UnsupportedValue:
+    """Return *error* with *what* and the place of *owner* added to its message."""
+    if error.located:
+        return error  # An instruction inside a subroutine or a loop already named itself.
+    located = UnsupportedValue(
+        f"A code.py cannot run {what} at {_source_location(owner)}. {error} "
+        "Pass a tag, a pointer, a finite number or text in its place."
+    )
+    located.located = True
+    return located
+
+
+def _compile_instruction(
+    instr: Any,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
     if isinstance(instr, OutInstruction):
         return _compile_out_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ToggleInstruction):
@@ -451,28 +478,35 @@ def compile_rung(
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
     try:
-        rung_id = ctx.next_name("rung")
-        enabled_var = f"_{rung_id}_enabled"
-        conditions = (
-            rung._conditions[rung._branch_condition_start :]
-            if local_conditions
-            else rung._conditions
-        )
-        cond_expr = "True" if ctx.force_rung_enable else _compile_condition_group(conditions, ctx)
-        lines = _compile_edge_row(rung, ctx, indent)
-        lines.append(f"{' ' * indent}{enabled_var} = {cond_expr}")
-        lines.extend(
-            _compile_rung_items(
-                rung=rung,
-                enabled_expr=enabled_var,
-                ctx=ctx,
-                indent=indent,
-                scope_key=rung_id,
-            )
-        )
-        return lines
+        return _compile_rung(rung, ctx, indent, local_conditions=local_conditions)
+    except UnsupportedValue as error:
+        # A value in a contact, such as rung(DS1 == Mode.RUN), is outside every instruction.
+        raise _located(error, "the rung", rung) from None
     finally:
         ctx.set_current_function(previous)
+
+
+def _compile_rung(
+    rung: LogicRung, ctx: CodegenContext, indent: int, *, local_conditions: bool
+) -> list[str]:
+    rung_id = ctx.next_name("rung")
+    enabled_var = f"_{rung_id}_enabled"
+    conditions = (
+        rung._conditions[rung._branch_condition_start :] if local_conditions else rung._conditions
+    )
+    cond_expr = "True" if ctx.force_rung_enable else _compile_condition_group(conditions, ctx)
+    lines = _compile_edge_row(rung, ctx, indent)
+    lines.append(f"{' ' * indent}{enabled_var} = {cond_expr}")
+    lines.extend(
+        _compile_rung_items(
+            rung=rung,
+            enabled_expr=enabled_var,
+            ctx=ctx,
+            indent=indent,
+            scope_key=rung_id,
+        )
+    )
+    return lines
 
 
 def _compile_rung_items(
@@ -560,12 +594,38 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
     return None
 
 
+def _may_be_text(value: Any) -> bool:
+    """Return True if *value* reads text, a Char tag or a pointer into Char tags anywhere.
+
+    Text that an expression builds, such as ``TXT1 + TXT2``, is text too.
+    """
+    if isinstance(value, ImmediateRef):
+        value = value.value
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
+        return value.block.type.name == "CHAR"
+    if isinstance(value, Tag):
+        return value.type.name == "CHAR"
+    if isinstance(value, LiteralExpr):
+        return _may_be_text(value.value)
+    if isinstance(value, Expression):
+        # An operator's symbol, such as "+", is a str but not an operand.
+        parts = [part for part in vars(value).values() if not isinstance(part, str)]
+        return any(_may_be_text(part) for part in parts)
+    if isinstance(value, (list, tuple)):
+        return any(_may_be_text(part) for part in value)
+    return isinstance(value, str)
+
+
 def _compile_calc_instruction(
     instr: CalcInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    if instr.expression is None:
+        # Stepping writes nothing for a math() of None and sets the address-error flag.
+        body = _compile_set_address_error_fault_body(ctx)
+        return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
     ctx.mark_helper("_calc_math_isfinite")
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
     value_expr = _compile_value(instr.expression, ctx, strict=True)
@@ -603,7 +663,23 @@ def _compile_calc_instruction(
     if dest_type == "REAL" and instr.mode != "hex":
         # Past CLICK's REAL range, the result is +/-Inf with the out-of-range flag, as a
         # float32 Math stores it. A NaN sets no flag.
-        enabled_body.append(f"if {range_cond}:")
+        branch = "if"
+        if _may_be_text(instr.expression):
+            # Stepping converts text with float() and sets no out-of-range flag for it.
+            # Past the REAL range the text stores +/-Inf (core store_real).
+            enabled_body += [
+                "if isinstance(_calc_value, str):",
+                "    _calc_value = float(_calc_value)",
+                f"    if _calc_value > {REAL_MAX!r}:",
+                '        _calc_value = float("inf")',
+                f"    elif _calc_value < {-REAL_MAX!r}:",
+                '        _calc_value = float("-inf")',
+            ]
+            if ctx.kernel_runtime:
+                enabled_body.append("    _calc_value = _computed_real(_calc_value)")
+                ctx.mark_helper("_computed_real")
+            branch = "elif"
+        enabled_body.append(f"{branch} {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
         enabled_body += [
             f"    if _calc_value > {REAL_MAX!r}:",
