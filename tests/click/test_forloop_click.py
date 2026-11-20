@@ -177,10 +177,10 @@ def test_validation_sees_body_rung_contacts():
                 with rung(blocks.ds[blocks.ds[2]] == 0):
                     out(blocks.y[2])
     report = validate_click_program(logic, TagMap(include_system=False), mode="strict")
-    locations = sorted(f.location for f in report.errors if f.code == "CLK_PTR_CONTEXT_ONLY_COPY")
+    locations = sorted(f.location for f in report.errors if f.code == "pointer-outside-copy")
     assert locations == [
-        "main.rung[1].body_rung[0].condition[0].indirect_ref",
-        "main.rung[1].body_rung[1].condition[0].indirect_ref",
+        "main.rung[1].body_rung[0].condition[0]",
+        "main.rung[1].body_rung[1].condition[0]",
     ]
 
 

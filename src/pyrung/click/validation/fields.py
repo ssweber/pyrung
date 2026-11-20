@@ -538,8 +538,12 @@ def _refusal(
     mode: ValidationMode,
     resolver: _ResolutionCache,
     names: Mapping[str, str],
+    line: Call | None = None,
 ) -> _Refusal:
-    """Return laddercodec's *refusal* with its frame, its caret and its texts."""
+    """Return laddercodec's *refusal* with its frame, its caret and its texts.
+
+    The frame prints *line* when it is given, and the instruction's call otherwise.
+    """
     code = str(refusal.code)
     place = family.place_of(refusal)
     argument = None if place is None else place.argument
@@ -551,7 +555,9 @@ def _refusal(
         attributes = (argument,) if isinstance(argument, str) else ()
     call = family.call_of(instruction)
     item = None if place is None else place.item
-    frame = instruction_frame(base_location, instruction, argument=argument, item=item, call=call)
+    frame = instruction_frame(
+        base_location, instruction, argument=argument, item=item, call=line or call
+    )
     call_names = _call_names(operands, names, resolver)
     text = refusal.message(call_names)
     # laddercodec gives no detail for an instruction it has no rules for yet. The short
@@ -601,11 +607,16 @@ def evaluate_family(
     mode: ValidationMode,
     resolver: _ResolutionCache,
     names: Mapping[str, str],
+    *,
+    line: Call | None = None,
 ) -> FamilyResult:
     """Report each value of *instruction* that laddercodec refuses.
 
     An instruction that no family covers has no findings here. *names* maps CLICK
-    addresses to tag names for laddercodec's text. :func:`tag_names` builds it.
+    addresses to tag names for laddercodec's text. :func:`tag_names` builds it. Each
+    finding's location starts with the ``arg_path`` of *base_location*, such as
+    ``instruction``. A contact sits in a line such as ``with rung(X1, C1):``. Pass that line
+    as *line*, and the frame prints the line in place of the contact alone.
     """
     from .families import family_of
 
@@ -618,12 +629,14 @@ def evaluate_family(
     for operand in family.operands_of(instruction):
         missing = [a for a, value in operand.values if _unresolved(value, resolver)]
         if missing:
-            location = _instruction_location(base_location, f"instruction.{missing[0]}")
+            location = _instruction_location(
+                base_location, f"{base_location.arg_path}.{missing[0]}"
+            )
             unresolved.append(_unresolved_finding(location, mode, operand.word))
     if unresolved:
         return FamilyResult(unresolved)
 
-    location_text = _format_location(_instruction_location(base_location, "instruction"))
+    location_text = _format_location(base_location)
     broken = _broken_ranges(instruction, exporter, family)
     if broken:
         finding = ClickFinding(
@@ -664,7 +677,9 @@ def evaluate_family(
     return FamilyResult(
         [],
         tuple(
-            _refusal(r, family, instruction, base_location, location_text, mode, resolver, names)
+            _refusal(
+                r, family, instruction, base_location, location_text, mode, resolver, names, line
+            )
             for r in refusals
         ),
     )

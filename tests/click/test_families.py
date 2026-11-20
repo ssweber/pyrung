@@ -76,10 +76,13 @@ def test_a_replaced_code_is_gone(family):
 
 
 def test_each_class_is_in_one_family():
+    import pyrung.core.condition
+
     for family in FAMILIES:
         for name in family.classes:
-            instruction = _CLASSES[name].__new__(_CLASSES[name])
-            assert family_of(instruction) is family
+            # The contact family names condition classes, which are not instructions.
+            cls = _CLASSES.get(name) or getattr(pyrung.core.condition, name)
+            assert family_of(cls.__new__(cls)) is family
 
 
 @pytest.mark.parametrize("family", FAMILIES, ids=lambda family: family.name)

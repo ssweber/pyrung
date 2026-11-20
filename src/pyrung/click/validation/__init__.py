@@ -9,13 +9,17 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from laddercodec import Code
+
 from pyrung.core.validation.walker import ProgramLocation, walk_program
 
 from . import findings as _findings
 from .checks import Check, Context
-from .fields import evaluate_family, tag_names
+from .conditions import ConditionSites, condition_sites
+from .fields import FamilyResult, evaluate_family, tag_names
 from .findings import *  # noqa: F403
 from .findings import (
+    CLK_BANK_UNRESOLVED,
     CLK_PROFILE_UNAVAILABLE,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_POINTER_MUST_BE_DS,
@@ -51,6 +55,7 @@ from .portability import (
     _evaluate_nop_no_coil,
     _evaluate_status_bit_usage,
     _evaluate_text_windows,
+    _is_status_bit_tag,
 )
 from .resolve import _ResolutionCache
 
@@ -160,6 +165,141 @@ _POINTER_FACT_CODES = {
 }
 
 
+def _judge_leaves(
+    leaves: ConditionSites,
+    exporter: Any,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+    names: dict[str, str],
+) -> list[FamilyResult]:
+    """Return laddercodec's verdict on each contact in *leaves*, in the same order.
+
+    Some findings are left out, because another finding reports the same fault:
+
+    - The instruction's family reports a pin contact's CLK_BANK_UNRESOLVED.
+    - CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED reports any immediate contact in a pin, so the
+      contact gets no immediate-contact-not-x.
+    - A timer's or counter's status bit gets CLK_STATUS_BIT_NOT_PORTABLE and no
+      CLK_BANK_UNRESOLVED.
+    """
+    from .fields import _value_tags
+
+    results: list[FamilyResult] = []
+    for site in leaves.sites:
+        result = evaluate_family(
+            site.leaf, site.location, exporter, mode, resolver, names, line=site.line
+        )
+        if site.pin:
+            refusals = tuple(r for r in result.refusals if r.code != Code.IMMEDIATE_CONTACT_NOT_X)
+            result = replace(result, refusals=refusals)
+        if site.pin or any(_is_status_bit_tag(tag) for tag, _name in _value_tags(site.leaf)):
+            checks = [f for f in result.checks if f.code != CLK_BANK_UNRESOLVED]
+            result = replace(result, checks=checks)
+        results.append(result)
+    return results
+
+
+def _evaluate_text_pairs(leaves: ConditionSites, mode: ValidationMode) -> list[ClickFinding]:
+    """Report a compare of two text constants that the CSV reads as two different compares.
+
+    Only an inline expression has a text on both sides, such as
+    ``LiteralExpr("A") == LiteralExpr("B")``. laddercodec cannot read such a cell, so pyrung
+    checks it. The export refuses the compare even when the finding is allowed, so warn
+    mode reports it as a warning.
+    """
+
+    from pyrung.click.ladder.translator import (
+        TEXT_PAIR_ADVICE,
+        text_constant_token,
+        text_pair_reads_two_ways,
+    )
+    from pyrung.core.expression import ExprCompare, LiteralExpr
+    from pyrung.core.validation.render import render_condition
+
+    from .resolve import _format_location
+
+    findings: list[ClickFinding] = []
+    for site in leaves.sites:
+        leaf = site.leaf
+        if not isinstance(leaf, ExprCompare):
+            continue
+        left, right = leaf.left, leaf.right
+        if not (isinstance(left, LiteralExpr) and isinstance(right, LiteralExpr)):
+            continue
+        if not (isinstance(left.value, str) and isinstance(right.value, str)):
+            continue
+        token = f"{text_constant_token(left.value)}{leaf.symbol}{text_constant_token(right.value)}"
+        if not text_pair_reads_two_ways(token):
+            continue
+        location = _format_location(site.location)
+        findings.append(
+            ClickFinding(
+                code=Code.INVALID_TEXT_CONSTANT.value,
+                severity="error" if mode == "strict" else "warning",
+                message=(
+                    f"{render_condition(leaf)} at {location} compares two texts, and the CSV "
+                    "reads it as two different compares."
+                ),
+                location=location,
+                suggestion=TEXT_PAIR_ADVICE,
+            )
+        )
+    return findings
+
+
+# laddercodec's verdicts, by place. A place is a location without its arg_path. Each
+# verdict comes with the path that it covers, such as "instruction" or "condition[1]".
+_Verdicts = dict[ProgramLocation, list[tuple[str, FamilyResult]]]
+
+
+def _verdicts(
+    instruction_sites: list[tuple[Any, ProgramLocation]],
+    judged: list[FamilyResult],
+    leaves: ConditionSites,
+    leaf_results: list[FamilyResult],
+) -> _Verdicts:
+    """Return laddercodec's verdicts on the instructions and the contacts, by place.
+
+    Two instructions of one class in one forloop() share a place, so a place can hold
+    several verdicts.
+    """
+    found: _Verdicts = {}
+    for (_instruction, location), result in zip(instruction_sites, judged, strict=True):
+        found.setdefault(_site_key(location), []).append((location.arg_path, result))
+    by_location: dict[ProgramLocation, FamilyResult] = {}
+    for site, result in zip(leaves.sites, leaf_results, strict=True):
+        by_location[site.location] = result
+        found.setdefault(_site_key(site.location), []).append((site.location.arg_path, result))
+    for alias, owner in leaves.aliases.items():
+        result = by_location.get(owner)
+        if result is not None:
+            found.setdefault(_site_key(alias), []).append((alias.arg_path, result))
+    return found
+
+
+def _owners(location: ProgramLocation, verdicts: _Verdicts) -> list[tuple[FamilyResult, str]]:
+    """Return each verdict whose path holds the path of *location*.
+
+    Each comes with the attribute that holds the operand, such as "source". Two
+    instructions of one class in one forloop() share a place and a path, so a fact there
+    could belong to either. Such a fact gets no verdict. pyrung reports it.
+    """
+    path = location.arg_path
+    found: list[tuple[FamilyResult, str]] = []
+    paths: list[str] = []
+    for owner_path, result in verdicts.get(_site_key(location), ()):
+        if path == owner_path:
+            found.append((result, ""))
+        elif path.startswith(f"{owner_path}."):
+            found.append((result, path[len(owner_path) + 1 :].partition(".")[0]))
+        else:
+            continue
+        paths.append(owner_path)
+    if len(paths) != len(set(paths)):
+        return []
+    return found
+
+
 def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding]:
     """Return a CLK_STEP_LIMIT finding if the estimated steps exceed or near CLICK's 8000."""
     from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
@@ -254,26 +394,26 @@ def validate_click_program(
     # advice names each pointer that the tag map maps.
     exporter = _field_renderer(program, tag_map)
     names = tag_names(tag_map)
-    by_laddercodec = {
-        _site_key(base_location): evaluate_family(
-            instruction, base_location, exporter, mode, resolver, names
-        )
+    judged = [
+        evaluate_family(instruction, base_location, exporter, mode, resolver, names)
         for instruction, base_location in instruction_sites
-    }
-    pointer_advice: dict[ProgramLocation, dict[tuple[str, str], list[str]]] = {}
+    ]
+    leaves = condition_sites(program, exporter)
+    leaf_results = _judge_leaves(leaves, exporter, mode, resolver, names)
+    verdicts = _verdicts(instruction_sites, judged, leaves, leaf_results)
+    pointer_advice: dict[int, dict[tuple[str, str], list[str]]] = {}
     for fact in facts.operands:
-        key = _site_key(fact.location)
-        judged = by_laddercodec.get(key)
+        owners = _owners(fact.location, verdicts)
         for finding in _evaluate_fact(fact, tag_map, mode, resolver):
             code = _POINTER_FACT_CODES.get(finding.code)
-            if judged is not None and code is not None and code in judged.codes:
-                path = fact.location.arg_path.removeprefix("instruction.")
-                operand = path.partition(".")[0]
-                advice = pointer_advice.setdefault(key, {}).setdefault((code, operand), [])
+            taken = [(r, a) for r, a in owners if code is not None and code in r.codes]
+            for result, attribute in taken:
+                key = (str(code), attribute)
+                advice = pointer_advice.setdefault(id(result), {}).setdefault(key, [])
                 if finding.suggestion and finding.suggestion not in advice:
                     advice.append(finding.suggestion)
-                continue
-            findings.append(finding)
+            if not taken:
+                findings.append(finding)
 
     context = Context(program, facts, instruction_sites, tag_map, mode, resolver)
     for check in _phase("program"):
@@ -283,18 +423,20 @@ def validate_click_program(
         findings.extend(_evaluate_nop_no_coil(bundle, mode))
         findings.extend(_evaluate_step_limit(bundle, mode))
 
+    findings.extend(_evaluate_text_pairs(leaves, mode))
+    for result in leaf_results:
+        findings.extend(result.findings(pointer_advice.get(id(result))))
+
     bounds = _PointerBounds(program)
     findings.extend(_evaluate_condition_pointer_past_bank(program, tag_map, bounds, mode, resolver))
     instruction_checks = _phase("instruction")
-    for instruction, base_location in instruction_sites:
+    for (instruction, base_location), result in zip(instruction_sites, judged, strict=True):
         findings.extend(
             _evaluate_pointer_past_bank(instruction, base_location, tag_map, bounds, mode, resolver)
         )
         for check in instruction_checks:
             findings.extend(check.run(instruction, base_location, context))
-
-        key = _site_key(base_location)
-        findings.extend(by_laddercodec[key].findings(pointer_advice.get(key)))
+        findings.extend(result.findings(pointer_advice.get(id(result))))
 
     active_profile = profile if profile is not None else _load_default_profile()
 

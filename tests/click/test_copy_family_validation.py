@@ -411,13 +411,25 @@ def test_pointer_advice_for_an_operand_that_no_refusal_names_is_kept():
     assert elsewhere[0].display.hint == "Remap the pointer."
 
 
-def test_a_pointer_outside_the_copy_family_keeps_pyrungs_code():
+def test_a_pointer_in_a_compare_has_laddercodecs_code():
     prog = Program(strict=False)
     with prog:
         with rung(ds[dd[1]] == 5):
             copy(1, ds[2])
     errors = validate_click_program(prog, TagMap(), mode="strict").errors
-    assert [f.code for f in errors] == [CLK_PTR_CONTEXT_ONLY_COPY]
+    assert [f.code for f in errors] == ["pointer-outside-copy"]
+
+
+def test_a_pointer_that_the_export_cannot_write_keeps_pyrungs_code():
+    # The pointer tag has no address, so laddercodec gets no compare to check.
+    pointer = Int("Ptr")
+    prog = Program(strict=False)
+    with prog:
+        with rung(ds[pointer] == 5):
+            copy(1, ds[2])
+    errors = validate_click_program(prog, TagMap(), mode="strict").errors
+    assert CLK_PTR_CONTEXT_ONLY_COPY in [f.code for f in errors]
+    assert "pointer-outside-copy" not in [f.code for f in errors]
 
 
 # --- Advice -----------------------------------------------------------------------------

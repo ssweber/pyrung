@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 import pyrung.core
+import pyrung.core.condition
 from pyrung.circuitpy.validation import _evaluate_timer_resolution
 from pyrung.click.ladder.instructions import _InstructionMixin
 from pyrung.click.nop import NopInstruction
@@ -326,5 +327,8 @@ def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None
 def test_hardware_tables_name_real_fields(name: str, field: str) -> None:
     # Some of these lookups read getattr(instruction, field, None), so a wrong name gives
     # a check that never runs.
-    cls = next(c for c in KIND if c.__name__ == name)
+    # The contact family names condition classes, which are not instructions.
+    cls = next((c for c in KIND if c.__name__ == name), None) or getattr(
+        pyrung.core.condition, name
+    )
     assert field in _assigned_fields(cls), f"{name} has no field {field}"
