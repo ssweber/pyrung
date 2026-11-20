@@ -20,7 +20,7 @@ from pyrung.click.tag_map._parsers import (
     format_tag_meta,
     parse_tag_meta,
 )
-from pyrung.core import Block, Bool, Physical, Tag, TagType
+from pyrung.core import Block, Bool, Int, Physical, Tag, TagType
 
 
 def test_resolve_standalone_tag():
@@ -341,6 +341,25 @@ def test_nickname_validation_warns_leading_underscore():
 
     assert mapping.warnings
     assert "Cannot start with _" in mapping.warnings[0]
+
+
+def test_nickname_file_is_cp1252_and_reads_back(tmp_path):
+    mapping = TagMap({Int("Température"): ds[1]})
+
+    path = tmp_path / "accent.csv"
+    mapping.to_nickname_file(path)
+
+    assert b'"Temp\xe9rature"' in path.read_bytes()
+    assert TagMap.from_nickname_file(path).resolve("Température") == "DS1"
+    assert pyclickplc.read_csv(path)[get_addr_key("DS", 1)].nickname == "Température"
+
+
+@pytest.mark.parametrize("nickname", ["温度", "Pump😀"])
+def test_nickname_file_refuses_a_character_cp1252_lacks(tmp_path, nickname):
+    mapping = TagMap({Int(nickname): ds[1]})
+
+    with pytest.raises(ValueError, match=r"DS1 .*cp1252"):
+        mapping.to_nickname_file(tmp_path / "bad.csv")
 
 
 def test_to_nickname_file_sparse_only_mapped_rows(tmp_path):
