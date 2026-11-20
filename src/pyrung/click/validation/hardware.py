@@ -535,41 +535,6 @@ def _evaluate_text_past_bank(
     ]
 
 
-def _evaluate_unreadable_copy_text(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-) -> list[ClickFinding]:
-    """Report a copy() text with a quote that the CSV can't hold.
-
-    laddercodec 8d117a1 accepts such a text in a Copy, but its CSV reader ends the text at
-    a quote before a comma. The export refuses the text, so validation reports it with
-    laddercodec's code for a text it refuses.
-    """
-    from laddercodec import Code
-
-    from pyrung.click.ladder.translator import UNREADABLE_COPY_TEXT, unreadable_copy_text
-
-    if type(instruction).__name__ != "CopyInstruction":
-        return []
-    if not unreadable_copy_text(instruction.source):
-        return []
-    code = Code.INVALID_TEXT_CONSTANT.value
-    location_text = _format_location(_instruction_location(base_location, "instruction.source"))
-    return [
-        ClickFinding(
-            code=code,
-            severity=_route_severity(code, mode),
-            message=(
-                f"copy() of the text {instruction.source!r} at {location_text} can't be "
-                f"written to the CSV. {UNREADABLE_COPY_TEXT}"
-            ),
-            location=location_text,
-            suggestion="Write the text without the quote.",
-        )
-    ]
-
-
 # A CLICK timer or counter is one number. Its instruction names T<n> (or CT<n>), and the
 # accumulator TD<n> (CTD<n>) comes with it. The Out coils name only TD<n>.
 _PAIRED_BANKS = {"T": "TD", "CT": "CTD"}

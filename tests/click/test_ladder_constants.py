@@ -23,8 +23,7 @@ from pyrung import PLC
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.translator import click_real_literal
 from pyrung.click.ladder.types import LadderBundle, LadderExportError
-from pyrung.click.validation import validate_click_program
-from pyrung.core import Int, Program, rung
+from pyrung.core import Program, rung, to_value
 from pyrung.core.expression import lsh
 from pyrung.core.program import copy, fill, math, out, search
 from tests.click.helpers import exec_with_source, round_trip_logic, strip_pyrung_boilerplate
@@ -349,29 +348,32 @@ def test_a_quote_on_its_own_exports_as_its_ascii_code():
     assert after == before, code
 
 
-_TYPED_QUOTES = ['A"B', 'A""B', '"A', 'A"', '""', 'say "hi"']
-
-
-@pytest.mark.parametrize("value", _TYPED_QUOTES)
-def test_a_copy_writes_a_quote_inside_its_text_as_typed(value, tmp_path):
-    # RESULTS9-10.md c10: CLICK saves a Copy's text as typed, with no escape for a quote.
-    from laddercodec import read_csv
-
-    with Program() as logic:
-        with rung():
-            copy(value, txt[1])
-        with rung():
-            copy(value, txt[ds[1]])
-    bundle = pyrung_to_ladder(logic, TagMap())
-    assert _tokens(logic)[:2] == [f'copy("{value}",TXT1)', f'copy("{value}",TXT[DS1])']
-    bundle.write(tmp_path)
-    sources = [
-        instruction.source
-        for loaded in read_csv(tmp_path / "main.csv")
-        for instruction in loaded.instructions
-        if hasattr(instruction, "source")
-    ]
-    assert sources == [f'"{value}"', f'"{value}"']
+# A Copy, a Search and a compare write a text between plain outer quotes, with no escape for
+# a quote inside. A text with a comma, a bracket or an operator is one that a reader could cut
+# short. CLICK's editor accepts a quote in the text of a Copy, a Search and a compare. Only
+# Copy has been checked on a CLICK. Search and compare have not.
+_TYPED_QUOTES = [
+    'A"B',
+    'A""B',
+    '"A',
+    'A"',
+    '""',
+    'say "hi"',
+    'A",B',
+    'A" ,B',
+    'A" , B',
+    '"["',
+    '","',
+    'A",TXT1',
+    'A=",B',
+    'A",oneshot=1',
+    'A",found=C1',
+    'A"]',
+    'x<y"',
+    'A"==B',
+    'A=="B',
+]
+_TYPED_PLAIN = ["x<y", "A==B", "A!=B", "a>=b", "<", "==", "a,b", "a=b", "oneshot=1", "result=DS1"]
 
 
 def _quoted_copies(value):
@@ -383,59 +385,19 @@ def _quoted_copies(value):
     return logic
 
 
-@pytest.mark.parametrize("value", _TYPED_QUOTES)
-def test_a_copy_text_with_a_quote_round_trips(value):
-    code, before, after = round_trip_logic(_quoted_copies(value), TagMap())
-    assert after == before, code
-    assert f"copy({json.dumps(value)}, " in code
-
-
-@pytest.mark.parametrize("value", _TYPED_QUOTES)
-def test_a_copy_text_with_a_quote_imports_from_a_click_project(value, tmp_path):
-    # laddercodec encodes the CSV as CLICK saves it, then decodes the CLICK form back.
-    from laddercodec import decode, encode, read_csv, write_csv
-
-    pyrung_to_ladder(_quoted_copies(value), TagMap()).write(tmp_path / "export")
-    click_form = encode(read_csv(tmp_path / "export" / "main.csv"))
-    (tmp_path / "click").mkdir()
-    write_csv(tmp_path / "click" / "main.csv", decode(click_form))
-    code = ladder_to_pyrung(tmp_path / "click")
-    namespace: dict[str, object] = {}
-    exec_with_source(code, namespace)
-    imported = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
-    tokens = [cell for row in imported.main_rows for cell in row if cell.startswith("copy(")]
-    assert tokens == [f'copy("{value}",TXT1)', f'copy("{value}",TXT[DS1])'], code
-
-
-# Each copy() text that laddercodec 8d117a1 reads back from the CSV as another text.
-_UNREADABLE = ['A",B', 'A" ,B', 'A" , B', '"["', 'A",TXT1', 'A=",B', 'A",oneshot=1', '","']
-
-
-def _unreadable_copy(value, form):
-    pointer = Int("P")
-    target = txt[pointer] if form == "pointer" else txt[1]
+def _quoted_search(value, *, op="==", **flags):
+    window = txt.select(1, 10)
+    matches = window == value if op == "==" else window != value
     with Program() as logic:
-        with rung(x[1]):
-            copy(value, target, oneshot=form == "oneshot")
-    return logic, TagMap([pointer.map_to(ds[100])], include_system=False)
+        with rung():
+            search(matches, result=ds[1], found=c[3], **flags)
+    return logic
 
 
-@pytest.mark.parametrize("form", ["txt1", "pointer", "oneshot"])
-@pytest.mark.parametrize("value", _UNREADABLE)
-def test_a_copy_text_that_reads_back_as_another_is_refused_with_a_code(value, form):
-    logic, mapping = _unreadable_copy(value, form)
-    report = validate_click_program(logic, mapping, mode="strict")
-    assert [finding.code for finding in report.errors] == ["invalid-text-constant"]
-    with pytest.raises(LadderExportError, match=r"\[invalid-text-constant\]"):
-        pyrung_to_ladder(logic, mapping)
-    # The export refuses it even when the finding is allowed, so the CSV always reads back.
-    with pytest.raises(LadderExportError, match="invalid-text-constant: copy"):
-        pyrung_to_ladder(logic, mapping, allow=["invalid-text-constant"])
-
-
-def _quoted_compare(value):
+def _quoted_compare(value, *, op="=="):
+    same = txt[1] == value if op == "==" else txt[1] != value
     with Program() as logic:
-        with rung(txt[1] == value):
+        with rung(same):
             out(c[1])
     return logic
 
@@ -447,20 +409,187 @@ def _quoted_fill(value):
     return logic
 
 
-def _quoted_search(value):
+# Each builder with the cells that its export holds.
+_TYPED_FORMS = {
+    "copy": (_quoted_copies, lambda v: [f'copy("{v}",TXT1)', f'copy("{v}",TXT[DS1])']),
+    "search": (
+        _quoted_search,
+        lambda v: [f'search(TXT1..TXT10 == "{v}",result=DS1,found=C3)'],
+    ),
+    "compare": (_quoted_compare, lambda v: [f'TXT1=="{v}"', "out(C1)"]),
+}
+
+
+def _read_back(logic, tmp_path):
+    """Return the text of each Copy source, Search value and compare side that laddercodec reads."""
+    from laddercodec import read_csv
+
+    pyrung_to_ladder(logic, TagMap()).write(tmp_path)
+    found = []
+    for loaded in read_csv(tmp_path / "main.csv"):
+        for row in loaded.conditions:
+            found += [token.right for token in row if hasattr(token, "right")]
+        for instruction in loaded.instructions:
+            found += [
+                getattr(instruction, name)
+                for name in ("source", "value")
+                if hasattr(instruction, name)
+            ]
+    return found
+
+
+@pytest.mark.parametrize("value", [*_TYPED_QUOTES, *_TYPED_PLAIN])
+@pytest.mark.parametrize("form", _TYPED_FORMS)
+def test_copy_search_and_compare_write_a_text_as_typed(form, value, tmp_path):
+    # CLICK saves a Copy's text as typed, with no escape for a quote. No one has checked
+    # Search and compare on a CLICK.
+    build, cells = _TYPED_FORMS[form]
+    logic = build(value)
+    tokens = [token for token in _tokens(logic) if token != "X001"]
+    assert tokens == cells(value)
+    assert set(_read_back(logic, tmp_path)) == {f'"{value}"'}
+
+
+@pytest.mark.parametrize("value", [*_TYPED_QUOTES, *_TYPED_PLAIN])
+@pytest.mark.parametrize("form", _TYPED_FORMS)
+def test_copy_search_and_compare_text_round_trips(form, value):
+    build, _cells = _TYPED_FORMS[form]
+    code, before, after = round_trip_logic(build(value), TagMap())
+    assert after == before, code
+    assert json.dumps(value) in code
+
+
+@pytest.mark.parametrize("value", _TYPED_QUOTES)
+@pytest.mark.parametrize("form", _TYPED_FORMS)
+def test_copy_search_and_compare_text_imports_from_a_click_project(form, value, tmp_path):
+    # laddercodec encodes the CSV as CLICK saves it, then decodes the CLICK form back.
+    from laddercodec import decode, encode, read_csv, write_csv
+
+    build, cells = _TYPED_FORMS[form]
+    pyrung_to_ladder(build(value), TagMap()).write(tmp_path / "export")
+    click_form = encode(read_csv(tmp_path / "export" / "main.csv"))
+    (tmp_path / "click").mkdir()
+    write_csv(tmp_path / "click" / "main.csv", decode(click_form))
+    code = ladder_to_pyrung(tmp_path / "click")
+    namespace: dict[str, object] = {}
+    exec_with_source(code, namespace)
+    imported = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    tokens = [
+        cell
+        for row in imported.main_rows
+        for cell in row
+        if cell.startswith(("copy(", "search(", "TXT"))
+    ]
+    assert tokens == [cell for cell in cells(value) if cell != "out(C1)"], code
+
+
+def test_a_search_with_flags_writes_a_quote_as_typed():
+    tokens = _tokens(_quoted_search('A",B', continuous=True, oneshot=True))
+    assert tokens == ['search(TXT1..TXT10 == "A",B",result=DS1,found=C3,continuous=1,oneshot=1)']
+
+
+def test_search_and_compare_write_a_not_equal_with_a_quote_as_typed():
+    assert _tokens(_quoted_search('x<y"', op="!=")) == [
+        'search(TXT1..TXT10 != "x<y"",result=DS1,found=C3)'
+    ]
+    assert _tokens(_quoted_compare('x<y"', op="!=")) == ['TXT1!="x<y""', "out(C1)"]
+
+
+def test_a_compare_with_an_operator_in_its_text_has_the_operator_outside_the_quotes(tmp_path):
+    # laddercodec reads "A==B"==TXT1 and TXT1!="x<y" as typed.
+    from laddercodec import read_csv
+
     with Program() as logic:
-        with rung():
-            search(txt.select(1, 4) == value, result=ds[1], found=c[3])
-    return logic
+        with rung("A==B" == txt[1]):
+            out(c[1])
+        with rung(txt[2] != "x<y"):
+            out(c[2])
+    assert _tokens(logic) == ['TXT1=="A==B"', "out(C1)", 'TXT2!="x<y"', "out(C2)"]
+    pyrung_to_ladder(logic, TagMap()).write(tmp_path)
+    compares = [
+        (token.left, token.op, token.right)
+        for loaded in read_csv(tmp_path / "main.csv")
+        for row in loaded.conditions
+        for token in row
+        if hasattr(token, "right")
+    ]
+    assert compares == [("TXT1", "==", '"A==B"'), ("TXT2", "!=", '"x<y"')]
 
 
-@pytest.mark.parametrize("build", [_quoted_compare, _quoted_fill, _quoted_search])
-def test_other_instructions_refuse_a_quote_among_other_characters(build):
-    # No one has yet checked on a CLICK how Fill, compare and search read a quote.
+def test_fill_still_refuses_a_quote_among_other_characters():
+    # No one has yet checked on a CLICK how Fill reads a quote.
     with pytest.raises(LadderExportError, match="holds a quote among other characters"):
         pyrung_to_ladder(
-            build('a"b'), TagMap(), allow=["invalid-text-constant", "constant-out-of-range"]
+            _quoted_fill('a"b'), TagMap(), allow=["invalid-text-constant", "constant-out-of-range"]
         )
+
+
+def test_no_copy_search_or_compare_cell_writes_a_keyword_value_in_quotes():
+    # laddercodec raises CsvReadError for a keyword value in quotes, such as oneshot="1", in
+    # a Copy, and in a Search that is not of quoted text.
+    import re
+
+    with Program() as logic:
+        with rung(x[1]):
+            copy("A", txt[1], oneshot=True)
+            copy(1.5, txt[ds[1]], oneshot=True)
+            copy(txt[9], ds[2], oneshot=True, convert=to_value)
+            search(txt.select(1, 4) == "A", result=ds[1], found=c[3], continuous=True, oneshot=True)
+            search(ds.select(1, 4) == 5, result=ds[1], found=c[3], continuous=True, oneshot=True)
+            search(txt.select(1, 4) == 'A",B', result=ds[1], found=c[3], oneshot=True)
+    cells = [
+        cell
+        for row in pyrung_to_ladder(logic, TagMap()).main_rows[1:-1]
+        for cell in row[1:]
+        if cell.startswith(("copy(", "search("))
+    ]
+    assert len(cells) == 6
+    for cell in cells:
+        keywords = re.findall(r'(?:^|,)([a-z_]+)=("?)', cell.partition("(")[2])
+        assert keywords, cell
+        assert all(quote == "" for _name, quote in keywords), cell
+
+
+_REFUSED_CELLS = [
+    'copy("AB",TXT1,oneshot="1")',
+    'search(TXT1..TXT4 == "A",result=DS1,found=C1,oneshot="1")',
+    'search(TXT1..TXT4 == "A",result="DS1",found=C1)',
+]
+
+
+@pytest.mark.parametrize("cell", _REFUSED_CELLS)
+def test_importer_refuses_a_cell_that_laddercodec_refuses(cell, tmp_path):
+    # Without the check, the importer reads 'AB",TXT1,oneshot="1' as the text of the first cell.
+    from dataclasses import replace
+
+    from laddercodec import CsvReadError, read_csv
+
+    bundle = pyrung_to_ladder(_quoted_copies("AB"), TagMap())
+    rows = tuple(
+        tuple(cell if value == 'copy("AB",TXT1)' else value for value in row)
+        for row in bundle.main_rows
+    )
+    assert rows != bundle.main_rows
+    bad = replace(bundle, main_rows=rows)
+    bad.write(tmp_path)
+    with pytest.raises(CsvReadError):
+        read_csv(tmp_path / "main.csv")
+    with pytest.raises(ValueError):
+        ladder_to_pyrung(bad)
+
+
+def test_importer_reads_a_compare_of_two_texts_with_an_operator_inside_a_text():
+    from pyrung.core.expression import LiteralExpr as lit
+
+    with Program() as logic:
+        with rung(lit("x<y") == lit("B")):
+            out(c[1])
+        with rung(lit("A==B") != lit("C")):
+            out(c[2])
+    bundle = pyrung_to_ladder(logic, TagMap(), allow=["CLK_EXPR_ONLY_IN_MATH"])
+    code = ladder_to_pyrung(bundle)
+    assert '"x<y" == "B"' in code
+    assert '"A==B" != "C"' in code
 
 
 def test_text_constant_with_embedded_nul_rejected():

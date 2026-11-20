@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-from pyrung.click.codegen._syntax import _csv_string_value
+from pyrung.click.codegen._syntax import _csv_string_value, _typed_text_cell
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.constants import _HEADER_WIDTH
 from pyrung.click.codegen.models import _RawRung, _SubroutineInfo
@@ -18,11 +18,14 @@ _RUNG_MARKER = re.compile(r"^R\d*$")
 # ---------------------------------------------------------------------------
 
 
-def _parse_rows(all_rows: Iterable[Iterable[str]]) -> list[_RawRung]:
+def _parse_rows(all_rows: Iterable[Iterable[str]], *, typed_quotes: bool = True) -> list[_RawRung]:
     """Segment header+data rows (strings) into raw rungs.
 
     Accepts any iterable of string sequences — CSV reader output,
     ``LadderBundle.main_rows``, or ``LadderBundle.subroutine_rows`` entries.
+    With *typed_quotes*, each text of a Copy, a Search or a compare that holds a quote is
+    rewritten with each inner quote written twice, which is how the rest of the importer
+    reads it. Pass False to keep each cell as it is.
     """
     rows_list = [list(row) for row in all_rows]
 
@@ -46,6 +49,9 @@ def _parse_rows(all_rows: Iterable[Iterable[str]]) -> list[_RawRung]:
         if marker == "#":
             pending_comments.append(row[1] if len(row) > 1 else "")
             continue
+
+        if typed_quotes:
+            row[1:] = [_typed_text_cell(cell) for cell in row[1:]]
 
         if _RUNG_MARKER.fullmatch(marker):
             if current_rung is not None:

@@ -462,6 +462,71 @@ def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
     assert len(found) == 2
 
 
+# --- Text against a number -------------------------------------------------------------
+# CLICK's Compare takes text on both sides or a number on both sides, and refuses a mix with
+# OBJ-007. laddercodec's code for it is compare-mixed-types.
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: txt[1] == 5,
+        lambda: txt[1] != 1.5,
+        lambda: txt[1] == ds[1],
+        lambda: ds[1] == txt[1],
+        lambda: dh[1] == txt[1],
+        lambda: ds[1] == "A",
+        lambda: dd[1] != "A",
+        lambda: dh[1] == "A",
+        lambda: "A" == ds[1],
+        lambda: ds[1] == 'A"B',
+    ],
+    ids=[
+        "txt-int",
+        "txt-real",
+        "txt-ds",
+        "ds-txt",
+        "dh-txt",
+        "ds-text",
+        "dd-text",
+        "dh-text",
+        "text-ds",
+        "ds-quoted-text",
+    ],
+)
+def test_text_against_a_number_is_refused(build):
+    def body():
+        with rung(build()):
+            copy(1, ds[9])
+
+    (finding,) = _found(body, "compare-mixed-types")
+    assert "OBJ-007" in finding.message
+    _export_refuses(body, "compare-mixed-types")
+    # Warn mode reports it as a hint, and the export lets it through once it is allowed.
+    report = validate_click_program(_program(body), TagMap(), mode="warn")
+    assert [f.code for f in report.hints] == ["compare-mixed-types"]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: txt[1] == txt[2],
+        lambda: txt[1] == "A",
+        lambda: txt[1] != 'A"B',
+        lambda: ds[1] == 5,
+        lambda: ds[1] == ds[2],
+        lambda: dh[1] == 5,
+    ],
+    ids=["txt-txt", "txt-text", "txt-quoted-text", "ds-int", "ds-ds", "dh-int"],
+)
+def test_text_against_text_and_number_against_number_are_not_flagged(build):
+    def body():
+        with rung(build()):
+            copy(1, ds[9])
+
+    assert _found(body, "compare-mixed-types") == []
+
+
 # --- For count ------------------------------------------------------------------------
 # The editor refuses a negative constant count.  pyrung's forloop() already refuses any
 # constant below 1 (tests/core/test_forloop.py), so there is no finding to add.

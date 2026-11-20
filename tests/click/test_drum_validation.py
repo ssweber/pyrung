@@ -128,6 +128,15 @@ def test_a_refused_event_marks_that_item_of_the_list():
     assert _marked(finding) == "~C5"
 
 
+@pytest.mark.parametrize("event", [~c[5], rise(c[5])], ids=["not", "edge"])
+def test_an_operator_or_an_edge_as_an_event_is_obj_005(event):
+    # CLICK's editor gives OBJ-005 for an event that is an operator, an edge, a range, a list
+    # or a pointer. A bank alone is OBJ-002 or OBJ-004, and a number above its bank is OBJ-003.
+    (finding,) = _errors(lambda: _event(events=(x[3], event)).reset(x[4]))
+    assert finding.code == Code.NOT_AN_ADDRESS
+    assert "OBJ-005" in finding.message
+
+
 def test_a_refused_event_gives_the_advice_to_copy_it_into_a_c_bit():
     (finding,) = _errors(lambda: _event(events=(x[3], ds[5] > 3)).reset(x[4]))
     assert finding.suggestion == "Copy the condition into a C bit and use that bit as the event."

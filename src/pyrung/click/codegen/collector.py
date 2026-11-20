@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Any, cast
 from pyclickplc.addresses import format_address_display
 
 from pyrung.click._topology import Leaf, Parallel, Series, SPNode
-from pyrung.click.codegen._syntax import _csv_string_value, _typed_copy_source
+from pyrung.click.codegen._syntax import _csv_string_value
 from pyrung.click.codegen.constants import (
-    _COMPARE_RE,
     _CONDITION_WRAPPERS,
     _COPY_CONVERTERS,
     _FUNC_RE,
@@ -17,6 +16,7 @@ from pyrung.click.codegen.constants import (
     _RANGE_RE,
     _ascending_range_str,
     _operand_matches,
+    _split_compare,
 )
 from pyrung.click.codegen.models import (
     RungRole,
@@ -815,10 +815,10 @@ def _scan_token_for_operands(
             return
 
     # Check for comparison
-    cmp_match = _COMPARE_RE.match(token)
-    if cmp_match:
-        _register_operands_from_text(cmp_match.group(1), collection, nicknames)
-        _register_operands_from_text(cmp_match.group(3), collection, nicknames)
+    cmp_parts = _split_compare(token)
+    if cmp_parts:
+        _register_operands_from_text(cmp_parts[0], collection, nicknames)
+        _register_operands_from_text(cmp_parts[2], collection, nicknames)
         return
 
     # Check for negation prefix
@@ -1020,7 +1020,7 @@ def _scan_af_token(
         return
 
     # Strip quoted strings before scanning for operands
-    clean_args = _strip_quoted_strings(_args_without_typed_text(func_name, args_str))
+    clean_args = _strip_quoted_strings(args_str)
 
     # Check for condition wrappers inside AF args (e.g. out(immediate(Y001)))
     for cw in _CONDITION_WRAPPERS:
@@ -1034,15 +1034,6 @@ def _scan_af_token(
 
     # Scan for operands
     _register_operands_from_text(clean_args, collection, nicknames)
-
-
-def _args_without_typed_text(func_name: str, args_str: str) -> str:
-    """Return *args_str* without a ``copy()`` source text that holds a quote.
-
-    A quote inside that text would split it wrongly when the scan strips quoted text.
-    """
-    typed = _typed_copy_source(args_str) if func_name == "copy" else None
-    return args_str if typed is None else typed[1]
 
 
 def _register_operands_from_text(
@@ -1230,10 +1221,10 @@ def _ref_token(
             _ref_operands_in_text(args_str, collection, refs)
             return
 
-    cmp_match = _COMPARE_RE.match(token)
-    if cmp_match:
-        _ref_operands_in_text(cmp_match.group(1), collection, refs)
-        _ref_operands_in_text(cmp_match.group(3), collection, refs)
+    cmp_parts = _split_compare(token)
+    if cmp_parts:
+        _ref_operands_in_text(cmp_parts[0], collection, refs)
+        _ref_operands_in_text(cmp_parts[2], collection, refs)
         return
 
     if token.startswith("~"):
@@ -1321,7 +1312,7 @@ def _ref_af_token(
         timer_keys = {f"{side}_acc" for side in ("on", "off")}
         args_str = ",".join([*ov_args, *(f"{k}={v}" for k, v in ov_kwargs if k not in timer_keys)])
 
-    clean_args = _strip_quoted_strings(_args_without_typed_text(func_name, args_str))
+    clean_args = _strip_quoted_strings(args_str)
 
     for cw in _CONDITION_WRAPPERS:
         if cw + "(" in clean_args:

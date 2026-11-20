@@ -401,6 +401,7 @@ Common findings:
 | Constant in `copy()` or `fill()` into a `Word` | Any | 0..65535 into DH, XD or YD (`CLK_COPY_WIDE_CONSTANT`). The export writes −32768..−1 as its 16 bits. A `copy()` may have a fraction, and a CLICK drops it (`copy(1.5, DH1)` stores 1). A `fill()` of several registers must be a whole number. The export rejects any other constant, even with `allow=` |
 | A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK. In pyrung it is 0, because the `sc` block does not follow the system points |
 | Compare of a `Word` mapped to `DH`, `XD` or `YD` with a `DS`, `DD`, `DF`, `TD`, `CTD` or `SD` tag | Compares the values | Both sides hex, or a hex tag against a constant. Copy the `Word` into a `DS` tag first (`CLK_COMPARE_HEX_MIX`) |
+| Compare of text with a number (`txt[1] == 5`, `ds[1] == "A"`, `txt[1] == ds[1]`) | Runs the compare | Text on both sides, or a number on both sides (`compare-mixed-types`, OBJ-007). To compare a character's code, copy it into an `Int` with `convert=to_ascii` first |
 | Range in `blockcopy()`, `fill()`, a pack or an unpack | Any tags, in any order | Consecutive addresses in one bank, in ascending order (`CLK_COPY_RANGE_NOT_CONSECUTIVE`). `y.select(1, 21)` skips Y017..Y020, so split it at Y016. The export rejects such a range even with `allow=` |
 | Range in `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` | Any tags, in any order | Consecutive addresses in one bank, in ascending order (`CLK_MATH_RANGE_NOT_CONTIGUOUS`, `CLK_MATH_RANGE_MIXED_BANKS`). Unlike a `blockcopy()` range, an aggregate may cross the gap between X or Y slots, such as `x.select(1, 21).sum()`. The export rejects a range that breaks the rule even with `allow=` |
 | Text compare on a `Char` (`Name == "AB"`) | Compares the Chars that follow it in its block | The Chars must map to consecutive TXT addresses, in order (`CLK_TEXT_WINDOW_NOT_CONTIGUOUS`) |
@@ -505,15 +506,14 @@ To convert ladder CSV back into pyrung Python source, see [CLICK Python Codegen]
 A blank TXT holds NUL. A CLICK text constant writes one TXT per character, so `""` writes nothing. CLICK ends a quoted constant at NUL. A blank text constant (`""` or `"\x00"`, in `copy`, `fill`, a compare or a `search`) therefore exports as `$00`, CLICK's ASCII-code constant for NUL. `$00` imports back as the blank.
 
 ```python
-copy('say "hi"', txt[1])  # exports as copy("say "hi"",TXT1)
-copy('"', txt[1])         # exports as copy($22,TXT1)
-copy('a",b', txt[1])      # the export refuses it
-txt[1] == 'a"b'           # the export refuses it
+copy('say "hi"', txt[1])                                   # exports as copy("say "hi"",TXT1)
+search(txt.select(1, 4) == 'a"b', result=ds[1], found=c[1])  # exports as search(TXT1..TXT4 == "a"b",...)
+txt[1] == 'a"b'                                            # exports as TXT1=="a"b"
+copy('"', txt[1])                                          # exports as copy($22,TXT1)
+fill('a"b', txt.select(1, 4))                              # the export refuses it
 ```
 
-A Copy writes its text as typed, with no escape for a quote. So `copy('say "hi"', txt[1])` fills TXT1..TXT8. A text constant of one quote exports as `$22`, the ASCII code for a quote.
-
-Validation and the export refuse a `copy()` text that the CSV can't read back (`invalid-text-constant`), such as `'a",b'`, where a quote before a comma ends the text early. The export also refuses a quote among other characters in a comparison, `fill()` or `search()`. Write the text without the quote.
+A Copy, a Search and a comparison write their text as typed, with no escape for a quote. CLICK's editor accepts a quote in the text of all three. So `copy('say "hi"', txt[1])` fills TXT1..TXT8. A text constant of one quote exports as `$22`, the ASCII code for a quote. The export refuses a `fill()` text that holds a quote among other characters. Write the text without the quote.
 
 ### Empty and comment-only rungs
 
