@@ -478,10 +478,10 @@ class _InstructionMixin:
             if instruction.continuous:
                 kw["continuous"] = "1"
             kw.update(oneshot_kw)
-            range_str = self._render_operand(
+            range_str = self._render_run(
                 instruction.search_range,
                 path=f"{path}.search_range",
-                source=instruction,
+                instruction=instruction,
             )
             with self._hex_constants("exact" if self._is_hex_bank_operand(range_str) else None):
                 value_str = self._render_operand(
@@ -744,8 +744,8 @@ class _InstructionMixin:
             kwargs: dict[str, str] = dict(
                 target=target_expr,
                 remote_start=remote_start_expr,
-                source=self._render_operand(
-                    instruction.source, path=f"{path}.source", source=instruction
+                source=self._render_run(
+                    instruction.source, path=f"{path}.source", instruction=instruction
                 ),
             )
             kwargs.update(self._render_status_bits(instruction, "sending", path))
@@ -758,8 +758,8 @@ class _InstructionMixin:
             kwargs = dict(
                 target=target_expr,
                 remote_start=remote_start_expr,
-                dest=self._render_operand(
-                    instruction.dest, path=f"{path}.dest", source=instruction
+                dest=self._render_run(
+                    instruction.dest, path=f"{path}.dest", instruction=instruction
                 ),
             )
             kwargs.update(self._render_status_bits(instruction, "receiving", path))

@@ -152,6 +152,18 @@ def test_a_table_of_scattered_addresses_is_refused():
     assert finding.code == "CLK_COPY_RANGE_NOT_CONSECUTIVE"
 
 
+def test_the_export_refuses_a_scattered_table_even_under_allow():
+    gap = Block("Gap", TagType.INT, 1, 3)
+    mappings = [gap[1].map_to(ds[1]), gap[2].map_to(ds[2]), gap[3].map_to(ds[5])]
+    program = _program(lambda: search(gap.select(1, 3) >= 1, result=ds[20], found=c[1]))
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE"):
+        pyrung_to_ladder(
+            program,
+            TagMap(mappings, include_system=False),
+            allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",),
+        )
+
+
 def test_the_export_refuses_a_search_that_click_refuses():
     with pytest.raises(LadderExportError, match=Code.BANK_NOT_ALLOWED):
         pyrung_to_ladder(

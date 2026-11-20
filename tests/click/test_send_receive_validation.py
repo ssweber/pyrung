@@ -244,6 +244,41 @@ def test_a_source_of_scattered_addresses_is_refused():
     assert finding.code == "CLK_COPY_RANGE_NOT_CONSECUTIVE"
 
 
+def _gapped_ranges():
+    gap = Block("Gap", TagType.INT, 1, 3)
+    scattered = [gap[1].map_to(ds[1]), gap[2].map_to(ds[2]), gap[3].map_to(ds[5])]
+    desc = Block("Desc", TagType.INT, 1, 3)
+    descending = [desc[1].map_to(ds[13]), desc[2].map_to(ds[12]), desc[3].map_to(ds[11])]
+    return {
+        "scattered": (gap.select(1, 3), scattered),
+        "reversed": (ds.select(1, 3).reverse(), []),
+        "mapped-descending": (desc.select(1, 3), descending),
+    }
+
+
+@pytest.mark.parametrize("kind", ["scattered", "reversed", "mapped-descending"])
+@pytest.mark.parametrize("call", [_send, _receive], ids=["send", "receive"])
+def test_the_export_refuses_a_gapped_range_even_under_allow(call, kind):
+    block_range, mappings = _gapped_ranges()[kind]
+    keyword = "source" if call is _send else "dest"
+    tag_map = TagMap(mappings, include_system=False)
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE"):
+        pyrung_to_ladder(
+            _program(call(**{keyword: block_range})),
+            tag_map,
+            allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",),
+        )
+
+
+def test_the_export_refuses_a_send_range_that_skips_addresses_under_allow():
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE"):
+        pyrung_to_ladder(
+            _program(_send(source=y.select(15, 21))),
+            TagMap(),
+            allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",),
+        )
+
+
 def test_a_range_that_is_too_long_marks_the_range():
     (finding,) = _errors(_send(source=ds.select(1, 128)))
     assert finding.code == Code.COUNT_OUT_OF_RANGE
