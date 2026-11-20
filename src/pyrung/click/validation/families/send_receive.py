@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from laddercodec.csv.ast import AfCall
-from laddercodec.csv.token_parser import parse_af_token
-from laddercodec.instructions.send_receive import parse_af_call
+from laddercodec import Receive, Send
 
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, is_modbus_status_tag
 from pyrung.core.tag import Tag
@@ -190,10 +188,9 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
             kwargs[name] = render_operand(exporter, bit, name, instruction)
     if instruction.word_swap:
         kwargs["word_swap"] = "1"
-    call = parse_af_token(exporter._fn(verb, **kwargs))
-    if not isinstance(call, AfCall):
-        raise Unbuildable
-    refusals = refusals_of(lambda: parse_af_call(call))
+    token = exporter._fn(verb, **kwargs)
+    read = Send.from_csv_token if verb == "send" else Receive.from_csv_token
+    refusals = refusals_of(lambda: read(token))
     address = _remote_address(instruction)
     return [
         _RemoteStart(refusal, address) if str(refusal.field).endswith(".remote_start") else refusal

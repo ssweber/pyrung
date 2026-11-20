@@ -514,9 +514,9 @@ class _TranslatorMixin:
 
         CLICK's editor accepts a quote in the text of a Copy, a Search and a comparison, and
         keeps it as typed with no escape. So a text with a quote exports between plain outer
-        quotes. Only Copy has been checked on a CLICK. No one has yet checked Search, a
-        comparison or Fill. The export refuses a quote among other characters in a Fill. A
-        quote on its own exports as ``$22``.
+        quotes. Only a Copy has been seen saved as typed on a CLICK. The editor accepts a quote
+        in a Search and a comparison, but no one has checked what it saves. The export refuses
+        a quote among other characters in a Fill. A quote on its own exports as ``$22``.
         """
         if value in ("", BLANK_CHAR):
             return BLANK_TEXT_CONSTANT

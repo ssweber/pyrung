@@ -1,10 +1,7 @@
-"""List every import of a laddercodec module below the top level.
+"""Fail when any module imports from a laddercodec module below the top level.
 
-pyrung reads laddercodec through its top-level names. The send and receive family also
-imports three names from laddercodec's inner modules, because laddercodec has no top-level
-function that parses a Send or Receive call. laddercodec will add `Send.from_csv_token()` and
-`Receive.from_csv_token()` to replace them. This test fails when the list changes, so that
-the change gets looked at, and a new deep import has to be added here by hand.
+pyrung reads laddercodec through the names in ``laddercodec.__all__``. A submodule such as
+``laddercodec.csv`` is not one of them, even though ``from laddercodec import csv`` works.
 """
 
 from __future__ import annotations
@@ -12,40 +9,51 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import laddercodec
+
 import pyrung
 
-DEEP_IMPORTS = {
-    ("src/pyrung/click/validation/families/send_receive.py", "laddercodec.csv.ast", "AfCall"),
-    (
-        "src/pyrung/click/validation/families/send_receive.py",
-        "laddercodec.csv.token_parser",
-        "parse_af_token",
-    ),
-    (
-        "src/pyrung/click/validation/families/send_receive.py",
-        "laddercodec.instructions.send_receive",
-        "parse_af_call",
-    ),
-}
+
+def _imports_below_the_top_level(source: str, name: str) -> set[tuple[str, str, str]]:
+    found: set[tuple[str, str, str]] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module.startswith("laddercodec."):
+                found |= {(name, module, alias.name) for alias in node.names}
+            elif module == "laddercodec":
+                found |= {
+                    (name, module, alias.name)
+                    for alias in node.names
+                    if alias.name not in laddercodec.__all__
+                }
+        elif isinstance(node, ast.Import):
+            found |= {
+                (name, alias.name, "")
+                for alias in node.names
+                if alias.name.startswith("laddercodec.")
+            }
+    return found
 
 
-def _deep_imports() -> set[tuple[str, str, str]]:
+def test_no_module_imports_laddercodec_below_the_top_level():
     root = Path(pyrung.__file__).resolve().parent
     found: set[tuple[str, str, str]] = set()
     for path in sorted(root.rglob("*.py")):
         name = f"src/pyrung/{path.relative_to(root).as_posix()}"
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("laddercodec."):
-                module = node.module or ""
-                found |= {(name, module, alias.name) for alias in node.names}
-            elif isinstance(node, ast.Import):
-                found |= {
-                    (name, alias.name, "")
-                    for alias in node.names
-                    if alias.name.startswith("laddercodec.")
-                }
-    return found
+        found |= _imports_below_the_top_level(path.read_text(encoding="utf-8"), name)
+    assert found == set()
 
 
-def test_the_deep_laddercodec_imports_are_the_three_that_the_send_receive_family_uses():
-    assert _deep_imports() == DEEP_IMPORTS
+def test_the_check_finds_each_form_of_a_deep_import():
+    source = (
+        "from laddercodec.csv.ast import AfCall\n"
+        "from laddercodec import csv\n"
+        "import laddercodec.csv\n"
+        "from laddercodec import Send\n"
+    )
+    assert _imports_below_the_top_level(source, "m.py") == {
+        ("m.py", "laddercodec.csv.ast", "AfCall"),
+        ("m.py", "laddercodec", "csv"),
+        ("m.py", "laddercodec.csv", ""),
+    }

@@ -119,16 +119,17 @@ def _text_holds_the_rest(call: str, args: str, last: int) -> bool:
 
 
 def _typed_text_cell(cell: str) -> str:
-    """Return *cell* with each text that holds a quote rewritten with each inner quote written twice.
+    """Return *cell* with each quote inside a text written twice.
 
     CLICK keeps the text of a Copy, a Search and a compare as typed and has no escape for
     a quote. So ``copy("A""B",TXT1)`` copies the four characters ``A""B``, and
-    ``copy("A"B",TXT1)`` copies three. The rest of the importer reads a quote written
-    twice as one quote, so this function rewrites the text that way. A keyword value in a call
-    has no quotes, so the text of a Copy or a Search runs from the first quote in the
-    arguments to the last. A compare cell reads as laddercodec reads it: the text runs
-    from the first quote to the last when only one side is text, and each side that starts
-    and ends with a quote is text when both are.
+    ``copy("A"B",TXT1)`` copies three. The rest of the importer reads two quotes as one.
+    This function writes each inner quote twice, so the importer reads the text as typed.
+
+    A keyword value in a call has no quotes. So the text of a Copy or a Search runs from the
+    first quote in the arguments to the last. A compare cell reads as laddercodec reads it.
+    When only one side is text, the text runs from the first quote to the last. When both
+    are, each side that starts and ends with a quote is text.
 
     Raise ValueError for a Copy or Search cell with a keyword value in quotes, such as
     ``oneshot="1"``. laddercodec refuses to read it.

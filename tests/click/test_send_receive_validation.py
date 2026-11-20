@@ -8,7 +8,7 @@ refusal of the target marks the whole target.
 from __future__ import annotations
 
 import pytest
-from laddercodec import Code
+from laddercodec import Code, CsvReadError, Receive, Send
 
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
@@ -322,3 +322,17 @@ def test_an_exception_response_outside_ds_and_dd_is_refused(write, bank):
 def test_a_receive_destination_in_a_read_only_bank_is_refused(bank):
     (finding,) = _errors(_receive(dest=bank[5]))
     assert finding.code == Code.BANK_NOT_ALLOWED
+
+
+@pytest.mark.parametrize("write", [_send, _receive], ids=["send", "receive"])
+def test_a_token_that_laddercodec_cannot_read_is_a_finding(write, monkeypatch):
+    def refuse(token):
+        raise CsvReadError(f"Could not read {token!r} as written.")
+
+    monkeypatch.setattr(Send, "from_csv_token", refuse)
+    monkeypatch.setattr(Receive, "from_csv_token", refuse)
+    (finding,) = _errors(write())
+    assert finding.code == str(Code.INVALID_TOKEN)
+    assert "CLICK cannot read" in finding.message
+    assert "Could not read" in finding.message
+    assert finding.message.isascii()
