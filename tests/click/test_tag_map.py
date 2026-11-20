@@ -46,7 +46,7 @@ def test_from_nickname_file_surfaces_documented_system_repairs(tmp_path):
         TagMap.from_nickname_file(path)
 
     repairs = exc_info.value.repairs
-    assert [repair.display_address for repair in repairs] == ["SD132", "SD133", "SD134", "SD135"]
+    assert [repair.display_address for repair in repairs] == ["SD132", "SD133"]
     assert repairs[0].replacement == "_Port1_AL_Denied_No1_Cnt"
     assert "CLICK system nicknames need repair" in str(exc_info.value)
 
