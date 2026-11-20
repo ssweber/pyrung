@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -551,7 +552,10 @@ class TestAddressNoRungUses:
         assert self._refusal(adapter, out, "link Y001 Q1 on_delay=0ms") == "Unknown tag 'Q1'."
         assert self._refusal(adapter, out, "link Y001 X017 on_delay=0ms") == "Unknown tag 'X017'."
 
-    def test_a_program_without_a_tag_map(self, tmp_path: Path):
+    def test_a_program_without_a_tag_map(self, tmp_path: Path, monkeypatch: Any):
+        # The launch falls back to any top-level ``tags`` module, and another test may
+        # have left one in sys.modules.
+        monkeypatch.delitem(sys.modules, "tags", raising=False)
         adapter, out = _launch(tmp_path, _NO_TAG_MAP)
         assert self._refusal(adapter, out, "link Y001 A on_delay=0ms") == (
             "Unknown tag 'Y001' (address Y001 is not mapped to a tag; the project has no TagMap)"

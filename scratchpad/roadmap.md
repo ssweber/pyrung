@@ -436,6 +436,10 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **A launch can borrow another project's TagMap.** `_find_project_tags_module` (dap/handlers/lifecycle_launch.py)
+  falls back to any top-level `tags` module in `sys.modules`. A program with no TagMap then takes the TagMap of a
+  project that ran before it in the same process. CI showed it, because a test left `tags` behind. Use the fallback
+  only when `tags` is importable from the program's own directory.
 - **`X0001` is read as X001.** pyclickplc's address parser accepts leading zeros. `force X0001 true` forces X001
   but echoes `Forced X0001=True`. Refuse the padded form, or echo the address it resolved to.
 - **A force on an unused address is lost at a reload.** Each ClickNick Write reloads, and the new runner does not know
