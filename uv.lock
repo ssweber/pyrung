@@ -192,8 +192,8 @@ wheels = [
 
 [[package]]
 name = "laddercodec"
-version = "0.4.1.dev133+2a5e4b8"
-source = { git = "https://github.com/ssweber/laddercodec?branch=main#2a5e4b8c6b947af405980e05956e6d67239a49e8" }
+version = "0.4.1.dev137+6bd4778"
+source = { git = "https://github.com/ssweber/laddercodec?branch=main#6bd4778324e194b75262dcf5aa8a293e2ac4bed9" }
 
 [[package]]
 name = "markdown"

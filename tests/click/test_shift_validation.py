@@ -169,11 +169,11 @@ def test_allow_with_the_new_code_lets_the_finding_through():
     pyrung_to_ladder(_program(write), TagMap(), allow=(Code.BANK_NOT_ALLOWED,))
 
 
-def test_allow_with_the_old_code_no_longer_lets_the_finding_through():
-    # CLK_BANK_NOT_WRITABLE is still a code of other checks, so allow= takes it. shift() no
-    # longer reports it.
+def test_allow_with_the_old_code_names_what_replaced_it():
     write = lambda: shift(x.select(1, 8)).clock(x[2]).reset(x[3])  # noqa: E731
-    with pytest.raises(LadderExportError, match=Code.BANK_NOT_ALLOWED):
+    with pytest.raises(
+        ValueError, match="CLK_BANK_NOT_WRITABLE. Pass not-writable or bank-not-allowed"
+    ):
         pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_BANK_NOT_WRITABLE",))
 
 

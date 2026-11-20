@@ -7,7 +7,6 @@ import dataclasses
 import laddercodec
 import pytest
 
-from pyrung.click.validation import legacy
 from pyrung.click.validation.families import FAMILIES, family_of
 from pyrung.click.validation.findings import __all__ as finding_names
 from tests.core.analysis.test_crossings_coverage import _concrete_instruction_classes
@@ -72,7 +71,13 @@ def test_each_argument_of_a_family_is_in_the_call(family):
 
 @pytest.mark.parametrize("family", FAMILIES, ids=lambda family: family.name)
 def test_a_replaced_code_is_gone(family):
-    assert not set(family.replaced_codes) & (set(finding_names) | set(legacy.CODES))
+    assert not set(family.replaced_codes) & set(finding_names)
+
+
+def test_a_removed_shared_code_is_gone():
+    from pyrung.click.validation.findings import _REMOVED_SHARED_CODES
+
+    assert not set(_REMOVED_SHARED_CODES) & set(finding_names)
 
 
 def test_each_class_is_in_one_family():
@@ -100,18 +105,11 @@ def test_each_laddercodec_field_of_a_family_has_an_argument(family):
 
 
 def test_each_check_has_its_own_place_in_the_order():
-    # Two checks with one order number would run in the order that the modules load.
+    # Two checks with one order number would run in the order that _CHECKS lists them.
     from pyrung.click.validation import _CHECKS
 
-    places = [(check.phase, check.order) for check in (*_CHECKS, *legacy.CHECKS)]
+    places = [(check.phase, check.order) for check in _CHECKS]
     assert len(places) == len(set(places))
-
-
-def test_no_class_is_in_a_family_and_in_legacy():
-    in_families = {name for family in FAMILIES for name in family.classes}
-    for name, rows in legacy.TABLES.items():
-        keys = {key[0] if isinstance(key, tuple) else key for key in rows}
-        assert not keys & in_families, name
 
 
 def test_laddercodec_names_each_tag_of_a_keyword_and_a_chained_call():
@@ -150,70 +148,3 @@ def test_laddercodec_names_each_tag_of_a_keyword_and_a_chained_call():
         "DS20": "Res",
         "C1": "C1",
     }
-
-
-def _tables_read_by_shared_checks() -> set[str]:
-    """Return the name of each legacy table that a module of pyrung.click.validation reads."""
-    import ast
-    from pathlib import Path
-
-    import pyrung.click.validation as validation
-
-    found: set[str] = set()
-    for path in Path(validation.__file__).parent.glob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            function = node.func
-            # Both table("X") and legacy.table("X") read a table.
-            name = (
-                function.attr
-                if isinstance(function, ast.Attribute)
-                else getattr(function, "id", None)
-            )
-            first = node.args[0]
-            if name in {"_family_rows", "table"} and isinstance(first, ast.Constant):
-                found.add(first.value)
-    return found
-
-
-def _tables_defined_by_legacy_modules() -> dict[str, list[str]]:
-    """Return each table that a module in legacy/ defines, with the modules that define it."""
-    from importlib import import_module
-    from pkgutil import iter_modules
-
-    defined: dict[str, list[str]] = {}
-    for info in iter_modules(legacy.__path__):
-        module = import_module(f"{legacy.__name__}.{info.name}")
-        for table in module.TABLES:
-            defined.setdefault(table, []).append(info.name)
-    return defined
-
-
-# A shared check whose table no module in legacy/ defines any more. The orchestrator
-# removes it with the bank tables.
-_WAITING_FOR_THE_BANK_TABLES = {"ROLE_ASSIGNMENT_FIELDS", "WRITE_TARGET_FIELDS"}
-
-
-def test_a_table_in_legacy_is_read_by_a_shared_check():
-    # Deleting a legacy module drops the rows that it fed to a shared check, and the
-    # check goes quiet. A table that no check reads is a table that no one deleted.
-    unread = set(_tables_defined_by_legacy_modules()) - _tables_read_by_shared_checks()
-    assert not unread, f"{sorted(unread)} is defined in legacy/ and no shared check reads it"
-
-
-def test_a_shared_check_reads_only_tables_that_legacy_defines():
-    # A check that reads a table from a module that is gone never reports. Delete the
-    # check, or move its rows to the family that took the instruction over.
-    orphaned = (
-        _tables_read_by_shared_checks()
-        - set(_tables_defined_by_legacy_modules())
-        - _WAITING_FOR_THE_BANK_TABLES
-    )
-    assert not orphaned, f"a shared check reads {sorted(orphaned)}, which no module defines"
-
-
-def test_the_waiting_tables_are_still_read():
-    # Remove an entry from _WAITING_FOR_THE_BANK_TABLES when its check goes.
-    assert _WAITING_FOR_THE_BANK_TABLES <= _tables_read_by_shared_checks()
-    assert not _WAITING_FOR_THE_BANK_TABLES & set(_tables_defined_by_legacy_modules())

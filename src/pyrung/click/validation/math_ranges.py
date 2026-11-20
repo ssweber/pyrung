@@ -18,8 +18,7 @@ from pyrung.core.memory_block import BlockRange
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.walker import ProgramLocation
 
-from ..checks import Check
-from ..findings import (
+from .findings import (
     ClickFinding,
     ValidationMode,
     _route_severity,
@@ -27,13 +26,11 @@ from ..findings import (
     range_aggregate_problem,
     range_not_consecutive_text,
 )
-from ..resolve import (
+from .resolve import (
     _format_location,
     _instruction_location,
     _ResolutionCache,
 )
-
-CODES: tuple[str, ...] = ()
 
 
 def _collect_range_aggregates(expr: Any, out: list[tuple[str, BlockRange]], seen: set[int]) -> None:
@@ -102,16 +99,3 @@ def _evaluate_range_aggregates(
                     )
                 )
     return findings
-
-
-CHECKS = (
-    Check(
-        "instruction",
-        30,
-        lambda instruction, location, context: _evaluate_range_aggregates(
-            instruction, location, context.mode, context.resolver
-        ),
-    ),
-)
-
-TABLES: dict[str, dict[Any, Any]] = {}

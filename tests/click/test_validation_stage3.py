@@ -14,7 +14,6 @@ from pyrung.click import validation as click_validation
 from pyrung.click.ladder.types import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_UNRESOLVED,
-    CLK_BANK_WRONG_ROLE,
     CLK_EXPR_ONLY_IN_MATH,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
@@ -78,7 +77,7 @@ def test_a_status_bit_left_off_is_not_reported():
     report = validate_click_program(
         _build_program(logic), TagMap([data.map_to(ds[100])], include_system=False), mode="warn"
     )
-    assert CLK_BANK_WRONG_ROLE not in _codes(report)
+    assert Code.BANK_NOT_ALLOWED not in _codes(report)
     assert CLK_BANK_UNRESOLVED not in _codes(report)
 
 
@@ -130,7 +129,7 @@ def test_r7_timer_role_validation():
     )
 
     report = validate_click_program(prog, tag_map, mode="warn")
-    # laddercodec's Timer reports a Done bit outside T, in place of CLK_BANK_WRONG_ROLE.
+    # laddercodec's Timer reports a Done bit outside T.
     assert Code.BANK_NOT_ALLOWED in _codes(report)
 
 

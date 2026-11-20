@@ -6,127 +6,17 @@ pyrung Click validation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from pyclickplc.banks import BANKS
 
-InstructionRole = Literal[
-    "timer_done_bit",
-    "timer_accumulator",
-    "timer_preset",
-    "counter_done_bit",
-    "counter_accumulator",
-    "counter_preset",
-    "drum_output_bit",
-    "drum_current_step",
-    "drum_completion_flag",
-    "drum_accumulator",
-    "drum_jump_step",
-    "drum_event_condition",
-    "copy_pointer",
-    "coil_target",
-]
+InstructionRole = Literal["timer_done_bit"]
 
 CompareConstantKind = Literal["int1", "int2", "float", "hex", "text"]
 
 
-@dataclass(frozen=True)
-class BankCapability:
-    """Per-bank ladder validation write capability."""
-
-    writable: bool
-    writable_subset: frozenset[int] | None = None
-
-
-# SC/SD writable subsets for ladder validation (different from Modbus writability).
-LADDER_WRITABLE_SC: frozenset[int] = frozenset(
-    {50, 51, 53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121}
-)
-
-LADDER_WRITABLE_SD: frozenset[int] = frozenset(
-    {
-        29,
-        31,
-        32,
-        34,
-        35,
-        36,
-        40,
-        41,
-        42,
-        50,
-        51,
-        60,
-        61,
-        106,
-        107,
-        108,
-        112,
-        113,
-        114,
-        140,
-        141,
-        142,
-        143,
-        144,
-        145,
-        146,
-        147,
-        214,
-        215,
-    }
-)
-
-# CLICK's Out coil takes more SC than the other write fields (its Address Picker, CLICK v4,
-# 2026-11-16). Nobody asked CLICK about Set and Reset, so they keep LADDER_WRITABLE_SC.
-OUT_COIL_WRITABLE_SC: frozenset[int] = LADDER_WRITABLE_SC | frozenset(
-    {162, 165, 168, 171, 303, 304, 305, 306, 323, 324, 325, 326}
-)
-
-# Write fields that take more of a bank than LADDER_BANK_CAPABILITIES allows. Each maps
-# (instruction, field) -> {bank: the addresses it takes, or None for all of them}.
-# CLICK's hex Math writes YD.
-FIELD_WRITABLE: dict[tuple[str, str], dict[str, frozenset[int] | None]] = {
-    ("OutInstruction", "target"): {"SC": OUT_COIL_WRITABLE_SC},
-    ("CalcInstruction", "dest"): {"YD": None},
-}
-
-LADDER_BANK_CAPABILITIES: dict[str, BankCapability] = {
-    "X": BankCapability(writable=False),
-    "Y": BankCapability(writable=True),
-    "C": BankCapability(writable=True),
-    "T": BankCapability(writable=False),
-    "CT": BankCapability(writable=False),
-    "SC": BankCapability(writable=False, writable_subset=LADDER_WRITABLE_SC),
-    "DS": BankCapability(writable=True),
-    "DD": BankCapability(writable=True),
-    "DH": BankCapability(writable=True),
-    "DF": BankCapability(writable=True),
-    "XD": BankCapability(writable=False),
-    "YD": BankCapability(writable=False),
-    "TD": BankCapability(writable=True),
-    "CTD": BankCapability(writable=True),
-    "SD": BankCapability(writable=False, writable_subset=LADDER_WRITABLE_SD),
-    "TXT": BankCapability(writable=True),
-}
-
 INSTRUCTION_ROLE_COMPATIBILITY: dict[InstructionRole, frozenset[str]] = {
     "timer_done_bit": frozenset({"T"}),
-    "timer_accumulator": frozenset({"TD"}),
-    "timer_preset": frozenset({"DS"}),
-    "counter_done_bit": frozenset({"CT"}),
-    "counter_accumulator": frozenset({"CTD"}),
-    "counter_preset": frozenset({"DS", "DD"}),
-    "drum_output_bit": frozenset({"Y", "C"}),
-    "drum_current_step": frozenset({"DS"}),
-    "drum_completion_flag": frozenset({"C"}),
-    "drum_accumulator": frozenset({"TD"}),
-    "drum_jump_step": frozenset({"DS"}),
-    "drum_event_condition": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
-    "copy_pointer": frozenset({"DS"}),
-    # CLICK's Out, Set and Reset coils take bit memory only.
-    "coil_target": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
 }
 
 _HEX_COMPARE_BANKS: frozenset[str] = frozenset({"XD", "YD", "DH"})
@@ -182,30 +72,6 @@ def single_register_fill_dest(dest: Any) -> Any | None:
 class ClickHardwareProfile:
     """Capability lookup API for Click portability validation."""
 
-    def is_writable(self, memory_type: str, address: int | None = None) -> bool:
-        if memory_type not in BANKS:
-            raise KeyError(f"Unknown bank: {memory_type!r}")
-
-        capability = LADDER_BANK_CAPABILITIES[memory_type]
-        if capability.writable_subset is None:
-            return capability.writable
-
-        if address is None:
-            return False
-        return address in capability.writable_subset
-
-    def field_writable(
-        self, instruction_type: str, field_name: str, memory_type: str, address: int | None
-    ) -> bool:
-        """Return True if *field_name* of *instruction_type* may write this address."""
-        if self.is_writable(memory_type, address):
-            return True
-        extra = FIELD_WRITABLE.get((instruction_type, field_name), {})
-        if memory_type not in extra:
-            return False
-        subset = extra[memory_type]
-        return subset is None or (address is not None and address in subset)
-
     def valid_for_role(self, memory_type: str, role: InstructionRole) -> bool:
         if memory_type not in BANKS:
             raise KeyError(f"Unknown bank: {memory_type!r}")
@@ -234,19 +100,9 @@ class ClickHardwareProfile:
 
 CLICK_HARDWARE_PROFILE = ClickHardwareProfile()
 
-assert set(LADDER_BANK_CAPABILITIES) == set(BANKS), (
-    "LADDER_BANK_CAPABILITIES keys must match BANKS keys"
-)
-
 __all__ = [
     "InstructionRole",
     "CompareConstantKind",
-    "BankCapability",
-    "LADDER_WRITABLE_SC",
-    "LADDER_WRITABLE_SD",
-    "OUT_COIL_WRITABLE_SC",
-    "FIELD_WRITABLE",
-    "LADDER_BANK_CAPABILITIES",
     "INSTRUCTION_ROLE_COMPATIBILITY",
     "COMPARE_COMPATIBILITY",
     "COMPARE_CONSTANT_COMPATIBILITY",

@@ -282,8 +282,10 @@ def test_allow_names_what_replaced_the_removed_code(code, new):
         pyrung_to_ladder(_program(write), TagMap(), allow=(code,))
 
 
-def test_allow_of_the_old_writable_code_no_longer_lets_a_read_only_sd_through():
+def test_allow_of_the_old_writable_code_names_what_replaced_it():
     write = lambda: math(ds[1] + 1, sd[1])  # noqa: E731
-    with pytest.raises(LadderExportError, match=Code.NOT_WRITABLE):
+    with pytest.raises(
+        ValueError, match="CLK_BANK_NOT_WRITABLE. Pass not-writable or bank-not-allowed"
+    ):
         pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_BANK_NOT_WRITABLE",))
     assert pyrung_to_ladder(_program(write), TagMap(), allow=(Code.NOT_WRITABLE,)).main_rows

@@ -98,7 +98,7 @@
     - `CLK_RAND_BOUND_TYPE` -> `random-bound-type`.
     - `CLK_RAND_EQUAL_BOUNDS` -> `random-equal-bounds`.
 
-  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that validation never reports, and names the codes that replace a removed one. No call reports `CLK_BANK_NOT_WRITABLE` or `CLK_BANK_WRONG_ROLE` now. For the calls above, `allow=["CLK_BANK_NOT_WRITABLE"]` and `allow=["CLK_BANK_WRONG_ROLE"]` are still accepted but no longer let the finding through. The same holds for `allow=["CLK_PTR_CONTEXT_ONLY_COPY"]` and `allow=["CLK_PTR_POINTER_MUST_BE_DS"]`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets the finding through for `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
+  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that validation never reports, and names the codes that replace a removed one. No call reports `CLK_BANK_NOT_WRITABLE` or `CLK_BANK_WRONG_ROLE` now. `allow=` raises for both. For the calls above, `allow=["CLK_PTR_CONTEXT_ONLY_COPY"]` and `allow=["CLK_PTR_POINTER_MUST_BE_DS"]` are still accepted but no longer let the finding through. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets the finding through for `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
 - CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
 - The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
@@ -125,10 +125,13 @@
 - CLICK validation and the export now refuse these `send()` and `receive()` forms, which CLICK's editor rejects (they exported them):
   - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
   - A remote start in SD, such as `send(remote_start="SD1", ...)`. Send to another bank.
+  - A `send()` of TXT that starts at an even address, such as `source=txt[2]`. Start at an odd TXT address, such as `txt[1]`.
   - More registers than one request holds, such as `source=ds.select(1, 128)`. Split the transfer.
   - `word_swap=True` for a form that has no word swap, such as one DS register. Drop `word_swap`.
   - A source or destination range that is not consecutive addresses in one bank. Map the tags to consecutive addresses.
   - An IP address that is not four numbers from 0 to 255, such as `"999.1.1.1"`. Write a valid address.
+- The CLICK export now refuses a `send()` or `receive()` whose target is only a name, such as `target="plc"`. CLICK needs the address of the other device (0.17.0 exported `target="plc"`, which CLICK cannot load).
+  Pass a `ModbusTcpTarget` or a `ModbusRtuTarget` as the target.
 - CLICK validation and the export now refuse these `shift()` forms, which CLICK's editor rejects (they exported them):
   - A range in Y, such as `y.select(1, 8)`. Shift over C bits.
   - A range of one address, such as `c.select(2, 2)`. Use two or more bits.

@@ -25,8 +25,6 @@ __all__ = ["ValidationMode", "FindingSeverity", "ClickFinding", "ClickValidation
 # Finding codes
 # ---------------------------------------------------------------------------
 
-# Each family's own codes are in its module in legacy/.
-
 # Codes that stay in pyrung.
 CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
@@ -95,13 +93,9 @@ __all__ += [
 ]
 
 # Codes that several families raise.
-CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
-CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
 CLK_TIMER_PAIR_MISMATCH = "CLK_TIMER_PAIR_MISMATCH"
 CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
 __all__ += [
-    "CLK_BANK_NOT_WRITABLE",
-    "CLK_BANK_WRONG_ROLE",
     "CLK_TIMER_PAIR_MISMATCH",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
 ]
@@ -527,6 +521,14 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     return ""
 
 
+# Each removed code that several families reported, with the laddercodec codes that report
+# its faults.
+_REMOVED_SHARED_CODES = {
+    "CLK_BANK_NOT_WRITABLE": "not-writable or bank-not-allowed",
+    "CLK_BANK_WRONG_ROLE": "bank-not-allowed, invalid-modbus-target or not-an-address",
+}
+
+
 def check_allowed_codes(allow: Collection[str]) -> None:
     """Raise ``ValueError`` for a name in *allow* that no finding can have.
 
@@ -535,18 +537,16 @@ def check_allowed_codes(allow: Collection[str]) -> None:
     from laddercodec import Code
 
     from .families import replaced_codes
-    from .legacy import CODES as legacy_codes
 
     if isinstance(allow, str):
         # A string is a collection of its letters, so no letter would match a code.
         raise ValueError(f"allow= is the string {allow!r}. Pass allow= a list of codes.")
     known = {value for name, value in globals().items() if name.startswith("CLK_")}
-    known |= set(legacy_codes)
     known |= {code.value for code in Code}
     for name in allow:
         if name in known:
             continue
-        replacement = replaced_codes().get(name)
+        replacement = _REMOVED_SHARED_CODES.get(name) or replaced_codes().get(name)
         if replacement is not None:
             raise ValueError(
                 f"pyrung no longer reports {name}. Pass {replacement} to allow= instead."
