@@ -15,7 +15,7 @@
 
 ### Fixes
 
-- A link to an address that no rung uses is still refused, and the message now says that no rung uses it (it said `unknown tag`).
+- Linking an address that no rung uses now says so (it said `unknown tag`).
 
 ## v0.18.0 (2026-11-20)
 

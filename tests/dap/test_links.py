@@ -502,6 +502,22 @@ runner = PLC(prog, dt=0.010)
 """
 
 
+_POINTER = """from pyrung.click import ClickBlocks, TagMap
+from pyrung.core import Int, PLC, Program, copy, rung
+
+blocks = ClickBlocks()
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks
+state = Int("State")
+
+with Program(strict=False) as prog:
+    with rung():
+        copy(ds[state], ds[9])
+
+mapping = TagMap({state: ds[1]})
+runner = PLC(prog, dt=0.010)
+"""
+
+
 class TestAddressNoRungUses:
     def _refusal(self, adapter: DAPAdapter, out: io.BytesIO, command: str) -> str:
         response = _repl(adapter, out, command)
@@ -539,4 +555,21 @@ class TestAddressNoRungUses:
         adapter, out = _launch(tmp_path, _NO_TAG_MAP)
         assert self._refusal(adapter, out, "link Y001 A on_delay=0ms") == (
             "Unknown tag 'Y001' (address Y001 is not mapped to a tag; the project has no TagMap)"
+        )
+
+    def test_a_slot_that_a_pointer_reaches_keeps_unknown_tag(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _POINTER)
+        assert self._refusal(adapter, out, "link DS5 X001 approach_to=100 approach_rate=1") == (
+            "cannot link DS5: unknown tag: DS5"
+        )
+
+    def test_a_system_point_keeps_unknown_tag(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _NO_RUNGS)
+        assert self._refusal(adapter, out, "link SC1 X001 on_delay=0ms") == (
+            "cannot link sys.always_on: unknown tag: sys.always_on"
+        )
+        (tmp_path / "enable").mkdir()
+        adapter, out = _launch(tmp_path / "enable", _PROGRAM)
+        assert self._refusal(adapter, out, "link X003 SD1 on_delay=0ms") == (
+            "cannot link Spare: unknown tag: fault.code"
         )

@@ -28,6 +28,7 @@ from pyrung.core.harness import (
     link_problem,
 )
 from pyrung.core.physical import PHYSICAL_KEYS, Physical, parse_duration
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
@@ -101,9 +102,13 @@ def build_coupling_locked(
     coupling = Coupling(en_name, fb_name, physical, trigger)
     # link_problem refuses the first end that the runner does not know.  When that end
     # is a project address, say that no rung uses it, because "unknown tag" reads as a typo.
+    # A slot that a range or pointer reaches is in use.  A system point keeps link_problem's
+    # message too.
     for typed, name in ((feedback, fb_name), (en_text, en_name)):
         if name in runner._known_tags_by_name:
             continue
+        if runner._tag_known_or_reached(name) is not None or name in SYSTEM_TAGS_BY_NAME:
+            break
         address = _address_no_rung_uses(adapter, typed, name)
         if address is not None:
             raise adapter.DAPAdapterError(
