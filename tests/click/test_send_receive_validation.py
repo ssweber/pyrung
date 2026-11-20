@@ -336,3 +336,18 @@ def test_a_token_that_laddercodec_cannot_read_is_a_finding(write, monkeypatch):
     assert "CLICK cannot read" in finding.message
     assert "Could not read" in finding.message
     assert finding.message.isascii()
+
+
+@pytest.mark.parametrize("start", [2, 4, 1000])
+def test_a_send_of_text_from_an_even_address_is_refused(start):
+    # CLICK starts a Send of TXT at an odd address (OBJ-028).
+    write = _send(remote_start="TXT1", source=txt[start])
+    (finding,) = _errors(write)
+    assert finding.code == Code.TXT_START_NOT_ODD
+    with pytest.raises(LadderExportError, match="txt-start-not-odd"):
+        pyrung_to_ladder(_program(write), TagMap(include_system=False))
+
+
+@pytest.mark.parametrize("start", [1, 3, 999])
+def test_a_send_of_text_from_an_odd_address_passes(start):
+    assert not _errors(_send(remote_start="TXT1", source=txt[start]))

@@ -125,6 +125,7 @@
 - CLICK validation and the export now refuse these `send()` and `receive()` forms, which CLICK's editor rejects (they exported them):
   - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
   - A remote start in SD, such as `send(remote_start="SD1", ...)`. Send to another bank.
+  - A `send()` of TXT that starts at an even address, such as `source=txt[2]`. Start at an odd TXT address, such as `txt[1]`.
   - More registers than one request holds, such as `source=ds.select(1, 128)`. Split the transfer.
   - `word_swap=True` for a form that has no word swap, such as one DS register. Drop `word_swap`.
   - A source or destination range that is not consecutive addresses in one bank. Map the tags to consecutive addresses.
