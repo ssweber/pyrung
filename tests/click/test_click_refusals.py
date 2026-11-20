@@ -398,9 +398,9 @@ def test_a_hex_operand_against_a_decimal_one_is_refused(build):
         with rung(build(word, number)):
             copy(1, ds[9])
 
-    found = _found(body, "CLK_COMPARE_HEX_MIX", tag_map)
+    found = _found(body, "compare-mixed-types", tag_map)
     assert len(found) == 1
-    _export_refuses(body, "CLK_COMPARE_HEX_MIX", tag_map)
+    _export_refuses(body, "compare-mixed-types", tag_map)
 
 
 @pytest.mark.parametrize(
@@ -408,7 +408,8 @@ def test_a_hex_operand_against_a_decimal_one_is_refused(build):
     [lambda n: dh[ds[1]] == n, lambda n: ds[ds[1]] <= dh[2]],
     ids=["pointer-dh", "pointer-ds"],
 )
-def test_a_hex_operand_through_a_pointer_against_a_decimal_one_is_flagged(build):
+def test_a_hex_compare_through_a_pointer_is_refused_for_the_pointer(build):
+    # A compare takes no pointer at all, so laddercodec reports the pointer alone.
     number = Int("N")
     tag_map = TagMap([number.map_to(ds[2])], include_system=False)
 
@@ -416,7 +417,8 @@ def test_a_hex_operand_through_a_pointer_against_a_decimal_one_is_flagged(build)
         with rung(build(number)):
             copy(1, ds[9])
 
-    assert len(_found(body, "CLK_COMPARE_HEX_MIX", tag_map)) == 1
+    assert len(_found(body, "pointer-outside-copy", tag_map)) == 1
+    assert _found(body, "compare-mixed-types", tag_map) == []
 
 
 def test_compares_the_dialog_takes_are_not_flagged():
@@ -429,7 +431,7 @@ def test_compares_the_dialog_takes_are_not_flagged():
         with rung(word == other, word > 255, number < 70000, ds[2] == number, dh[ds[1]] == dh[3]):
             copy(1, ds[9])
 
-    assert _found(body, "CLK_COMPARE_HEX_MIX", tag_map) == []
+    assert _found(body, "compare-mixed-types", tag_map) == []
 
 
 def test_a_hex_compare_inside_an_or_and_a_branch_is_refused():
@@ -442,7 +444,7 @@ def test_a_hex_compare_inside_an_or_and_a_branch_is_refused():
             with Branch(Or(x[2], word == number)):
                 copy(2, ds[9])
 
-    found = _found(body, "CLK_COMPARE_HEX_MIX", tag_map)
+    found = _found(body, "compare-mixed-types", tag_map)
     assert len(found) == 1
 
 
@@ -458,7 +460,7 @@ def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
         with rung(x[2]):
             count_up(cnt, 10).reset(word > number)
 
-    found = _found(body, "CLK_COMPARE_HEX_MIX", tag_map)
+    found = _found(body, "compare-mixed-types", tag_map)
     assert len(found) == 2
 
 

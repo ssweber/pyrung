@@ -176,8 +176,10 @@ def test_unmapped_numbered_nickname_is_not_treated_as_click_address():
         with rung(Motor10):
             out(RawOutput)
 
-    with pytest.raises(LadderExportError, match="Tag 'Motor10' is not mapped"):
+    with pytest.raises(LadderExportError, match=r"(?s)CLK_BANK_UNRESOLVED.*condition\.tag"):
         pyrung_to_ladder(logic, TagMap({}, include_system=False))
+    with pytest.raises(LadderExportError, match="Tag 'Motor10' is not mapped"):
+        pyrung_to_ladder(logic, TagMap({}, include_system=False), validate=False)
 
 
 def test_export_roundtrip_guard_rejects_missing_pin_row():
@@ -1371,11 +1373,13 @@ def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
         pyrung_to_ladder(logic, mapping)
 
     assert [issue["message"] for issue in exc_info.value.issues] == [
-        "[CLK_IMMEDIATE_CONTACT_MUST_BE_X] error\n"
-        "  Immediate contact on Sensor (C1) at "
-        "main.rung[1].condition; an immediate contact must read an input mapped to X.\n"
-        " --> main.rung[1].condition\n"
-        "  = hint: Map it to an X input, or use a plain contact."
+        "[immediate-contact-not-x] error\n"
+        " --> Main:R1\n"
+        "  |\n"
+        "  |  with rung(immediate(Sensor)):\n"
+        "  |            ^^^^^^^^^^^^^^^^^ Sensor (C1) is not allowed\n"
+        "  |\n"
+        "  = hint: An immediate contact takes X only. Map it to an X input, or use a plain contact."
     ]
 
 

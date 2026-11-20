@@ -99,7 +99,7 @@ with rung(Setpoint < DS[Step + 1]):
     out(NextIsHigher)
 ```
 
-An address outside the block, or in a gap of a sparse block, reads as its type's zero value. No fault flag is set. `copy()` and `math()` treat a source below the block differently. They set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). A CLICK accepts a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
+An address outside the block, or in a gap of a sparse block, reads as its type's zero value. No fault flag is set. `copy()` and `math()` treat a source below the block differently. They set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). A CLICK accepts a pointer only in Copy. The CLICK validator refuses a pointer in a contact (`pointer-outside-copy`).
 
 ## INT truthiness
 

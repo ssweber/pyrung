@@ -3,7 +3,7 @@
 The group is in the part ``text_flasher``.
 
 CLICK's Compare dialog accepts ``TXT1 = "T"`` and ``TXT1 = TXT2``.  On text it offers only =
-and not-equal.  The exporter refuses an order compare (``"CLK_TEXT_ORDER_COMPARE"``), so no case
+and not-equal.  The exporter refuses an order compare (``"text-order-compare"``), so no case
 asks for one.  A TXT holds NUL until written (``text/null_ascii``, on hardware).  What = and
 not-equal make of a blank has not been read.  An expectation is pyrung's reading.  A CLICK
 that reads otherwise prints what it read, and that is the answer.

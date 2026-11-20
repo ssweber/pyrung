@@ -54,14 +54,14 @@ def test_char_order_compare_is_a_finding_and_refused_on_export(op, literal):
     mapping = TagMap({a: txt[1], b: txt[2], hit: c[1]}, include_system=False)
 
     report = validate_click_program(prog, mapping, mode="strict")
-    found = [f for f in report.errors if f.code == "CLK_TEXT_ORDER_COMPARE"]
+    found = [f for f in report.errors if f.code == "text-order-compare"]
     assert len(found) == 1
     assert found[0].message.isascii() and found[0].suggestion.isascii()
     assert f"'{op}'" in found[0].message
 
-    with pytest.raises(LadderExportError, match="CLK_TEXT_ORDER_COMPARE"):
+    with pytest.raises(LadderExportError, match="text-order-compare"):
         pyrung_to_ladder(prog, mapping)
-    assert pyrung_to_ladder(prog, mapping, allow=("CLK_TEXT_ORDER_COMPARE",)).main_rows
+    assert pyrung_to_ladder(prog, mapping, allow=("text-order-compare",)).main_rows
 
 
 def test_numeric_order_compare_is_not_flagged():
@@ -74,7 +74,7 @@ def test_numeric_order_compare_is_not_flagged():
     report = validate_click_program(
         prog, TagMap({n: ds[1], hit: c[1]}, include_system=False), mode="strict"
     )
-    assert "CLK_TEXT_ORDER_COMPARE" not in {
+    assert "text-order-compare" not in {
         f.code for f in (*report.errors, *report.warnings, *report.hints)
     }
 
@@ -256,8 +256,6 @@ def test_a_window_mapped_to_the_next_txts_is_not_a_finding():
 
 def test_a_pointer_compare_against_a_longer_literal_stays_refused_as_a_pointer():
     # A CLICK contact accepts no pointer, so the window question never reaches one.
-    from pyrung.click.validation import CLK_PTR_CONTEXT_ONLY_COPY
-
     hit = Bool("Hit")
     with Program(strict=False) as prog:
         with rung(txt[ds[1]] == "AB"):
@@ -265,7 +263,7 @@ def test_a_pointer_compare_against_a_longer_literal_stays_refused_as_a_pointer()
     mapping = TagMap({hit: c[1]}, include_system=False)
     report = validate_click_program(prog, mapping, mode="strict")
     codes = {f.code for f in report.errors}
-    assert CLK_PTR_CONTEXT_ONLY_COPY in codes
+    assert "pointer-outside-copy" in codes
     assert CLK_TEXT_WINDOW_NOT_CONTIGUOUS not in codes
 
 

@@ -218,7 +218,7 @@ class TestPointerInCondition:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_PTR_CONTEXT_ONLY_COPY for f in report.hints)
+        assert any(f.code == "pointer-outside-copy" for f in report.hints)
 
 
 # ---------------------------------------------------------------------------
@@ -1508,7 +1508,7 @@ class TestSuggestionContent:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        r1_findings = [f for f in report.hints if f.code == CLK_PTR_CONTEXT_ONLY_COPY]
+        r1_findings = [f for f in report.hints if f.code == "pointer-outside-copy"]
         assert r1_findings
         suggestion = r1_findings[0].suggestion
         assert suggestion is not None
@@ -1764,9 +1764,9 @@ class TestImmediateValidation:
         tag_map = TagMap([Sensor.map_to(slot), Coil.map_to(y[2])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        found = [f for f in report.errors if f.code == "CLK_IMMEDIATE_CONTACT_MUST_BE_X"]
+        found = [f for f in report.errors if f.code == "immediate-contact-not-x"]
         assert len(found) == 1
-        assert "an immediate contact must read an input mapped to X" in found[0].message
+        assert "an immediate contact takes X only" in found[0].message
 
     def test_immediate_contact_in_a_branch_and_a_group_outside_x_is_error(self):
         Start = Bool("Start")
@@ -1794,8 +1794,8 @@ class TestImmediateValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        found = [f for f in report.errors if f.code == "CLK_IMMEDIATE_CONTACT_MUST_BE_X"]
-        assert [f.location for f in found] == ["main.rung[1].branch[0].condition"]
+        found = [f for f in report.errors if f.code == "immediate-contact-not-x"]
+        assert [f.location for f in found] == ["main.rung[1].branch[0].condition[1].conditions[1]"]
 
     def test_immediate_contact_in_a_nested_loop_body_is_reported_once(self):
         Start = Bool("Start")
@@ -1816,7 +1816,7 @@ class TestImmediateValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        found = [f for f in report.errors if f.code == "CLK_IMMEDIATE_CONTACT_MUST_BE_X"]
+        found = [f for f in report.errors if f.code == "immediate-contact-not-x"]
         assert len(found) == 1
 
     def test_immediate_contact_on_x_has_no_contact_finding(self):
@@ -1831,7 +1831,7 @@ class TestImmediateValidation:
         tag_map = TagMap([Sensor.map_to(x[1]), Coil.map_to(y[1])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert "CLK_IMMEDIATE_CONTACT_MUST_BE_X" not in _finding_codes(report)
+        assert "immediate-contact-not-x" not in _finding_codes(report)
 
     def test_an_immediate_range_is_not_a_contact(self):
         """The DSL refuses an immediate range as a contact, so no bank check is needed."""
