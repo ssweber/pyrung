@@ -192,7 +192,7 @@ def _tables_defined_by_legacy_modules() -> dict[str, list[str]]:
 
 # A shared check whose table no module in legacy/ defines any more. The orchestrator
 # removes it with the bank tables.
-_WAITING_FOR_THE_BANK_TABLES = {"ROLE_ASSIGNMENT_FIELDS"}
+_WAITING_FOR_THE_BANK_TABLES = {"ROLE_ASSIGNMENT_FIELDS", "WRITE_TARGET_FIELDS"}
 
 
 def test_a_table_in_legacy_is_read_by_a_shared_check():

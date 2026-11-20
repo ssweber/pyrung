@@ -20,7 +20,6 @@ from laddercodec import Code
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
-    CLK_BANK_NOT_WRITABLE,
     CLK_COPY_WIDE_CONSTANT,
     validate_click_program,
 )
@@ -98,7 +97,7 @@ def test_a_decimal_math_into_a_writable_sd_exports(dest):
 @pytest.mark.parametrize("dest", [sd[1], sd[62], sd[148]], ids=lambda dest: dest.name)
 def test_a_decimal_math_into_an_sd_click_refuses_is_still_refused(dest):
     # editor-answers A9 (SD1) and pickcheck.answers.json (SD62, SD148): OBJ-003.
-    _refused(lambda: math(ds[1] + 1, dest), CLK_BANK_NOT_WRITABLE)
+    _refused(lambda: math(ds[1] + 1, dest), Code.NOT_WRITABLE)
 
 
 def test_a_hex_math_into_yd_exports():
@@ -193,7 +192,7 @@ def test_a_hex_rand_of_two_dh_exports():
 
 def test_a_hex_rand_of_xd_or_yd_is_still_refused():
     # math_hex.answers.json: RAND(XD1,Ah) and RAND(YD1,Ah) are refused (OBJ-1002).
-    _refused(lambda: math(randint(xd[1], yd[1]), dh[3]), "CLK_RAND_BOUND_TYPE")
+    _refused(lambda: math(randint(xd[1], yd[1]), dh[3]), Code.RANDOM_BOUND_TYPE)
 
 
 def test_a_hex_rand_of_words_mapped_to_xd_is_still_refused():
@@ -205,18 +204,21 @@ def test_a_hex_rand_of_words_mapped_to_xd_is_still_refused():
 
     tag_map = TagMap([lo.map_to(xd[1]), hi.map_to(xd[2]), dest.map_to(dh[3])])
     report = validate_click_program(_program(write), tag_map, mode="strict")
-    assert "CLK_RAND_BOUND_TYPE" in {f.code for f in report.errors}
+    assert Code.RANDOM_BOUND_TYPE in {f.code for f in report.errors}
 
 
 @pytest.mark.parametrize(
-    "write",
-    [lambda: math(ds[1] + 1, yd[1]), lambda: math(dh[1] + 1, sd[29])],
+    "write, code",
+    [
+        (lambda: math(ds[1] + 1, yd[1]), Code.BANK_NOT_ALLOWED),
+        (lambda: math(dh[1] + 1, sd[29]), Code.MATH_OPERAND_BANK),
+    ],
     ids=["decimal-into-YD", "hex-into-SD"],
 )
-def test_a_math_result_in_the_other_modes_bank_is_still_refused(write):
+def test_a_math_result_in_the_other_modes_bank_is_still_refused(write, code):
     # editor-answers A10 and sc_sd_writable.answers.json: YD is a hex Result and SD a
-    # decimal one.  pyrung makes either Math a mixed one.
-    _refused(write, "CLK_MATH_MODE_MIXED")
+    # decimal one.  pyrung makes either Math a decimal one, which takes no YD and no DH.
+    _refused(write, code)
 
 
 @pytest.mark.parametrize("constant", [65536, 70000, -32769])
@@ -224,14 +226,14 @@ def test_a_hex_math_constant_past_16_bits_is_refused_even_when_allowed(constant)
     # math_hex.answers.json: 10000h is refused (OBJ-1009).  Export once wrote the low 16
     # bits (70000 as 1170h), a different number from the one the program reads.
     write = lambda: math(dh[1] + constant, dh[100])  # noqa: E731
-    assert "CLK_MATH_WIDE_CONSTANT" in _codes(write)
+    assert Code.MATH_CONSTANT_OUT_OF_RANGE in _codes(write)
     with pytest.raises(LadderExportError, match=f"Constant {constant} does not fit in 16 bits"):
-        pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_MATH_WIDE_CONSTANT",))
+        pyrung_to_ladder(_program(write), TagMap(), allow=(Code.MATH_CONSTANT_OUT_OF_RANGE,))
 
 
 def test_a_hex_math_constant_with_a_fraction_is_reported():
     # math_hex.answers.json: CLICK refuses a fraction in a hex Math (OBJ-1001).
-    _refused(lambda: math(dh[1] + 1.5, dh[100]), "CLK_MATH_WIDE_CONSTANT")
+    _refused(lambda: math(dh[1] + 1.5, dh[100]), Code.MATH_CONSTANT_KIND)
 
 
 # --- A Fill of one register -------------------------------------------------------------
@@ -516,7 +518,7 @@ def test_a_copy_click_accepts_exports_and_imports(write, token):
         (lambda: copy(-5, txt[1000]), "text-past-bank"),
         (lambda: copy(70000, dh[1]), CLK_COPY_WIDE_CONSTANT),
         (lambda: fill(70000, dh.select(1, 1)), CLK_COPY_WIDE_CONSTANT),
-        (lambda: math(dh[1] + 70000, dh[100]), "CLK_MATH_WIDE_CONSTANT"),
+        (lambda: math(dh[1] + 70000, dh[100]), Code.MATH_CONSTANT_OUT_OF_RANGE),
         (lambda: copy(ds[1], txt[1], convert=to_text(exponential=True)), "option-not-offered"),
         (lambda: fill("AB", txt.select(5, 5)), "constant-out-of-range"),
     ],

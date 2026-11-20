@@ -510,7 +510,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] copy argument order is source -> dest (`numeric/copy_source_to_dest`)
 - [x] Math mode inference (hex vs decimal) (`numeric/word_math_unsigned`)
 - [x] Math WORD-only infers hex mode (`numeric/word_math_unsigned`, `numeric/hex_literal_is_decimal`)
-- [ ] Math mixing WORD and non-WORD: validator finding CLK_MATH_MODE_MIXED (a static finding, not a ladder case)
+- [ ] Math mixing WORD and non-WORD: validator finding math-operand-bank (a static finding, not a ladder case)
 - [x] Math intermediates are wider than 32 bits, on a CLICK too (`numeric/intermediate_exceeds_32_bits`, `numeric/intermediate_fits_32_bits`)
 
 ### Per instruction
@@ -581,7 +581,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] a Copy of 5 into a pointer past the DD bank lands, with no flag (pending PASTBANK; `past_write/past_bank_write`; WRITES PAST THE BANK, one address, DD1531, read before the write and written only if it reads 0, then cleared)
 
 #### Math
-- [ ] store probes (part `math`, expectation = pyrung's reading; `store_probe`): RAND bounds past 16 bits into an Int, and into a Dint, Word and Real (`store_probe/rand_int_cuts`, `store_probe/rand_other_stores`); RAND of equal integer tags, a DF bound in a larger Math, equal constants in one (`store_probe/rand_tag_bounds`); a float literal, a division and ABS as RAND bounds (`store_probe/rand_bound_forms`, retired: the editor takes only an integer constant or a DS/DD address); -Inf and NaN copied as text (`store_probe/inf_and_nan_to_text`); a Math of NaN into a Dint and a Copy of +/-Inf into a Word (`store_probe/non_finite_into_word`); a finite Real copied into a TXT and a Copy that clamps (`store_probe/real_into_text_and_fill`). Not expressible, so not probed: a Copy of an expression (CLK_EXPR_ONLY_IN_MATH), a Math of NaN or an infinity into a Word (CLK_MATH_MODE_MIXED), run_function and Modbus receive stores
+- [ ] store probes (part `math`, expectation = pyrung's reading; `store_probe`): RAND bounds past 16 bits into an Int, and into a Dint, Word and Real (`store_probe/rand_int_cuts`, `store_probe/rand_other_stores`); RAND of equal integer tags, a DF bound in a larger Math, equal constants in one (`store_probe/rand_tag_bounds`); a float literal, a division and ABS as RAND bounds (`store_probe/rand_bound_forms`, retired: the editor takes only an integer constant or a DS/DD address); -Inf and NaN copied as text (`store_probe/inf_and_nan_to_text`); a Math of NaN into a Dint and a Copy of +/-Inf into a Word (`store_probe/non_finite_into_word`); a finite Real copied into a TXT and a Copy that clamps (`store_probe/real_into_text_and_fill`). Not expressible, so not probed: a Copy of an expression (CLK_EXPR_ONLY_IN_MATH), a Math of NaN or an infinity into a Word (math-operand-bank), run_function and Modbus receive stores
 
 #### Drum, shift, search
 - [x] shift register direction by range order (`shift/forward_range_shifts_up`; `shift/reversed_range_shifts_down` in-process only)

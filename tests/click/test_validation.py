@@ -406,7 +406,7 @@ class TestCalcModeMixedValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_MODE_MIXED" for f in report.hints)
+        assert any(f.code == Code.MATH_OPERAND_BANK for f in report.hints)
 
     def test_strict_mode_gives_error_for_mixed_family_calc(self):
         a = Tag("A", TagType.INT)
@@ -424,7 +424,7 @@ class TestCalcModeMixedValidation:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == "CLK_MATH_MODE_MIXED" for f in report.errors)
+        assert any(f.code == Code.MATH_OPERAND_BANK for f in report.errors)
 
     def test_decimal_family_calc_has_no_mixed_mode_finding(self):
         a = Tag("A", TagType.INT)
@@ -443,7 +443,7 @@ class TestCalcModeMixedValidation:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == "CLK_MATH_MODE_MIXED"
+            f.code == Code.MATH_OPERAND_BANK
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -464,7 +464,7 @@ class TestCalcModeMixedValidation:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == "CLK_MATH_MODE_MIXED"
+            f.code == Code.MATH_OPERAND_BANK
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -544,7 +544,7 @@ class TestCalcFuncModeMismatch:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_FUNC_MODE_MISMATCH" for f in report.hints)
+        assert any(f.code == Code.MATH_FUNCTION_MODE for f in report.hints)
 
     def test_sqrt_in_hex_mode_gives_finding(self):
         """SQRT is decimal-only; using it with WORD tags (hex) is a mismatch."""
@@ -564,7 +564,7 @@ class TestCalcFuncModeMismatch:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_FUNC_MODE_MISMATCH" for f in report.hints)
+        assert any(f.code == Code.MATH_FUNCTION_MODE for f in report.hints)
 
     def test_and_in_hex_mode_no_finding(self):
         """AND in hex mode is valid."""
@@ -584,7 +584,7 @@ class TestCalcFuncModeMismatch:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == "CLK_MATH_FUNC_MODE_MISMATCH"
+            f.code == Code.MATH_FUNCTION_MODE
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -605,7 +605,7 @@ class TestCalcFuncModeMismatch:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == "CLK_MATH_FUNC_MODE_MISMATCH"
+            f.code == Code.MATH_FUNCTION_MODE
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -625,7 +625,7 @@ class TestCalcFuncModeMismatch:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == "CLK_MATH_FUNC_MODE_MISMATCH" for f in report.errors)
+        assert any(f.code == Code.MATH_FUNCTION_MODE for f in report.errors)
 
 
 class TestCalcNestingDepth:
@@ -661,7 +661,7 @@ class TestCalcNestingDepth:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == "CLK_MATH_NESTING_DEPTH"
+            f.code == Code.MATH_NESTING_DEPTH
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -682,7 +682,7 @@ class TestCalcNestingDepth:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_NESTING_DEPTH" for f in report.hints)
+        assert any(f.code == Code.MATH_NESTING_DEPTH for f in report.hints)
 
     def test_strict_mode_gives_error(self):
         a = Tag("A", TagType.INT)
@@ -701,7 +701,7 @@ class TestCalcNestingDepth:
         )
 
         report = validate_click_program(prog, tag_map, mode="strict")
-        assert any(f.code == "CLK_MATH_NESTING_DEPTH" for f in report.errors)
+        assert any(f.code == Code.MATH_NESTING_DEPTH for f in report.errors)
 
     def test_function_calls_count_as_paren_level(self):
         """SQRT(…) adds one paren level; deeply nested args can exceed the limit."""
@@ -725,7 +725,7 @@ class TestCalcNestingDepth:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_NESTING_DEPTH" for f in report.hints)
+        assert any(f.code == Code.MATH_NESTING_DEPTH for f in report.hints)
 
     def test_flat_expression_no_finding(self):
         """Simple a + b has depth 0 — well within limits."""
@@ -745,7 +745,7 @@ class TestCalcNestingDepth:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == "CLK_MATH_NESTING_DEPTH"
+            f.code == Code.MATH_NESTING_DEPTH
             for f in (*report.errors, *report.warnings, *report.hints)
         )
 
@@ -768,9 +768,7 @@ class TestAbsMode:
         tag_map = TagMap([h.map_to(dh[1]), dest.map_to(dh[2])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(
-            f.code == "CLK_MATH_FUNC_MODE_MISMATCH" and "ABS" in f.message for f in report.hints
-        )
+        assert any(f.code == Code.MATH_FUNCTION_MODE and "ABS" in f.message for f in report.hints)
 
     def test_abs_in_decimal_mode_no_finding(self):
         a = Tag("A", TagType.INT)
@@ -784,7 +782,7 @@ class TestAbsMode:
         tag_map = TagMap([a.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert not any(f.code == "CLK_MATH_FUNC_MODE_MISMATCH" for f in _all_findings(report))
+        assert not any(f.code == Code.MATH_FUNCTION_MODE for f in _all_findings(report))
 
 
 class TestRangeAggregateModes:
@@ -820,7 +818,7 @@ class TestRangeAggregateModes:
         tag_map = TagMap([V.map_to(ds.select(1, 4)), dest.map_to(ds[10])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_NESTING_DEPTH" for f in report.hints)
+        assert any(f.code == Code.MATH_NESTING_DEPTH for f in report.hints)
 
 
 class TestRangeAggregateRules:
@@ -1036,7 +1034,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(dd[1000])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_MEDIAN_RANGE_TOO_LARGE" for f in report.hints)
+        assert any(f.code == Code.MEDIAN_RANGE_TOO_LARGE for f in report.hints)
 
     def test_median_range_at_1024_bytes_no_finding(self):
         dest = Tag("Dest", TagType.INT)
@@ -1050,7 +1048,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert not any(f.code == "CLK_MATH_MEDIAN_RANGE_TOO_LARGE" for f in _all_findings(report))
+        assert not any(f.code == Code.MEDIAN_RANGE_TOO_LARGE for f in _all_findings(report))
 
     def test_bool_range_sum_no_finding(self):
         """SUM over bits is legal.  CLICK spells it plain SUM."""
@@ -1078,7 +1076,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_BIT_RANGE_AGGREGATE" for f in report.hints)
+        assert any(f.code == Code.MATH_OPERAND_BANK for f in report.hints)
 
     @staticmethod
     def _sum_findings(block, dest_type, dest_address):
@@ -1091,7 +1089,7 @@ class TestRangeAggregateRules:
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(dest_address)], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        return [f for f in _all_findings(report) if f.code == "CLK_MATH_SUM_BANK_NOT_AVAILABLE"]
+        return [f for f in _all_findings(report) if f.code == Code.SUM_BANK_UNAVAILABLE]
 
     @pytest.mark.parametrize("block", [x, y, c, t, sc, ds, dd, df, td, ctd, sd])
     def test_sum_decimal_banks_no_finding(self, block):
@@ -1105,10 +1103,11 @@ class TestRangeAggregateRules:
     def test_sum_unavailable_banks_give_finding(self, block):
         findings = self._sum_findings(block, TagType.INT, ds[1000])
         assert len(findings) == 1
-        assert "not available in CLICK" in findings[0].message
+        assert "is refused for" in findings[0].message
+        assert "OBJ-1002" in findings[0].message
 
-    def test_sum_mixed_families_reports_mode_mixed_only(self):
-        """A hex range into a decimal dest is "CLK_MATH_MODE_MIXED", not a SUM bank finding."""
+    def test_sum_of_a_hex_range_into_a_decimal_dest_is_one_sum_finding(self):
+        """A decimal Math refuses a SUM over DH, and the DH is not reported again."""
         dest = Tag("Dest", TagType.INT)
 
         def logic():
@@ -1118,9 +1117,8 @@ class TestRangeAggregateRules:
         prog = _build_program(logic)
         tag_map = TagMap([dest.map_to(ds[1000])], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
-        codes = {f.code for f in _all_findings(report)}
-        assert "CLK_MATH_MODE_MIXED" in codes
-        assert "CLK_MATH_SUM_BANK_NOT_AVAILABLE" not in codes
+        codes = [f.code for f in _all_findings(report)]
+        assert codes == [Code.SUM_BANK_UNAVAILABLE]
 
 
 class TestTildeExpressionPortability:
@@ -1416,7 +1414,7 @@ class TestFindingDisplay:
 
     @pytest.mark.parametrize(
         ("code", "severity"),
-        [("CLK_MATH_NESTING_DEPTH", "hint"), (CLK_MATH_FLOOR_DIV, "error")],
+        [(Code.MATH_NESTING_DEPTH, "hint"), (CLK_MATH_FLOOR_DIV, "error")],
     )
     def test_a_passed_display_for_another_code_or_severity_is_refused(self, code, severity):
         display = FindingDisplay(code=CLK_MATH_FLOOR_DIV, severity="hint")
@@ -1962,19 +1960,19 @@ class TestForLoopCountAndRandBounds:
     def test_real_bound_is_refused(self):
         lo = Tag("Lo", TagType.REAL)
         report = self._rand(lo, 9, [lo.map_to(df[1])])
-        found = [f for f in report.errors if f.code == "CLK_RAND_BOUND_TYPE"]
+        found = [f for f in report.errors if f.code == Code.RANDOM_BOUND_TYPE]
         assert found
         assert found[0].message.isascii()
 
     def test_real_high_bound_is_refused(self):
         hi = Tag("Hi", TagType.REAL)
         report = self._rand(1, hi, [hi.map_to(df[1])])
-        assert "CLK_RAND_BOUND_TYPE" in _finding_codes(report)
+        assert Code.RANDOM_BOUND_TYPE in _finding_codes(report)
 
     @pytest.mark.parametrize("lo, hi", [(1.5, 3.5), (1, 3.0)])
     def test_float_constant_bound_is_refused(self, lo, hi):
         report = self._rand(lo, hi, [])
-        assert "CLK_RAND_BOUND_TYPE" in _finding_codes(report)
+        assert Code.RANDOM_BOUND_TYPE in _finding_codes(report)
 
     @pytest.mark.parametrize(
         "kind, block",
@@ -1984,10 +1982,12 @@ class TestForLoopCountAndRandBounds:
     def test_other_tag_types_are_refused(self, kind, block):
         lo = Tag("Lo", kind)
         report = self._rand(lo, 9, [lo.map_to(block[1])])
-        assert "CLK_RAND_BOUND_TYPE" in _finding_codes(report)
+        assert Code.RANDOM_BOUND_TYPE in _finding_codes(report)
 
-    def test_bool_constant_bound_is_refused(self):
-        assert "CLK_RAND_BOUND_TYPE" in _finding_codes(self._rand(True, 9, []))
+    def test_bool_constant_bound_is_written_as_one(self):
+        # math_decimal.answers.json: CLICK accepts RAND(1,10). The export writes True as 1,
+        # and pyrung draws from 1 too.
+        assert Code.RANDOM_BOUND_TYPE not in _finding_codes(self._rand(True, 9, []))
 
     @pytest.mark.parametrize("block", [td, ctd, sd], ids=["TD", "CTD", "SD"])
     def test_a_decimal_bound_outside_ds_and_dd_is_refused(self, block):
@@ -1996,11 +1996,17 @@ class TestForLoopCountAndRandBounds:
         kind = TagType.DINT if block is ctd else TagType.INT
         lo = Tag("Lo", kind)
         report = self._rand(lo, 9, [lo.map_to(block[1])])
-        assert "CLK_RAND_BOUND_TYPE" in _finding_codes(report)
+        assert Code.RANDOM_BOUND_TYPE in _finding_codes(report)
 
     def test_equal_constant_bounds_are_refused(self):
         report = self._rand(7, 7, [])
-        assert [f.code for f in report.errors] == ["CLK_RAND_EQUAL_BOUNDS"]
+        assert [f.code for f in report.errors] == [Code.RANDOM_EQUAL_BOUNDS]
+
+    def test_one_tag_as_both_bounds_is_refused(self):
+        # math_decimal.answers.json: CLICK refuses RAND(DS1,DS1) (OBJ-1001).
+        lo = Tag("Lo", TagType.INT)
+        report = self._rand(lo, lo, [lo.map_to(ds[1])])
+        assert [f.code for f in report.errors] == [Code.RANDOM_EQUAL_BOUNDS]
 
     def test_integer_bounds_pass(self):
         lo = Tag("Lo", TagType.INT)
@@ -2010,12 +2016,11 @@ class TestForLoopCountAndRandBounds:
             ((70000, 70002), []),
             ((6, 1), []),
             ((lo, 9), [lo.map_to(ds[1])]),
-            ((lo, lo), [lo.map_to(ds[1])]),
             ((wide, 9), [wide.map_to(dd[1])]),
         ):
             codes = _finding_codes(self._rand(*args, mappings))
-            assert "CLK_RAND_BOUND_TYPE" not in codes
-            assert "CLK_RAND_EQUAL_BOUNDS" not in codes
+            assert Code.RANDOM_BOUND_TYPE not in codes
+            assert Code.RANDOM_EQUAL_BOUNDS not in codes
 
 
 class TestCalcPlainArguments:
@@ -2045,7 +2050,7 @@ class TestCalcPlainArguments:
             ),
             mode="strict",
         )
-        return report, [f for f in report.errors if f.code == "CLK_MATH_ARG_NOT_PLAIN"]
+        return report, [f for f in report.errors if f.code == Code.MATH_ARG_EXPRESSION]
 
     @pytest.mark.parametrize(
         "build",
@@ -2082,9 +2087,10 @@ class TestCalcPlainArguments:
         _, found = self._codes(build)
         assert found == []
 
-    def test_each_site_is_reported(self):
+    def test_a_formula_with_two_such_sites_is_refused_once(self):
+        # laddercodec stops at the first RAND whose argument is a formula.
         _, found = self._codes(lambda n, w: (randint(n / 2, 10) + randint(1, n * 2), "dd"))
-        assert len(found) == 2
+        assert len(found) == 1
 
 
 class TestCalcWideConstant:
@@ -2112,7 +2118,7 @@ class TestCalcWideConstant:
             ),
             mode="strict",
         )
-        return [f for f in report.errors if f.code == "CLK_MATH_WIDE_CONSTANT"]
+        return [f for f in report.errors if f.code == Code.MATH_CONSTANT_OUT_OF_RANGE]
 
     @pytest.mark.parametrize(
         "build, dest_type",
@@ -2128,8 +2134,8 @@ class TestCalcWideConstant:
         found = self._found(build, dest_type)
         assert len(found) == 1
         assert found[0].message.isascii()
-        assert "past a DD's range" in found[0].message
-        assert "editor refuses" in found[0].message
+        assert "is outside -2147483648..2147483647" in found[0].message
+        assert "OBJ-1009" in found[0].message
 
     @pytest.mark.parametrize(
         "build, dest_type",
@@ -2137,15 +2143,31 @@ class TestCalcWideConstant:
             (lambda n, w: w + 70000, TagType.WORD),
             (lambda n, w: randint(1, 70000), TagType.WORD),
             (lambda n, w: w + -32769, TagType.WORD),
-            (lambda n, w: w + 1.5, TagType.WORD),
         ],
-        ids=["hex", "rand-into-word", "hex-negative", "hex-fraction"],
+        ids=["hex", "rand-into-word", "hex-negative"],
     )
     def test_a_hex_constant_past_16_bits_is_reported(self, build, dest_type):
         found = self._found(build, dest_type)
         assert len(found) == 1
         assert found[0].message.isascii()
-        assert "not a whole 16-bit value" in found[0].message
+        assert "is outside 0h..FFFFh" in found[0].message
+        assert "0..65535" in found[0].suggestion
+
+    def test_a_hex_constant_with_a_fraction_is_reported(self):
+        w, dest = Tag("W", TagType.WORD), Tag("Dest", TagType.WORD)
+
+        def logic():
+            with rung():
+                math(w + 1.5, dest)
+
+        report = validate_click_program(
+            _build_program(logic),
+            TagMap([w.map_to(dh[1]), dest.map_to(dh[100])], include_system=False),
+            mode="strict",
+        )
+        (found,) = report.errors
+        assert found.code == Code.MATH_CONSTANT_KIND
+        assert "1.5 is a decimal constant" in found.message
 
     @pytest.mark.parametrize(
         "build, dest_type",
@@ -2181,17 +2203,21 @@ class TestCalcWideConstant:
     def test_a_constant_math_keeps_passes(self, build, dest_type):
         assert self._found(build, dest_type) == []
 
-    def test_one_finding_names_each_constant(self):
-        found = self._found(lambda n, w: n * 3000000000 + 3000000000 - 4000000000)
-        assert len(found) == 1
-        assert "(3000000000, 4000000000)" in found[0].message
-        assert "-2147483648..2147483647" in found[0].suggestion
+    def test_a_formula_with_wide_constants_is_refused_once(self):
+        # laddercodec names the first constant that CLICK refuses.
+        (found,) = self._found(lambda n, w: n * 3000000000 + 3000000000 - 4000000000)
+        assert "3000000000 is outside" in found.message
+        assert "-2147483648..2147483647" in found.suggestion
 
     def test_a_hex_math_names_each_constant_it_cannot_write(self):
-        (found,) = self._found(lambda n, w: w + -40000 + 70000, TagType.WORD)
-        assert "(-40000, 70000)" in found.message
-        assert "0h..FFFFh" in found.message
-        assert "0..65535" in found.suggestion
+        # The export has no spelling for either constant, so each is checked as CLICK reads
+        # it typed.
+        found = self._found(lambda n, w: w + -40000 + 70000, TagType.WORD)
+        assert [f.display.frames[0].caret_label for f in found] == [
+            "FFFF63C0h is outside 0h..FFFFh",
+            "11170h is outside 0h..FFFFh",
+        ]
+        assert all("0..65535" in f.suggestion for f in found)
 
     def test_a_rand_site_number_is_not_a_constant(self):
         from pyrung.core.expression import LiteralExpr, RandIntExpr
@@ -2216,10 +2242,10 @@ def test_export_refuses_a_real_rand_bound_unless_allowed():
     try:
         pyrung_to_ladder(prog, tag_map)
     except LadderExportError as exc:
-        assert "CLK_RAND_BOUND_TYPE" in str(exc)
+        assert Code.RANDOM_BOUND_TYPE in str(exc)
     else:
         raise AssertionError("export should refuse a Real RAND bound")
-    assert pyrung_to_ladder(prog, tag_map, allow=("CLK_RAND_BOUND_TYPE",)).main_rows
+    assert pyrung_to_ladder(prog, tag_map, allow=(Code.RANDOM_BOUND_TYPE,)).main_rows
 
 
 class TestPointerBlockOffset:

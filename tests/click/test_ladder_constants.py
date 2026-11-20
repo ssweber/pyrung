@@ -18,6 +18,7 @@ import json
 import math as pymath
 
 import pytest
+from laddercodec import Code
 
 from pyrung import PLC
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
@@ -728,8 +729,12 @@ def test_hex_math_refuses_a_constant_that_clicks_formula_reads_as_a_real(value, 
     with Program() as logic:
         with rung():
             math(dh[1] + value, dh[2])
-    with pytest.raises(LadderExportError, match=f"written {text} in a hex Math"):
+    # Validation refuses it, as CLICK's editor does. The export has no other way to write
+    # the constant, so it refuses it even when the code is allowed.
+    with pytest.raises(LadderExportError, match=Code.MATH_INVALID_TOKEN):
         pyrung_to_ladder(logic, TagMap())
+    with pytest.raises(LadderExportError, match=f"written {text} in a hex Math"):
+        pyrung_to_ladder(logic, TagMap(), allow=(Code.MATH_INVALID_TOKEN,))
 
 
 @pytest.mark.parametrize(

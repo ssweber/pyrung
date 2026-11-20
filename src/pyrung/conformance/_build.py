@@ -51,9 +51,9 @@ LAYOUT_VERSION = 4
 #: ``past_write`` and ``past_clean`` run a pointer past DD1000 on purpose, so the export
 #: lets through its warning for that too.
 PASTE_PROBE_FINDINGS = (
-    "CLK_RAND_BOUND_TYPE",
-    "CLK_RAND_EQUAL_BOUNDS",
-    "CLK_MATH_WIDE_CONSTANT",
+    "random-bound-type",
+    "random-equal-bounds",
+    "math-constant-out-of-range",
     "CLK_PTR_PAST_BANK",
 )
 

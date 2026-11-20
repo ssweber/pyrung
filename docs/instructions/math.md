@@ -24,7 +24,7 @@ The expression comes first and the destination second, as in every pyrung instru
 
 ## Wide constants
 
-CLICK's editor rejects a whole-number constant outside −2147483648..2147483647 in any Math. A hex-mode Math (only `Word` tags) accepts a whole number from 0 to 65535. For −32768..−1 in hex mode, pyrung writes the constant as its 16 bits, so −1 exports as FFFFh. CLICK validation reports any other constant (`CLK_MATH_WIDE_CONSTANT`). The export rejects any other hex-mode constant, even when you allow that finding, because no CLICK hex constant can hold it.
+CLICK's editor rejects a whole-number constant outside −2147483648..2147483647 in any Math. A hex-mode Math (only `Word` tags) accepts a whole number from 0 to 65535. For −32768..−1 in hex mode, pyrung writes the constant as its 16 bits, so −1 exports as FFFFh. CLICK validation reports any other constant (`math-constant-out-of-range`). The export rejects any other hex-mode constant, even when you allow that finding, because no CLICK hex constant can hold it.
 
 ## REAL range and precision
 
@@ -68,9 +68,9 @@ An expression outside `math()` is permissive. That covers a rung condition, a `c
 | WORD-only | `"hex"` (unsigned 16-bit wrap) |
 | Any non-WORD present | `"decimal"` (signed arithmetic) |
 
-For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. CLICK validation reports `CLK_MATH_MODE_MIXED` for mixed-family expressions.
+For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. pyrung exports such a `math()` in decimal mode. A decimal Math refuses a `Word` tag. CLICK validation reports `math-operand-bank` for each `Word` tag in the formula. It reports `bank-not-allowed` for a DH or YD destination of a formula without `Word` tags.
 
-CLICK's editor accepts only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`. It accepts only a tag or a constant on either side of `<<` and `>>`. CLICK validation reports `CLK_MATH_ARG_NOT_PLAIN` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`. Compute the value into a tag in a `math()` above. The same rule applies to `randint()` bounds.
+CLICK's editor accepts only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`. It accepts only a tag or a constant on either side of `<<` and `>>`. CLICK validation reports `math-arg-expression` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`. Compute the value into a tag in a `math()` above. The same rule applies to `randint()` bounds.
 
 ## Range aggregates
 
@@ -119,9 +119,9 @@ math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 
 A decimal Math accepts an integer constant or a DS or DD tag as a bound. A hex Math accepts an integer constant or a DH tag. CLICK validation rejects:
 
-- any other bound: a `Real` tag, a float constant, a bit, a TD, CTD, SD, XD or YD tag, a DH tag in a decimal Math, or text (`CLK_RAND_BOUND_TYPE`)
-- equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
-- a bound that is an expression, such as `randint(0, N / 2)` (`CLK_MATH_ARG_NOT_PLAIN`)
+- any other bound: a `Real` tag, a float constant, a bit, a TD, CTD, SD, XD or YD tag, a DH tag in a decimal Math, or text (`random-bound-type`)
+- equal bounds, such as `randint(5, 5)` or `randint(N, N)` (`random-equal-bounds`)
+- a bound that is an expression, such as `randint(0, N / 2)` (`math-arg-expression`)
 
 Use constants or a DS or DD tag as bounds. Compute an expression bound into a tag in a `math()` above. For a one-value draw, use a plain constant.
 
@@ -156,8 +156,8 @@ In pyrung, the aggregates work anywhere an expression does (`copy()` sources, ru
 |---------|------|
 | `CLK_MATH_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). A range that starts at XD0 or YD0 must end there, since CLICK's XD0:XD1 also holds XD0u. |
 | `CLK_MATH_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
-| `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
-| `CLK_MATH_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` reject a bit range (X, Y, C, T, CT, SC). `SUM` accepts one. |
-| `CLK_MATH_SUM_BANK_NOT_AVAILABLE` | In decimal mode, `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD or SD. In hex mode, it reads DH, XD or YD. |
+| `median-range-too-large` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
+| `math-operand-bank` | `MAX`, `MIN`, `MDN` and `AVG` reject a range of bits (X, Y, C, T, CT, SC) or of TXT. In a decimal Math they also reject a `Word` range. `SUM` accepts a bit range. |
+| `sum-bank-unavailable` | In decimal mode, `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD or SD. In hex mode, it reads DH, XD or YD. |
 
 The export writes a range as its first and last address, such as `SUM ( DS1 : DS9 )`. CLICK reads every address from the first to the last. So the export rejects a range that `CLK_MATH_RANGE_NOT_CONTIGUOUS` or `CLK_MATH_RANGE_MIXED_BANKS` reports, even with `allow=`.
