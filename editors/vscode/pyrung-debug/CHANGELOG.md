@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.18.0 - 2026-11-20
+
+- Align the packaged debugger version with pyrung 0.18.0.
+
 ## 0.17.0 - 2026-11-18
 
 - The debugger shows live tag values inside a `with rung(...)` block. 0.16.0 showed them only inside `with Rung(...)`.
