@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from laddercodec import FieldError
+from laddercodec import Code, FieldError, LaddercodecError
 from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.core.expression import Expression
@@ -247,6 +247,18 @@ class Unbuildable(Exception):
     """Raised when the export cannot write the instruction, so laddercodec has no input."""
 
 
+class Unreadable(Exception):
+    """Raised when laddercodec cannot read the token that the export writes for the call.
+
+    Carries laddercodec's error. Such an error is about the shape of the token, so it has no
+    field to mark.
+    """
+
+    def __init__(self, error: LaddercodecError) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
 def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) -> str:
     """Return the operand in *attribute* of *instruction* as the export writes it.
 
@@ -283,6 +295,8 @@ def refusals_of(build: Callable[[], Any]) -> list[Any]:
         build()
     except FieldError as exc:
         return list(exc.errors)
+    except LaddercodecError as exc:
+        raise Unreadable(exc) from exc
     return []
 
 
@@ -632,6 +646,20 @@ def evaluate_family(
         # laddercodec has nothing to read. An expression operand, or an operand that the
         # export refuses, has a finding of its own.
         return FamilyResult([])
+    except Unreadable as exc:
+        code = str(getattr(exc.error, "code", None) or Code.INVALID_TOKEN)
+        return FamilyResult(
+            [
+                ClickFinding(
+                    code=code,
+                    severity=_route_severity(code, mode),
+                    message=f"CLICK cannot read {family.call_of(instruction).text} at "
+                    f"{location_text}. {exc.error.message()}",
+                    location=location_text,
+                    suggestion=None,
+                )
+            ]
+        )
 
     return FamilyResult(
         [],
@@ -648,6 +676,7 @@ __all__ = [
     "Operand",
     "Place",
     "Unbuildable",
+    "Unreadable",
     "declared_operands",
     "default_place",
     "evaluate_family",
