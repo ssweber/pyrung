@@ -11,6 +11,14 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Fixes
+
+- Linking an address that no rung uses now says so. The refusal reads `cannot link Y001: no rung uses Y001, so the
+  program has no tag for it` (it read `cannot link Y001: unknown tag: Y001`). A client that matches the old text must
+  match the new text too.
+
 ## v0.18.0 (2026-11-20)
 
 pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, which is installed for you.

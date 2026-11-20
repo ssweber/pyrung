@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -475,3 +476,104 @@ class TestCapture:
         assert [cmd for _n, cmd in _replay_commands(lines, harness_mode="current")] == lines
         for mode in ("recorded", "off"):
             assert [cmd for _n, cmd in _replay_commands(lines, harness_mode=mode)] == ["step 2"]
+
+
+_NO_RUNGS = """\
+from pyrung.click import ClickBlocks, TagMap
+from pyrung.core import Bool, PLC, Program
+
+blocks = ClickBlocks()
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks
+
+with Program(strict=False) as prog:
+    pass
+
+mapping = TagMap({Bool("Start"): x[2]})
+runner = PLC(prog, dt=0.010)
+"""
+
+_NO_TAG_MAP = """\
+from pyrung.core import Bool, PLC, Program, rung, out
+
+with Program(strict=False) as prog:
+    with rung(Bool("A")):
+        out(Bool("B"))
+
+runner = PLC(prog, dt=0.010)
+"""
+
+
+_POINTER = """from pyrung.click import ClickBlocks, TagMap
+from pyrung.core import Int, PLC, Program, copy, rung
+
+blocks = ClickBlocks()
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks
+state = Int("State")
+
+with Program(strict=False) as prog:
+    with rung():
+        copy(ds[state], ds[9])
+
+mapping = TagMap({state: ds[1]})
+runner = PLC(prog, dt=0.010)
+"""
+
+
+class TestAddressNoRungUses:
+    def _refusal(self, adapter: DAPAdapter, out: io.BytesIO, command: str) -> str:
+        response = _repl(adapter, out, command)
+        assert not response["success"], response
+        return response["message"]
+
+    def test_feedback_on_a_program_with_no_rungs(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _NO_RUNGS)
+        assert self._refusal(adapter, out, "link Y001 X001 on_delay=0ms") == (
+            "cannot link Y001: no rung uses Y001, so the program has no tag for it"
+        )
+
+    def test_the_refusal_names_a_nickname(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _NO_RUNGS)
+        assert self._refusal(adapter, out, "link X002 X001 on_delay=0ms") == (
+            "cannot link Start: no rung uses Start (X002), so the program has no tag for it"
+        )
+
+    def test_with_other_rungs(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path)
+        assert self._refusal(adapter, out, "link Y005 X001 on_delay=0ms") == (
+            "cannot link Y005: no rung uses Y005, so the program has no tag for it"
+        )
+        assert self._refusal(adapter, out, "link X003 X005 on_delay=0ms") == (
+            "cannot link Spare: no rung uses X005, so the program has no tag for it"
+        )
+
+    def test_a_typo_on_either_end_is_an_unknown_tag(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _NO_RUNGS)
+        assert self._refusal(adapter, out, "link Motr X001 on_delay=0ms") == "Unknown tag 'Motr'."
+        assert self._refusal(adapter, out, "link Y001 Q1 on_delay=0ms") == "Unknown tag 'Q1'."
+        assert self._refusal(adapter, out, "link Y001 X017 on_delay=0ms") == "Unknown tag 'X017'."
+
+    def test_a_program_without_a_tag_map(self, tmp_path: Path, monkeypatch: Any):
+        # The launch falls back to any top-level ``tags`` module, and another test may
+        # have left one in sys.modules.
+        monkeypatch.delitem(sys.modules, "tags", raising=False)
+        adapter, out = _launch(tmp_path, _NO_TAG_MAP)
+        assert self._refusal(adapter, out, "link Y001 A on_delay=0ms") == (
+            "Unknown tag 'Y001' (address Y001 is not mapped to a tag; the project has no TagMap)"
+        )
+
+    def test_a_slot_that_a_pointer_reaches_keeps_unknown_tag(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _POINTER)
+        assert self._refusal(adapter, out, "link DS5 X001 approach_to=100 approach_rate=1") == (
+            "cannot link DS5: unknown tag: DS5"
+        )
+
+    def test_a_system_point_keeps_unknown_tag(self, tmp_path: Path):
+        adapter, out = _launch(tmp_path, _NO_RUNGS)
+        assert self._refusal(adapter, out, "link SC1 X001 on_delay=0ms") == (
+            "cannot link sys.always_on: unknown tag: sys.always_on"
+        )
+        (tmp_path / "enable").mkdir()
+        adapter, out = _launch(tmp_path / "enable", _PROGRAM)
+        assert self._refusal(adapter, out, "link X003 SD1 on_delay=0ms") == (
+            "cannot link Spare: unknown tag: fault.code"
+        )

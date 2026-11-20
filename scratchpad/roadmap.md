@@ -36,10 +36,11 @@ The plan and Sam set this order (2026-11-20).
 Then `how()`, after the recording core (section 3). The items are in "how(): after the recording core". The extra
 brackets in an exported `math()` stay low priority, outside this order.
 
-- **Parse operands once, in the builder.** Four places each decide which operands are valid: each instruction's
+- **Parse operands once, in the builder.** Sam agreed its shape on 2026-11-20. It is in
+  `scratchpad/specs/parse-once-shape.md`. Four places each decide which operands are valid: each instruction's
   `execute()`, the compiled kernel's code generator, laddercodec's CLICK rules, and the operand declarations
-  (`_operands`) that bob/build-refusals added. Sam wants no fourth copy (2026-11-19, "parse, don't validate sounds like a
-  winner"). The orchestrator starts it. [nothing]
+  (`_operands`) that bob/build-refusals added. Sam wants no fourth copy (2026-11-19, "parse, don't validate sounds
+  like a winner"). The orchestrator starts it. [nothing]
   - Each builder turns its arguments into checked operand objects, once. `execute()`, the kernel, CircuitPython codegen
     and the CLICK export accept only those objects, so their defensive code goes.
   - The split, in Sam's words to the planner: "get the 80% via 20% and then let laddercodec get the long tail". pyrung's
@@ -268,6 +269,26 @@ the VS Code extension release together. [nothing, with a joint release]
   and ListForces. Monitors change the debugger's view, not the PLC, so AddMonitor and RemoveMonitor stay too.
 - Console verbs can already return structured data (`ConsoleResult.body`, as `reload` does).
 - Today panel force and patch never reach `capture_hook`, so recordings miss them. That is the gap this step closes.
+- **For Sam: does an address that no rung uses exist?** In a generated project, `force X002 true` and `patch X003
+  true` work on an address that no rung uses, but `link` refuses it. Sam ruled for ClickNick 0.26.0 that such an
+  address does not exist in the program yet (2026-11-20). He has not ruled which way the console becomes consistent.
+  Change nothing until he does.
+- **Link an address that no rung uses.** It opens again if users ask to change an input before they write a rung.
+  The parked branch `bob/link-unused` (3c314d4, notes in `../pyrung-wt/buildbot/jobs/link-unused/HANDOFF.md`) shows
+  the cost.
+  - The runner alone cannot do it. On a program with no rungs, `_tag_known_or_reached("X001")` is None and
+    `_slots_by_name()` is empty. The adapter's `ClickDataProvider` holds the mapping and blocks, so ClickNick needs no
+    change.
+  - It adds `MappedSlot.tag`, and `tag_at()` and `tag_named()` on the provider. The kernel does not change.
+  - The largest cost is a reload. The new runner does not know a tag that was added this way, so each one must be
+    added again by name, and nothing tests that.
+  - A command that fails after the lookup still leaves the tag in the variables pane.
+  - A slot that a range reaches, such as X005 in `pack_bits(X003..X010, DS1)`, takes a patch and a force. But the
+    frames that pyrung sends list only the tags that a rung names. So a client cannot tell such a slot from an
+    address that the program does not touch. Found by the ClickNick session (2026-11-20).
+- **A link refusal carries a reason a client can read.** ClickNick 0.26.0 decides that a link waits by matching the
+  text `unknown tag` in pyrung's refusal. Give the refusal a stable reason code, so that no client matches on message
+  text.
 
 ## 5. Larger features
 
@@ -392,9 +413,9 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 - **laddercodec as a dependency.** Validation runs on laddercodec 0.5.0. The rest follows the plan's order (Sam,
   2026-11-16). [nothing]
-  - Export through laddercodec (plan step 5), third under "After 0.18.0". laddercodec 0.5.0 has `csv_rows()`, a public `CSV_HEADER`, and
-    `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When pyrung moves to
-    `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
+  - Export through laddercodec (plan step 5), third under "After 0.18.0". laddercodec 0.5.0 has `csv_rows()`, a
+    public `CSV_HEADER`, and `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When
+    pyrung moves to `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
     `Program.subroutines` is a dict keyed by name.
   - Import reads laddercodec's objects (plan step 6).
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
@@ -402,7 +423,7 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   laddercodec's `csv-format.md` move here.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
-  finding. laddercodec 0.5.0 has the marker. pyrung runs it first after the joint release (plan,
+  finding. laddercodec 0.5.0 has the marker. pyrung runs it first after 0.18.0 (plan,
   "In laddercodec", and Sam, 2026-11-20). [nothing]
   - `ladder_to_pyrung()` raises `ValueError` on an `undecoded(...)` cell today.
   - ClickNick's roadmap item 9 waits on it. The Simulator runs up to the marker, and Check Program lists it.
@@ -421,6 +442,17 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **A launch can borrow another project's TagMap.** `_find_project_tags_module` (dap/handlers/lifecycle_launch.py)
+  falls back to any top-level `tags` module in `sys.modules`. A program with no TagMap then takes the TagMap of a
+  project that ran before it in the same process. CI showed it, because a test left `tags` behind. Use the fallback
+  only when `tags` is importable from the program's own directory. The same function finds the TagMap for a
+  snapshot load (`_apply_snapshot`, lifecycle_launch.py:176), so the fix changes that too.
+- **`X0001` is read as X001.** pyclickplc's address parser accepts leading zeros. `force X0001 true` forces X001
+  but echoes `Forced X0001=True`. Refuse the padded form, or echo the address it resolved to.
+- **A force on an unused address is lost at a reload.** Each ClickNick Write reloads, and the new runner does not know
+  the tag, so the force goes. This is read in the code, not run.
+- **A force on an unused Bool address is not type-checked.** `force X002 5` likely stores 5 as given, because the tag
+  has no type until a rung gives it one. This is read in the code, not run.
 - **A padded TCP address.** `ModbusTcpTarget` keeps a padded IP such as `010.002.003.004` as typed, in the CSV, the
   import, the runtime and the CircuitPython host. A CLICK and laddercodec 0.5.0 read it as `10.2.3.4`. On Windows
   `getaddrinfo` fails on it, and `inet_aton` reads `010` as octal 8. Normalise the address in `ModbusTcpTarget`.
