@@ -198,6 +198,88 @@ def test_allow_accepts_the_codes_that_other_checks_still_report():
     assert pyrung_to_ladder(_program(write), TagMap(), allow=(Code.BANK_NOT_ALLOWED,)).main_rows
 
 
+@pytest.mark.parametrize(
+    ("code", "replacement"),
+    [
+        ("CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y", "immediate-coil-not-y"),
+        ("CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS", "CLK_COPY_RANGE_NOT_CONSECUTIVE"),
+    ],
+)
+def test_allow_names_what_replaced_a_removed_immediate_code(code, replacement):
+    with pytest.raises(ValueError, match=f"no longer reports {code}. Pass {replacement}"):
+        pyrung_to_ladder(_program(lambda: out(immediate(y[1]))), TagMap(), allow=(code,))
+
+
+@pytest.mark.parametrize("coil", [out, latch, reset])
+def test_the_export_names_the_code_of_an_immediate_range_it_refuses_when_allowed(coil):
+    gap = Block("Gap", TagType.BOOL, 1, 3)
+    maps = [gap[1].map_to(y[1]), gap[2].map_to(y[3]), gap[3].map_to(y[4])]
+    write = lambda: coil(immediate(gap.select(1, 3)))  # noqa: E731
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE: Gap1..Gap3"):
+        pyrung_to_ladder(
+            _program(write),
+            TagMap(maps, include_system=False),
+            allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",),
+        )
+
+
+@pytest.mark.parametrize("coil", [out, latch, reset])
+@pytest.mark.parametrize(
+    "mapping",
+    [[("y", 1), ("y", 3), ("y", 4)], [("y", 1), ("c", 2), ("y", 3)]],
+    ids=["gap", "mixed bank"],
+)
+def test_the_export_refuses_a_plain_coil_range_with_a_gap_even_when_allowed(coil, mapping):
+    gap = Block("Gap", TagType.BOOL, 1, 3)
+    banks = {"y": y, "c": c}
+    maps = [gap[i + 1].map_to(banks[b][n]) for i, (b, n) in enumerate(mapping)]
+    write = lambda: coil(gap.select(1, 3))  # noqa: E731
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE: Gap1..Gap3"):
+        pyrung_to_ladder(
+            _program(write),
+            TagMap(maps, include_system=False),
+            allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",),
+        )
+
+
+@pytest.mark.parametrize("coil", [out, latch, reset])
+def test_the_export_refuses_a_descending_coil_range_even_when_allowed(coil):
+    desc = Block("Desc", TagType.BOOL, 1, 3)
+    maps = [desc[1].map_to(y[3]), desc[2].map_to(y[2]), desc[3].map_to(y[1])]
+    write = lambda: coil(desc.select(1, 3))  # noqa: E731
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE: Desc1..Desc3"):
+        pyrung_to_ladder(
+            _program(write),
+            TagMap(maps, include_system=False),
+            allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",),
+        )
+
+
+@pytest.mark.parametrize("coil", [out, latch, reset])
+def test_the_export_refuses_a_reversed_coil_range_even_when_allowed(coil):
+    write = lambda: coil(c.select(1, 3).reverse())  # noqa: E731
+    with pytest.raises(LadderExportError, match="CLK_COPY_RANGE_NOT_CONSECUTIVE: C1..C3"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_COPY_RANGE_NOT_CONSECUTIVE",))
+
+
+@pytest.mark.parametrize("coil", [out, latch, reset])
+def test_the_export_writes_an_ascending_coil_range_as_a_range(coil):
+    asc = Block("Asc", TagType.BOOL, 1, 3)
+    maps = [asc[1].map_to(y[5]), asc[2].map_to(y[6]), asc[3].map_to(y[7])]
+    for write, tag_map in (
+        (lambda: coil(c.select(1, 3)), TagMap()),
+        (lambda: coil(asc.select(1, 3)), TagMap(maps, include_system=False)),
+    ):
+        assert pyrung_to_ladder(_program(write), tag_map).main_rows
+
+
+def test_the_export_names_the_code_of_an_immediate_target_outside_y_when_allowed():
+    with pytest.raises(LadderExportError, match="immediate-coil-not-y: immediate"):
+        pyrung_to_ladder(
+            _program(lambda: out(immediate(c[1]))), TagMap(), allow=(Code.IMMEDIATE_COIL_NOT_Y,)
+        )
+
+
 def test_an_immediate_coil_prints_its_immediate_call():
     (finding,) = _errors(lambda: out(immediate(c[1]), oneshot=True))
     assert _frame(finding)[0] == ("out(immediate(C1), oneshot=True)",)

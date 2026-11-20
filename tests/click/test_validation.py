@@ -16,7 +16,6 @@ from pyrung.click.validation import (
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
-    CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_MATH_FLOOR_DIV,
@@ -1671,7 +1670,7 @@ class TestImmediateValidation:
 
         report = validate_click_program(prog, tag_map, mode="strict")
         codes = _finding_codes(report)
-        assert CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS not in codes
+        assert CLK_COPY_RANGE_NOT_CONSECUTIVE not in codes
         assert Code.IMMEDIATE_COIL_NOT_Y not in codes
 
     def test_immediate_non_contiguous_range_is_error(self):
@@ -1876,7 +1875,7 @@ class TestTimerPresetOverflow:
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
-        # laddercodec's Timer refuses the preset, in place of CLK_TIMER_PRESET_OVERFLOW.
+        # laddercodec's Timer refuses a preset above 32767.
         assert Code.CONSTANT_OUT_OF_RANGE in _finding_codes(report)
 
     def test_preset_tag_skipped(self):

@@ -212,10 +212,10 @@ def test_allow_names_what_replaced_the_removed_code():
 
 
 @pytest.mark.parametrize("code", ["CLK_TIMER_PRESET_TOO_LOW", "CLK_TIMER_PRESET_OVERFLOW"])
-def test_allow_with_a_code_that_other_checks_still_report_lets_nothing_through(code):
+def test_allow_with_a_removed_preset_code_raises(code):
     write = lambda: flasher(y[1], on=(Timers[1], 0), off=(Timers[2], 40_000))  # noqa: E731
     tag_map = TagMap(_timer_mappings(), include_system=False)
-    with pytest.raises(LadderExportError, match=Code.CONSTANT_OUT_OF_RANGE):
+    with pytest.raises(ValueError, match=f"no longer reports {code}. Pass constant-out-of-range"):
         pyrung_to_ladder(_program(write), tag_map, allow=(code,))
     assert pyrung_to_ladder(_program(write), tag_map, allow=(Code.CONSTANT_OUT_OF_RANGE,)).main_rows
 

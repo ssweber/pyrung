@@ -30,8 +30,6 @@ from .hardware import (
     _evaluate_role_assignments,
     _evaluate_text_past_bank,
     _evaluate_timer_pairs,
-    _evaluate_timer_preset_floor,
-    _evaluate_timer_preset_overflow,
     _evaluate_unreadable_copy_text,
     _evaluate_wide_copy_constant,
     _evaluate_write_targets,
@@ -195,24 +193,12 @@ def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding
 # The checks that stay in pyrung, and the checks that several families share. Each family's
 # own checks are in legacy/, and their order numbers fit between these.
 _CHECKS = (
-    Check(
-        "program",
-        10,
-        lambda c: _evaluate_immediate_usage(
-            c.facts.operands, c.sites, c.tag_map, c.mode, c.resolver
-        ),
-    ),
+    Check("program", 10, lambda c: _evaluate_immediate_usage(c.facts.operands, c.tag_map, c.mode)),
     Check("program", 30, lambda c: _evaluate_status_bit_usage(c.program, c.mode)),
     Check("program", 60, lambda c: _evaluate_text_windows(c.program, c.mode, c.resolver)),
     Check("program", 70, lambda c: _evaluate_forloop_structure(c.program, c.mode)),
     Check("program", 80, lambda c: _evaluate_nested_calls(c.program, c.mode)),
     Check("instruction", 20, lambda i, loc, c: _evaluate_instruction_portability(i, loc, c.mode)),
-    Check(
-        "instruction",
-        40,
-        lambda i, loc, c: _evaluate_timer_preset_overflow(i, loc, c.tag_map, c.mode),
-    ),
-    Check("instruction", 50, lambda i, loc, c: _evaluate_timer_preset_floor(i, loc, c.mode)),
     Check(
         "instruction",
         100,

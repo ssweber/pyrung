@@ -31,11 +31,8 @@ from .findings import (
     CLK_TEXT_PAST_BANK,
     CLK_TEXT_PAST_BLOCK,
     CLK_TIMER_PAIR_MISMATCH,
-    CLK_TIMER_PRESET_OVERFLOW,
-    CLK_TIMER_PRESET_TOO_LOW,
     ClickFinding,
     ValidationMode,
-    _build_suggestion,
     _route_severity,
 )
 from .resolve import (
@@ -573,79 +570,6 @@ def _evaluate_unreadable_copy_text(
     ]
 
 
-_INT16_MAX = 32_767
-
-
-def _evaluate_timer_preset_overflow(
-    instruction: Any,
-    base_location: ProgramLocation,
-    tag_map: TagMap,
-    mode: ValidationMode,
-) -> list[ClickFinding]:
-    findings: list[ClickFinding] = []
-    fields = _family_rows("TIMER_PRESET_FIELDS").get(type(instruction).__name__, ())
-    for field_name in fields:
-        preset = getattr(instruction, field_name, None)
-        if isinstance(preset, Tag) or preset is None or preset <= _INT16_MAX:
-            continue
-        location = _instruction_location(base_location, f"instruction.{field_name}")
-        location_text = _format_location(location)
-        findings.append(
-            ClickFinding(
-                code=CLK_TIMER_PRESET_OVERFLOW,
-                severity=_route_severity(CLK_TIMER_PRESET_OVERFLOW, mode),
-                message=(
-                    f"Timer preset {preset} exceeds Click INT range (max {_INT16_MAX}) "
-                    f"at {location_text}."
-                ),
-                location=location_text,
-                suggestion=_build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map),
-            )
-        )
-    return findings
-
-
-def _evaluate_timer_preset_floor(
-    instruction: Any,
-    base_location: ProgramLocation,
-    mode: ValidationMode,
-) -> list[ClickFinding]:
-    """Report CLK_TIMER_PRESET_TOO_LOW, a constant preset below what CLICK accepts."""
-    spec = _family_rows("CONSTANT_PRESET_FLOORS").get(type(instruction).__name__)
-    if spec is None:
-        return []
-    verb, floor, fields = spec
-    presets = (
-        [(field, getattr(instruction, field)) for field in fields]
-        if fields
-        else [(f"presets[{index}]", p) for index, p in enumerate(instruction.presets)]
-    )
-    least = "1 or more" if floor == 1 else "0 or more"
-    findings: list[ClickFinding] = []
-    for field_name, preset in presets:
-        if not isinstance(preset, int) or isinstance(preset, bool) or preset >= floor:
-            continue
-        location_text = _format_location(
-            _instruction_location(base_location, f"instruction.{field_name}")
-        )
-        findings.append(
-            ClickFinding(
-                code=CLK_TIMER_PRESET_TOO_LOW,
-                severity=_route_severity(CLK_TIMER_PRESET_TOO_LOW, mode),
-                message=(
-                    f"{verb}() preset {preset} at {location_text}: CLICK's editor takes a "
-                    f"constant preset of {least} there."
-                ),
-                location=location_text,
-                suggestion=(
-                    f"Use a constant of {least}, or a DS tag holding the value: a register "
-                    "preset takes any value."
-                ),
-            )
-        )
-    return findings
-
-
 # A CLICK timer or counter is one number. Its instruction names T<n> (or CT<n>), and the
 # accumulator TD<n> (CTD<n>) comes with it. The Out coils name only TD<n>.
 _PAIRED_BANKS = {"T": "TD", "CT": "CTD"}
@@ -699,17 +623,13 @@ def _evaluate_timer_pairs(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    findings: list[ClickFinding] = []
     from .families import family_of
 
     family = family_of(instruction)
-    if family is not None:
-        pairs = family.timer_pairs.get(type(instruction).__name__, ())
-        findings.extend(
-            _evaluate_done_bits(instruction, pairs, base_location, profile, mode, resolver)
-        )
-    else:
-        pairs = _family_rows("TIMER_PAIR_FIELDS").get(type(instruction).__name__, ())
+    if family is None:
+        return []
+    pairs = family.timer_pairs.get(type(instruction).__name__, ())
+    findings = _evaluate_done_bits(instruction, pairs, base_location, profile, mode, resolver)
     for done_field, acc_field in pairs:
         done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
         done_slots = resolver.resolve_operand_slots(done).slots
