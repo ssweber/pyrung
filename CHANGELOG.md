@@ -15,7 +15,9 @@
 
 ### Fixes
 
-- Linking an address that no rung uses now says so (it said `unknown tag`).
+- Linking an address that no rung uses now says so. The refusal reads `cannot link Y001: no rung uses Y001, so the
+  program has no tag for it` (it read `cannot link Y001: unknown tag: Y001`). A client that matches the old text must
+  match the new text too.
 
 ## v0.18.0 (2026-11-20)
 

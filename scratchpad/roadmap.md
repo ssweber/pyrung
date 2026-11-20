@@ -283,6 +283,12 @@ the VS Code extension release together. [nothing, with a joint release]
   - The largest cost is a reload. The new runner does not know a tag that was added this way, so each one must be
     added again by name, and nothing tests that.
   - A command that fails after the lookup still leaves the tag in the variables pane.
+  - A slot that a range reaches, such as X005 in `pack_bits(X003..X010, DS1)`, takes a patch and a force. But the
+    frames that pyrung sends list only the tags that a rung names. So a client cannot tell such a slot from an
+    address that the program does not touch. Found by the ClickNick session (2026-11-20).
+- **A link refusal carries a reason a client can read.** ClickNick 0.26.0 decides that a link waits by matching the
+  text `unknown tag` in pyrung's refusal. Give the refusal a stable reason code, so that no client matches on message
+  text.
 
 ## 5. Larger features
 
@@ -439,7 +445,8 @@ All [nothing] unless marked.
 - **A launch can borrow another project's TagMap.** `_find_project_tags_module` (dap/handlers/lifecycle_launch.py)
   falls back to any top-level `tags` module in `sys.modules`. A program with no TagMap then takes the TagMap of a
   project that ran before it in the same process. CI showed it, because a test left `tags` behind. Use the fallback
-  only when `tags` is importable from the program's own directory.
+  only when `tags` is importable from the program's own directory. The same function finds the TagMap for a
+  snapshot load (`_apply_snapshot`, lifecycle_launch.py:176), so the fix changes that too.
 - **`X0001` is read as X001.** pyclickplc's address parser accepts leading zeros. `force X0001 true` forces X001
   but echoes `Forced X0001=True`. Refuse the padded form, or echo the address it resolved to.
 - **A force on an unused address is lost at a reload.** Each ClickNick Write reloads, and the new runner does not know
