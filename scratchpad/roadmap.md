@@ -20,18 +20,36 @@ Specs that later work needs are kept beside this file:
 - `specs/conformance-tidy.md` is the recommendation for tidying the conformance suite.
 - `specs/reconnect-findings.md` holds the notes from a reconnect fallback for how() that was tried and dropped.
 
+## After 0.18.0
+
+The plan and Sam set this order. Sam put the undecoded marker first on 2026-11-20.
+1. Make `ladder_to_pyrung()` read laddercodec's undecoded marker as a stop that says why. ClickNick's roadmap item 9
+   waits on it. This roadmap's item is "The undecoded marker", under "laddercodec and pyclickplc".
+2. Parse operands once, in the builder. The item is below.
+3. The CLICK-match fixes from the 2026-11-10 readings, in section 2.
+4. Console commands for every change, in section 4.
+5. float32 Real stores, the per-PLC definitions table, the history API and `calc()` into a pointer destination, in
+   section 5.
+6. `how()`, after the recording core (section 3). The items are in "how(): after the recording core".
+
+Export through laddercodec comes after the joint release, under "laddercodec and pyclickplc".
+
+- **Parse operands once, in the builder.** Four places each decide which operands are valid: each instruction's
+  `execute()`, the compiled kernel's code generator, laddercodec's CLICK rules, and the operand declarations
+  (`_operands`) that bob/build-refusals added. Sam wants no fourth copy (2026-11-19, "parse, don't validate sounds like a
+  winner"). The orchestrator starts it. [nothing]
+  - Each builder turns its arguments into checked operand objects, once. `execute()`, the kernel, CircuitPython codegen
+    and the CLICK export accept only those objects, so their defensive code goes.
+  - The split, in Sam's words to the planner: "get the 80% via 20% and then let laddercodec get the long tail". pyrung's
+    parse checks the shape of each operand: its kind, its type, a range against a tag, and a count. laddercodec keeps
+    every CLICK rule (which banks, which addresses, which constants), and the export passes it the checked objects.
+  - The operand declarations become pyrung's one grammar.
+
 ## 0. Gate fixes, and the range bound
 
-Every later step pays the gate, so it comes first. All [nothing]. The range bound, the soundness and conformance trims
-and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9). Per-test times from that run are in
+Every later step pays the gate, so it comes first. All [nothing]. Per-test times from the last gate trim (#52) are in
 `pyrung-wt/buildbot/logs/gate-trim/`.
 
-- **Narrowing `make test-fold` is shelved.** Branch bob/fold-narrow (ef7059b, local only) runs only the 121 test
-  files whose runs go through the jit (`run_for`/`run_until`), from a generated list. Narrowed, `make test-fold` took
-  676 s on a quiet machine. The full run took 960 s. Both compared the same 2282 tests. The branch adds about 440
-  lines, and `make test` fails when a new test file goes through the jit but is missing from the list. Sam shelved it
-  on 2026-11-17. `make test-fold` runs only after a jit change, so the saving does not pay for the lines and the new
-  `make test` failure.
 - **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
   on an inner function. What is left checks `PLC` against `CompiledPLC` and the fold check. Decide whether a gate
   runs it. [Sam]
@@ -41,9 +59,7 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
 
 ## 1. The deletions release
 
-Plan items 3 (public surface) and 6 (search removal) ship in 0.17.0, on Sam's tag. All [nothing]. The record machinery (plan item
-1.1) is gone. The public surface and the `Rung` -> `rung` rename landed in #94, #95 and #96, and `Rung` is no longer
-a public name. The static facts below are what is left of this step.
+All [nothing]. The static facts below are what is left of this step.
 ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `candidates`, `accept`, `deny`,
 `suppress` and `spec` left it. ClickNick's test of its named imports is ClickNick's work.
 
@@ -117,8 +133,6 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   the CircuitPython code. Each of its helpers records what its piece of code reads, writes and compares. prove/ and
   pilot/ then read those records in place of their hand-kept lists for each instruction. The design is
   `pyrung-wt/buildbot/jobs/bindings/EMIT-DESIGN.md`.
-  - Steps 0 and 1a are in main (#79). Step 1a moved the raw code strings into shared helpers, with byte-identical
-    output. The timer records followed (#84).
   - Step 2 onward waits for Sam's nod on the size. The design estimates about 1,600 to 2,100 lines of package and
     codegen code, plus tests. [Sam]
   - Two gaps the records close (`bindings/CONSUMERS.md` 1.2 and 1.3, migration step 2).
@@ -195,6 +209,7 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   +/-Inf, the pack_text of text past the Real range, and the TD write (`jobs/plc-answers/NOTES.md`). bob/plc-runtime
   matched pyrung to them and added part follow4_reads (groups `plc_stores` and `td_count_on`).
   - Run part follow4_reads on a CLICK to confirm its cases.
+  - What CLICK sums for `SUM ( Y015 : Y021 )` across the gap. pyrung exports `y.select(15, 21).sum()` that way, because the aggregate check lets bit banks pass.
   - Run part modbus_raw once on a CLICK, to record its probes of X, T, CT, the coils between slots and the registers
     after XD8 and YD8 in `readings.toml`. clicknick read the same requests by hand (`jobs/plc-answers/NOTES.md`), and
     bob/plc-modbus made both Modbus servers match them.
@@ -215,7 +230,7 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   - A Copy of a positive quiet NaN (7FC00000) from a DF into a DD. A CLICK was read storing -2147483648 for the
     NaN FFFFFFFF only. pyrung stores -2147483648 for every NaN.
 - **`math()` of a Real into a Word.** pyrung runs it, but a CLICK refuses it. The CLICK check reports
-  `CLK_MATH_MODE_MIXED`. Decide whether pyrung runs it or refuses it. [nothing]
+  `bank-not-allowed`. Decide whether pyrung runs it or refuses it. [nothing]
 - **CLICK v4 send/receive forms** (laddercodec's asks, ruled for after 0.16.0). [CLICK]
   - The form questions go into laddercodec's Send and Receive grids, not into a list here. clicknick's runner
     drives Receive with `try`, and Send is being added (clicknick, 2026-11-18). clicknick runs the forms on Sam's go.
@@ -227,8 +242,7 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 Plan item 1.2. The design is `session-recording/design.md`. Sam's rulings of 2026-11-15 are in the plan.
 All [nothing].
 
-The fixed `replay`, `assert`, `run until <condition> within N`, and `record` with pytest collection are in main
-(#79, #84). These are left:
+These are left:
 - **The rename function.** It lives here, because it parses expressions. ClickNick supplies the old-to-new map at the
   build that first carries the new names. A name that still exists is left alone, so a swap rewrites nothing. A name
   that is gone becomes whatever now names its old address. Recordings hold names: the nickname, or the display
@@ -270,20 +284,6 @@ the VS Code extension release together. [nothing, with a joint release]
 - **calc() into a pointer destination,** across the interpreter, kernel, codegen and the pilot readers. The CLICK
   export refuses it unless the hand check allows it. Remove the unreachable indirect-dest code in
   `CalcInstruction.execute` and `_dest_type`. [nothing]
-
-- **Parse operands once, in the builder.** Four places each decide which operands are valid: each instruction's
-  `execute()`, the compiled kernel's code generator, laddercodec's CLICK rules, and the operand declarations
-  (`_operands`) that bob/build-refusals adds. Sam wants no fourth copy (2026-11-19, "parse, don't validate sounds like a
-  winner"). [nothing]
-  - Each builder turns its arguments into checked operand objects, once. `execute()`, the kernel, CircuitPython codegen
-    and the CLICK export accept only those objects, so their defensive code goes.
-  - The split, in Sam's words to the planner: "get the 80% via 20% and then let laddercodec get the long tail". pyrung's
-    parse checks the shape of each operand: its kind, its type, a range against a tag, and a count. laddercodec keeps
-    every CLICK rule (which banks, which addresses, which constants), and the export passes it the checked objects.
-  - The operand declarations become pyrung's one grammar.
-  - Why: the build-refusals branch took three review rounds and the kernel-agree branch two. Every finding was one
-    copy disagreeing with another.
-  - The orchestrator starts it after bob/build-refusals and bob/kernel-agree land.
 
 ## how(): after the recording core
 
@@ -377,6 +377,8 @@ Sam agreed to these on 2026-11-15. The gate fixes are step 0 above.
   - What an instruction does is a conformance case. Engine agreement comes from the harness, never by hand.
   - A `how()` test goes through `how()` on a corpus program.
 - **Case tables and shared builders** only in files that change anyway.
+- **Two copy-family tests are loose.** test_copy_family_validation.py does not pin the converter caret's text. No test
+  covers a `send()` of a TXT range from an even start, such as `source=txt.select(2, 3)`.
 - **Pilot's internal tests** retire gradually as the idiom corpus grows (1,121 tests never call `how()`).
 - **Tidy the conformance suite, don't rebuild it** (Sam, 2026-11-10). The checklist in `tests/conformance/AGENTS.md`
   becomes data the report reads, each case names its subject, and a few new cases cover untested rules. The
@@ -386,37 +388,22 @@ Sam agreed to these on 2026-11-15. The gate fixes are step 0 above.
 
 Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
-- **laddercodec as a dependency, in three steps.** They follow the plan's order (Sam, 2026-11-16). Before them, a
-  dev-only diff on bob/lc-diff lists where pyrung's export and rules disagree with laddercodec's. [nothing]
-  1. Validation on laddercodec (plan item 2, step 2). laddercodec becomes a runtime dependency here. No laddercodec
-     release comes first. The work lives on one branch. It builds against laddercodec's `main` and stays open until
-     the joint release (plan, "The joint release", Sam 2026-11-17). It does not merge early. Meanwhile pyrung's
-     `main` stays releasable on its own.
-     - The joint release waits for two things. This branch must pass pyrung's existing validation tests against
-       laddercodec's `main`. Sam must also review, from a user's view, the kebab-case `.code` that laddercodec gives
-       each refusal. Nothing else is waited for.
-     - The plan said the public surface lands before this branch opens. It and the `Rung` rename landed in #94, #95
-       and #96, so the branch can open.
-     - The branch needs a git source for laddercodec in `pyproject.toml`. Check that `make install`, mergeq and CI
-       accept it.
-     - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
-       laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
-  2. Export through laddercodec (plan step 5). laddercodec's main has `csv_rows()`, a public `CSV_HEADER`, and
-     `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When pyrung moves to
-     `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
-     `Program.subroutines` is a dict keyed by name.
-  3. Import reads laddercodec's objects (plan step 6).
+- **laddercodec as a dependency.** Validation runs on laddercodec on main. The rest follows the plan's order (Sam,
+  2026-11-16). [nothing]
+  - Export through laddercodec (plan step 5), after the joint release. laddercodec's main has `csv_rows()`, a public `CSV_HEADER`, and
+    `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When pyrung moves to
+    `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
+    `Program.subroutines` is a dict keyed by name.
+  - Import reads laddercodec's objects (plan step 6).
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
   2026-11-17). This replaces "the refusal wins". The pyrung sections of
   laddercodec's `csv-format.md` move here.
-  - Disagreements for laddercodec to fix (logged 2026-11-17): `to_text(exponential=1)` from a Real constant
-    (CLICK accepts it, case22) and from a DF pointer such as `DF[DS1]` (CLICK accepts it, clicknick
-    copy-pointer-text). laddercodec's `Copy._is_df` matches only a literal `DF<n>`.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
-  finding. laddercodec has the marker on its `main`, unreleased. pyrung runs it after the joint release (plan, "In
-  laddercodec"). [nothing]
-
+  finding. laddercodec has the marker on its `main`, unreleased. pyrung runs it first after the joint release (plan,
+  "In laddercodec", and Sam, 2026-11-20). [nothing]
+  - `ladder_to_pyrung()` raises `ValueError` on an `undecoded(...)` cell today.
+  - ClickNick's roadmap item 9 waits on it. The Simulator runs up to the marker, and Check Program lists it.
 - **A TXT initial value with edge spaces.** clicknick imported nickname files into CLICK and read the result
   (`clicknick-wt/buildbot/jobs/csv-import/RESULTS.md:102-106`). CLICK keeps a quoted value as written, so `" a "`
   stays ` a `. CLICK trims the whitespace (space, tab, VT and FF) at both ends of a bare value, so ` a` becomes `a`,
@@ -432,7 +419,7 @@ All [nothing] unless marked.
 - **Some accepted forms never write anything.** Under Sam's fault-only ruling (2026-11-19), a form that raises or
   only sets a fault flag on every data is refused at build. bob/build-refusals left these forms accepted, and they
   still write nothing. Before a refusal, the builder of that change runs each form over several input values and
-  checks that none writes. Each refusal waits on "Parse operands once, in the builder", in section 5.
+  checks that none writes. Each refusal waits on "Parse operands once, in the builder", under "After 0.18.0".
   - A converter that cannot convert the source or target type, such as `copy(ds[1], ds[3], convert=to_value)`.
   - A `search()` operator or value that does not fit the range type, such as `search(txt.select(1, 2) >= "A", ...)`
     or `search(ds.select(1, 2) >= "A", ...)`.
@@ -453,13 +440,27 @@ All [nothing] unless marked.
   finding. Every other check marks its token with `caret_of` (`core/validation/render.py`), which finds the first
   place the token appears in the call. That can be the wrong argument. The callers are in `choices_violation.py`,
   `cmp_conditions.py`, `physical_realism.py`, `math_conditions.py`, `rung_conditions.py`, `wait_escape.py` and
-  `pointer_default.py`, some through `site_frame` in `_common.py`. Each family branch that moves a check to
-  laddercodec fixes its own callers. The rest are unplanned.
+  `pointer_default.py`, some through `site_frame` in `_common.py`. The family branches that moved checks to
+  laddercodec fixed none of these callers. Their fix is unplanned.
 - **The kernel declines an `IntFlag` constant.** Stepping stores its number (`Fl.A | Fl.B` gives 3), so the kernel
   could compile it as it compiles an `IntEnum`. The decline is safe and only costs speed, so this is unplanned.
 - **An aggregate outside `math()` gets one finding only.** A `.sum()` in a `copy()` source or a compare is reported as
   `CLK_EXPR_ONLY_IN_MATH`, and the range check does not run on it. The export still refuses a scattered range there,
-  so nothing exports wrong. The Math family branch picks it up.
+  so nothing exports wrong. The Math family branch did not change it.
+- **Dead compare tables in `click/capabilities.py`.** Only a test reads `COMPARE_COMPATIBILITY`,
+  `COMPARE_CONSTANT_COMPATIBILITY`, `compare_compatible()` and `compare_constant_compatible()`.
+- **The CLICK profile layer serves only the Done-bit check.** Merge `HardwareProfile` and its helpers into
+  `_evaluate_done_bits` (click/validation/hardware.py). `TagMap.validate()` takes `profile=`, so its signature changes.
+- **Validation passes two forms that the export refuses.** They are a `send()` or `receive()` with `target="plc"`,
+  and `fill(5, txt.select(1, 1))`.
+- **No finding for a character that cp1252 lacks.** Report one in a nickname, comment, unit or initial value before the export.
+- **devtools/ckp_check.py reads nicknames.csv as UTF-8** with `errors="replace"`, and the file is now cp1252.
+- **`_render_modbus_target` picks "send" or "receive" by the class name** (click/ladder/instructions.py). A renamed
+  class would make it say "receive". Use `isinstance`.
+- **The blockcopy-of-one hint gives two fixes that disagree.** For `blockcopy(ds.select(1, 1), ds.select(5, 5))` it
+  prints laddercodec's advice ("Write an end above DS1") and then pyrung's ("Use copy() for one register").
+- **`ladder_to_pyrung()` raises `ValueError` on every XD and YD operand,** such as `copy(DS1,YD5)`, which the export
+  writes. `_OPERAND_PREFIXES` (click/codegen/constants.py) has no XD or YD.
 - **A rung over CLICK's 32 rows can export.** pyrung's Click export counts one row for each CSV row. In CLICK many
   boxes are taller than one row. On 2026-11-18 the export of `plc_stores` wrote a rung of 17 CSV rows, a Fill and
   16 Copies. laddercodec counted 34 rows, and its `encode()` refused the rung. The bob/hw-split branch split that
@@ -486,13 +487,10 @@ All [nothing] unless marked.
   - `on_pyrung_slice`'s edge filter (graph_slice.py:247-254) needs a second fix. It drops the edge from a call
     condition to its call rung, because the call rung writes nothing. The condition would show as a node with no
     edge. Keep that edge, and add the rung to `slice_rungs`, when the rung has `calls`.
-
 - **Two subroutine names that differ only in case.** pyrung accepts "Pump" and "pump" in one program. The export
   writes `subroutines/Pump.csv` and then `subroutines/pump.csv`, and on Windows the second file overwrites the first.
   laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
-  export. CLICK refuses the pair too. ClickNick's runner checked on its CLICK 4.00 on 2026-11-18, in two runs.
-  After "Pump" existed, adding "pump" brought up the same box as adding "Pump" again: "GUI-036 The Program Name
-  already exists. Please choose another name."
+  export. CLICK 4.00 refuses the pair too, with GUI-036 (ClickNick's runner, 2026-11-18).
 - **CLICK import of a Break, Continue or For/Next that CLICK refuses.** CLICK refuses a Break or Continue with no
   contact (C000B, C000C) or outside a For loop (C010F, C0110). It also refuses For/Next nested more than three deep
   (C010D). laddercodec's `check()` will report each of these per program, for Main and for each subroutine.
@@ -555,8 +553,6 @@ All [nothing] unless marked.
 - **A randint whose expression is garbage-collected** while a rung reads its `.tag` is drawn by neither engine.
 - **Loop coverage.** The guarded loop declines a Copy to text through a DS pointer, and a read through `dd[ZERO]`.
 - **reload NB3.** A leg-only edit fires at most once on the reload scan. Put legs into the `_match_sites` identity.
-- **Immediate leftovers.** `calc(expr, immediate(D))` and `search(result=immediate(R))` raise AttributeError at build instead of a clear
-  refusal.
 - **CompiledPLC raises OverflowError** on a huge Dint product outside calc, where the PLC gives 0.0
   (`_primitives.py:564`).
 - **A stuck-bit false positive** on a For over a constant-fed count.

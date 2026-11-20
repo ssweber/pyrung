@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import pyclickplc
+
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.collector import _collect_operands
 from pyrung.click.codegen.emitter import _generate_code
@@ -355,10 +357,13 @@ def ladder_to_pyrung_project(
     )
 
     # Include nickname CSV in output for round-trip support
+    nickname_records = None
     if nickname_csv is not None:
         nick_path = Path(nickname_csv)
         if nick_path.exists():
-            files["nicknames.csv"] = nick_path.read_text(encoding="utf-8")
+            # The returned text has LF lines. The file on disk is what write_csv writes.
+            nickname_records = pyclickplc.read_csv(nick_path)
+            files["nicknames.csv"] = pyclickplc.format_csv(nickname_records).replace("\r\n", "\n")
 
     if output_dir is not None:
         out_dir = Path(output_dir)
@@ -367,6 +372,9 @@ def ladder_to_pyrung_project(
             if not overwrite and rel_path in _SCAFFOLDING_FILES and fpath.exists():
                 continue
             fpath.parent.mkdir(parents=True, exist_ok=True)
-            fpath.write_text(content, encoding="utf-8")
+            if rel_path == "nicknames.csv" and nickname_records is not None:
+                pyclickplc.write_csv(fpath, nickname_records)
+            else:
+                fpath.write_text(content, encoding="utf-8")
 
     return files
