@@ -22,17 +22,19 @@ Specs that later work needs are kept beside this file:
 
 ## After 0.18.0
 
-The plan and Sam set this order. Sam put the undecoded marker first on 2026-11-20.
+The plan and Sam set this order (2026-11-20).
 1. Make `ladder_to_pyrung()` read laddercodec's undecoded marker as a stop that says why. ClickNick's roadmap item 9
    waits on it. This roadmap's item is "The undecoded marker", under "laddercodec and pyclickplc".
 2. Parse operands once, in the builder. The item is below.
-3. The CLICK-match fixes from the 2026-11-10 readings, in section 2.
-4. Console commands for every change, in section 4.
-5. float32 Real stores, the per-PLC definitions table, the history API and `calc()` into a pointer destination, in
+3. Export through laddercodec (plan step 5), under "laddercodec and pyclickplc". It comes after parse-once, because
+   parse-once changes the operand objects that the export hands to laddercodec.
+4. The CLICK-match fixes from the 2026-11-10 readings, in section 2.
+5. Console commands for every change, in section 4.
+6. float32 Real stores, the per-PLC definitions table, the history API and `calc()` into a pointer destination, in
    section 5.
-6. `how()`, after the recording core (section 3). The items are in "how(): after the recording core".
 
-Export through laddercodec comes after the joint release, under "laddercodec and pyclickplc".
+Then `how()`, after the recording core (section 3). The items are in "how(): after the recording core". The extra
+brackets in an exported `math()` stay low priority, outside this order.
 
 - **Parse operands once, in the builder.** Four places each decide which operands are valid: each instruction's
   `execute()`, the compiled kernel's code generator, laddercodec's CLICK rules, and the operand declarations
@@ -390,7 +392,7 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 - **laddercodec as a dependency.** Validation runs on laddercodec 0.5.0. The rest follows the plan's order (Sam,
   2026-11-16). [nothing]
-  - Export through laddercodec (plan step 5), after the joint release. laddercodec 0.5.0 has `csv_rows()`, a public `CSV_HEADER`, and
+  - Export through laddercodec (plan step 5), third under "After 0.18.0". laddercodec 0.5.0 has `csv_rows()`, a public `CSV_HEADER`, and
     `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When pyrung moves to
     `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
     `Program.subroutines` is a dict keyed by name.
@@ -404,10 +406,6 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   "In laddercodec", and Sam, 2026-11-20). [nothing]
   - `ladder_to_pyrung()` raises `ValueError` on an `undecoded(...)` cell today.
   - ClickNick's roadmap item 9 waits on it. The Simulator runs up to the marker, and Check Program lists it.
-- **A blank SD132..SD135 nickname.** A blank nickname on SD132..SD135 stops the workspace build.
-  `tag_map_from_nickname_file` (click/tag_map/_nickname_io.py:213-230) raises `SystemNicknameRepairRequired`, because
-  pyclickplc lists "" as an old name for those four. A blank name is a missing name, so go on, and stop only for an
-  old name that is not blank.
 - **laddercodec's hint for a non-printable `fill()` into TXT.** For `fill('é', txt.select(1, 2))`, pyrung prints
   laddercodec's hint, which says to write the character as its `$hh` code. But `fill('$E9', txt.select(1, 2))` is
   refused with `constant-out-of-range`. It is reported to laddercodec (2026-11-20).
