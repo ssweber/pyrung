@@ -11,9 +11,16 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
-## Unreleased
+## v0.18.0 (2026-11-20)
 
-pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, and installs laddercodec 0.5.0 or later for you. Read Behaviour changes before you upgrade. Most of it is for CLICK export, but `copy()` of a number into a TXT now stores its digits, and some forms are now refused when you build the program. If you pass `CLK_` codes to `allow=`, the table there gives the new codes. Fixes lists the wrong answers that 0.17.0 gave. Most are CLICK exports. The others are the TXT `copy()` above, and results of `run_for()`, `run_until()`, `history.at()`, `fork_from()` and the code.py that differed from `step()`. Export your program again before you paste it into CLICK.
+pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, which is installed for you.
+
+- Export your program again before you paste it into CLICK. 0.17.0 wrote some forms that a CLICK runs differently, and Fixes lists them.
+- Some forms are now refused when you build the program or export it. Behaviour changes says what to write for each.
+- `copy()` of a number into a TXT now stores its digits, as a CLICK does.
+- 30 `CLK_` codes are gone. If you pass them to `allow=`, the table in Behaviour changes gives the new codes.
+- `run_for()`, `run_until()`, `history.at()`, `fork_from()` and the code.py now agree with `step()` for the forms that Fixes lists.
+- The nickname CSV is now cp1252, as CLICK reads it. A character that cp1252 lacks stops the export, and the error names the address.
 
 ### What's new
 
