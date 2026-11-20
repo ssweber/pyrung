@@ -13,7 +13,7 @@
 
 ## Unreleased
 
-pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, and installs it for you. If you export to CLICK, read Behaviour changes before you upgrade. If you pass `CLK_` codes to `allow=`, the table there gives the new codes. Fixes lists the wrong answers that 0.17.0 gave. Four of them are exports that a CLICK ran differently from pyrung. The others are results of `run_for()`, `run_until()`, `history.at()` and the code.py that differed from `step()`, and a number that `copy()` stored in a TXT. Export your program again before you paste it into CLICK.
+pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, and installs laddercodec 0.5.0 or later for you. Read Behaviour changes before you upgrade. Most of it is for CLICK export, but `copy()` of a number into a TXT now stores its digits, and some forms are now refused when you build the program. If you pass `CLK_` codes to `allow=`, the table there gives the new codes. Fixes lists the wrong answers that 0.17.0 gave. Most are CLICK exports. The others are the TXT `copy()` above, and results of `run_for()`, `run_until()`, `history.at()`, `fork_from()` and the code.py that differed from `step()`. Export your program again before you paste it into CLICK.
 
 ### What's new
 
@@ -113,7 +113,7 @@ Validation still reports `CLK_TIMER_PAIR_MISMATCH` for `debounce()`, `flasher()`
 
 - `CLK_PTR_CONTEXT_ONLY_COPY` for a pointer outside `copy()` whose index tag has no CLICK address.
 - `CLK_PTR_DS_UNVERIFIED` for a pointer in `copy()` whose index tag has no CLICK address.
-- `CLK_PTR_POINTER_MUST_BE_DS` for a pointer that is not a DS, in a `copy()` that has a tag with no CLICK address.
+- `CLK_PTR_POINTER_MUST_BE_DS` for a pointer whose index tag is not a DS, in a `copy()` that has a tag with no CLICK address.
 
 #### Forms that CLICK's editor rejects
 
@@ -124,12 +124,15 @@ CLICK validation and the export now refuse these forms. 0.17.0 exported them, an
 - **`copy()`, `blockcopy()`, `fill()`, pack and unpack:**
   - A `blockcopy()` of one register, such as `blockcopy(ds.select(1, 1), ds.select(5, 5))`. Use `copy()`.
   - A `pack_bits()` or `unpack_to_bits()` of one bit, such as `pack_bits(c.select(1, 1), ds[1])`. Use a range of two or more bits.
+  - A `pack_text()` of one TXT, such as `pack_text(txt.select(1, 1), ds[1])`. Use `copy(txt[1], ds[1], convert=to_value)`.
   - A `blockcopy()` of TXT into DF, such as `blockcopy(txt.select(1, 3), df.select(1, 3))`. Copy each TXT into its DF with `copy()`.
   - A `fill()` into TXT of more than one character, such as `fill("AB", txt.select(2, 3))` or `fill(123, txt.select(1, 3))`. CLICK refuses the value, or saves a number in place of the text. Fill one character.
+  - A `fill()` into TXT of a character outside printable ASCII, such as `fill('é', txt.select(1, 2))`. Fill a character from space to `~`.
   - A `copy()` of text into TXT with `convert=to_text()` or `convert=to_binary`, such as `copy("AB", txt[1], convert=to_text())`. Drop the converter.
   - A `copy()` of `True` or `False` into TXT, such as `copy(True, txt[1])`. Copy the text or the number that you want the TXT to hold.
   - A pointer into a bank that CLICK's pointer does not reach, such as `copy(x[ds[1]], c[5])`, `copy(c[1], y[ds[1]])` or `copy(t[ds[1]], c[5])`. Validation reports `pointer-bank-not-allowed`. Point into a bank that CLICK's pointer reaches, such as C or DS.
   - `pack_bits()` of X, Y, T, CT or SC into DS, DD or DF, and `unpack_to_bits()` of DS, DD or DF into Y. Pack into a DH, or unpack from one.
+  - A `pack_words()` of DH into a DF, such as `pack_words(dh.select(1, 2), df[1])`. Pack into a DD.
   - A constant outside its register's range, such as `copy(99999999999, dd[1])`. Use a constant that fits.
   - A text constant copied into a number register, such as `copy("12", ds[1])`. pyrung stores 12, but CLICK's editor refuses the form. Write the number without quotes: `copy(12, ds[1])`.
 - **`search()`:**
@@ -142,8 +145,11 @@ CLICK validation and the export now refuse these forms. 0.17.0 exported them, an
   - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
   - A remote start in SD, such as `send(remote_start="SD1", ...)`. Send to another bank.
   - A `send()` of TXT that starts at an even address, such as `source=txt[2]`. Start at an odd TXT address, such as `txt[1]`.
+  - A `send()` or `receive()` of an odd number of TXT characters, three or more, such as `txt.select(1, 3)`. Pass an even number, such as `txt.select(1, 4)`. A `receive()` of one TXT is refused too, but a `send()` of one TXT still exports.
   - More registers than one request holds, such as `source=ds.select(1, 128)`. Split the transfer.
   - `word_swap=True` for a form that has no word swap, such as one DS register. Drop `word_swap`.
+  - The same bit as two status flags, such as `sending=c[1], success=c[1]`. Give each flag a bit of its own.
+  - A `receive()` into SD, such as `dest=sd[1]`. Receive into a DS.
   - An IP address that is not four numbers from 0 to 255, such as `"999.1.1.1"`. Write a valid address.
 - **`shift()`:**
   - A range in Y, such as `y.select(1, 8)`. Shift over C bits.
@@ -213,7 +219,7 @@ CLICK validation and the export now refuse these forms. 0.17.0 exported them, an
 - `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
 - `out()`, `latch()` and `reset()` over an SC range that CLICK's coils take, such as `sc.select(50, 60)`, now export (the export refused them).
 - `generate_circuitpy()` now writes an `IntEnum` member as its number. `copy(Mode.RUN, ds[1])` writes 1 (it raised `RuntimeError`).
-- `TagMap.from_nickname_file()`, `ladder_to_pyrung(nickname_csv=...)` and `ladder_to_pyrung_project(nickname_csv=...)` now read a nickname CSV that CLICK exported with a character such as `é` or `°` (they raised `ValueError`, "is not UTF-8 text"). `ladder_to_pyrung_project(nickname_csv=...)` also reads a file that `to_nickname_file()` wrote (with pyclickplc 0.11.0 installed, it raised `UnicodeDecodeError`).
+- `TagMap.from_nickname_file()`, `ladder_to_pyrung(nickname_csv=...)` and `ladder_to_pyrung_project(nickname_csv=...)` now read a cp1252 nickname CSV, such as one that CLICK exports with `é` or `°` in it, or one that `to_nickname_file()` writes. With pyclickplc 0.10.0 or older, all three raised `ValueError` ("is not UTF-8 text"). With pyclickplc 0.11.0, `ladder_to_pyrung_project()` raised `UnicodeDecodeError`.
 - `ladder_to_pyrung()` now reads the text of a `copy()`, a `search()` and a comparison as typed. `copy("a""b",TXT1)` imports as `'a""b'` (it imported `'a"b'`), and `copy("a"b",TXT1)` imports as `'a"b'` (it raised `ValueError`).
 
 ## v0.17.0 (2026-11-18)

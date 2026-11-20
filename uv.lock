@@ -7,6 +7,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
+laddercodec = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
 pyclickplc = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
 ty = { timestamp = "0001-01-01T00:00:00Z", span = "PT0S" }
 
@@ -192,8 +193,12 @@ wheels = [
 
 [[package]]
 name = "laddercodec"
-version = "0.4.1.dev137+6bd4778"
-source = { git = "https://github.com/ssweber/laddercodec?branch=main#6bd4778324e194b75262dcf5aa8a293e2ac4bed9" }
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/89/e501a4dc2e7be08a1d393081a72c1101ae62dff51344611855df4823b835/laddercodec-0.5.0.tar.gz", hash = "sha256:56662e4176fa13c40fc89107b795abc2dd6dca6b23d3044b61d7ead72ebba6f3", size = 3189556, upload-time = "2026-11-20T15:20:25.506Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/69/9f8d48d9e29976363ab5b642b6ff5ad9157a23c12dfa2b55840121233b2c/laddercodec-0.5.0-py3-none-any.whl", hash = "sha256:22452a03e717cfde569d77afd4accd4d82430b0805bb94ea97da442735063c3d", size = 383767, upload-time = "2026-11-20T15:20:23.538Z" },
+]
 
 [[package]]
 name = "markdown"
@@ -587,7 +592,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "executing", specifier = ">=2.2.0" },
-    { name = "laddercodec", git = "https://github.com/ssweber/laddercodec?branch=main" },
+    { name = "laddercodec", specifier = ">=0.5.0" },
     { name = "pyclickplc", specifier = ">=0.11.0" },
     { name = "pymodbus", specifier = ">=3.12,<4" },
     { name = "pyrsistent", specifier = ">=0.20.0" },

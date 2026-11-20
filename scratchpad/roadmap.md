@@ -388,9 +388,9 @@ Sam agreed to these on 2026-11-15. The gate fixes are step 0 above.
 
 Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
-- **laddercodec as a dependency.** Validation runs on laddercodec on main. The rest follows the plan's order (Sam,
+- **laddercodec as a dependency.** Validation runs on laddercodec 0.5.0. The rest follows the plan's order (Sam,
   2026-11-16). [nothing]
-  - Export through laddercodec (plan step 5), after the joint release. laddercodec's main has `csv_rows()`, a public `CSV_HEADER`, and
+  - Export through laddercodec (plan step 5), after the joint release. laddercodec 0.5.0 has `csv_rows()`, a public `CSV_HEADER`, and
     `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When pyrung moves to
     `write_bundle()`, delete the `_2` suffix code in click/ladder/types.py. It never fires, because
     `Program.subroutines` is a dict keyed by name.
@@ -400,10 +400,17 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   laddercodec's `csv-format.md` move here.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
-  finding. laddercodec has the marker on its `main`, unreleased. pyrung runs it first after the joint release (plan,
+  finding. laddercodec 0.5.0 has the marker. pyrung runs it first after the joint release (plan,
   "In laddercodec", and Sam, 2026-11-20). [nothing]
   - `ladder_to_pyrung()` raises `ValueError` on an `undecoded(...)` cell today.
   - ClickNick's roadmap item 9 waits on it. The Simulator runs up to the marker, and Check Program lists it.
+- **A blank SD132..SD135 nickname.** A blank nickname on SD132..SD135 stops the workspace build.
+  `tag_map_from_nickname_file` (click/tag_map/_nickname_io.py:213-230) raises `SystemNicknameRepairRequired`, because
+  pyclickplc lists "" as an old name for those four. A blank name is a missing name, so go on, and stop only for an
+  old name that is not blank.
+- **laddercodec's hint for a non-printable `fill()` into TXT.** For `fill('é', txt.select(1, 2))`, pyrung prints
+  laddercodec's hint, which says to write the character as its `$hh` code. But `fill('$E9', txt.select(1, 2))` is
+  refused with `constant-out-of-range`. It is reported to laddercodec (2026-11-20).
 - **A TXT initial value with edge spaces.** clicknick imported nickname files into CLICK and read the result
   (`clicknick-wt/buildbot/jobs/csv-import/RESULTS.md:102-106`). CLICK keeps a quoted value as written, so `" a "`
   stays ` a `. CLICK trims the whitespace (space, tab, VT and FF) at both ends of a bare value, so ` a` becomes `a`,
@@ -416,6 +423,9 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **A padded TCP address.** `ModbusTcpTarget` keeps a padded IP such as `010.002.003.004` as typed, in the CSV, the
+  import, the runtime and the CircuitPython host. A CLICK and laddercodec 0.5.0 read it as `10.2.3.4`. On Windows
+  `getaddrinfo` fails on it, and `inet_aton` reads `010` as octal 8. Normalise the address in `ModbusTcpTarget`.
 - **Some accepted forms never write anything.** Under Sam's fault-only ruling (2026-11-19), a form that raises or
   only sets a fault flag on every data is refused at build. bob/build-refusals left these forms accepted, and they
   still write nothing. Before a refusal, the builder of that change runs each form over several input values and
@@ -447,6 +457,12 @@ All [nothing] unless marked.
 - **An aggregate outside `math()` gets one finding only.** A `.sum()` in a `copy()` source or a compare is reported as
   `CLK_EXPR_ONLY_IN_MATH`, and the range check does not run on it. The export still refuses a scattered range there,
   so nothing exports wrong. The Math family branch did not change it.
+- **Extra brackets in an exported `math()`.** The export brackets every operation inside a `math()` formula, whatever its
+  precedence (click/ladder/translator.py, the `BinaryExpr` branch of `_render_expression`, lines 718-731). CLICK's `SD20 * 10000 + SD21 * 100 + SD22`
+  comes back as `( ( SD20 * 10000 ) + ( SD21 * 100 ) ) + SD22`. So ClickNick shows an unedited Math rung as changed, a
+  paste writes the extra brackets into CLICK, and a long sum passes CLICK's formula length limit (OBJ-1008) sooner.
+  Bracket an operand only when its precedence is lower than its parent's, or equal on the right of `-`, `/`, `MOD` or
+  `^`, and keep the `( -5 )` sign rule. Check that rule against how CLICK reads a formula back first.
 - **Dead compare tables in `click/capabilities.py`.** Only a test reads `COMPARE_COMPATIBILITY`,
   `COMPARE_CONSTANT_COMPATIBILITY`, `compare_compatible()` and `compare_constant_compatible()`.
 - **The CLICK profile layer serves only the Done-bit check.** Merge `HardwareProfile` and its helpers into
