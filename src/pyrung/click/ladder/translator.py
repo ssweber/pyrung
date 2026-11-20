@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard
 
+from laddercodec import Code
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import HEX_CONSTANT_BANKS
@@ -33,7 +34,6 @@ from pyrung.click.validation.findings import (
     range_aggregate_problem,
     range_not_consecutive_text,
 )
-from pyrung.click.validation.legacy.math import CLK_MATH_WIDE_CONSTANT
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -215,8 +215,9 @@ class _TranslatorMixin:
         wide_code = (
             ""
             if mode == "exact"
-            else f"{CLK_MATH_WIDE_CONSTANT if mode == 'math' else CLK_COPY_WIDE_CONSTANT}: "
+            else f"{Code.MATH_CONSTANT_OUT_OF_RANGE if mode == 'math' else CLK_COPY_WIDE_CONSTANT}: "
         )
+        fraction_code = f"{Code.MATH_CONSTANT_KIND}: " if mode == "math" else wide_code
         if mode == "copy" and isinstance(value, float) and not value.is_integer():
             # A CLICK was read storing 1.5 as 1 and -1.5 as FFFFh in a Word.  No one has
             # read a CLICK store a fraction outside 16 bits, so the export refuses one.
@@ -237,7 +238,7 @@ class _TranslatorMixin:
                     self._raise_issue(
                         path=path,
                         message=(
-                            f"{wide_code}Constant {value!r} is not an integer; CLICK hex constants "
+                            f"{fraction_code}Constant {value!r} is not an integer; CLICK hex constants "
                             "are whole 16-bit values (0h..FFFFh)."
                         ),
                         source=source,
@@ -268,9 +269,9 @@ class _TranslatorMixin:
                 self._raise_issue(
                     path=path,
                     message=(
-                        f"Constant {value} is written {text} in a hex Math, and CLICK reads "
-                        "the digits before the E as a real number. Copy the value into a DH, "
-                        "and use that DH in the formula."
+                        f"{Code.MATH_INVALID_TOKEN}: Constant {value} is written {text} in a hex "
+                        "Math, and CLICK reads the digits before the E as a real number. Copy "
+                        "the value into a DH, and use that DH in the formula."
                     ),
                     source=source,
                 )
@@ -670,6 +671,9 @@ class _TranslatorMixin:
             return self._resolve_tag(expression.tag, path=path, source=source)
         if isinstance(expression, LiteralExpr):
             if isinstance(expression.value, bool):
+                if self._hex_constant_mode == "math":
+                    # A hex Math refuses a bare digit, so True is written as 1h.
+                    return self._render_number(int(expression.value), path=path, source=source)
                 return _bool_bit(expression.value)
             if isinstance(expression.value, (int, float)):
                 return self._render_number(expression.value, path=path, source=source)

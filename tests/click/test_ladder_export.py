@@ -924,8 +924,8 @@ def test_calc_hex_token_uses_inferred_hex_mode():
 
 def test_calc_exports_wide_constants_as_written_once_allowed():
     # pyrung runs the 3000000000 as its low 32 bits, as a pasted one ran on a CLICK.
-    # Validation refuses it ("CLK_MATH_WIDE_CONSTANT"), because CLICK's editor does. Once you
-    # allow "CLK_MATH_WIDE_CONSTANT", the export writes the formula as written.
+    # Validation refuses it ("math-constant-out-of-range"), because CLICK's editor does. Once
+    # you allow the code, the export writes the formula as written.
     from pyrung.click.ladder import LadderExportError
 
     logic, mapping = build_program(
@@ -935,9 +935,9 @@ def test_calc_exports_wide_constants_as_written_once_allowed():
                 math(DD1 / 3000000000, DS1)
         """
     )
-    with pytest.raises(LadderExportError, match="CLK_MATH_WIDE_CONSTANT"):
+    with pytest.raises(LadderExportError, match="math-constant-out-of-range"):
         pyrung_to_ladder(logic, mapping)
-    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_MATH_WIDE_CONSTANT",))
+    bundle = pyrung_to_ladder(logic, mapping, allow=("math-constant-out-of-range",))
     assert normalize_csv(bundle.main_rows) == _literal_csv_rows(
         """
         R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DD1 / 3000000000,DS1,mode=decimal)
@@ -1065,7 +1065,7 @@ def test_calc_math_func_names_use_click_convention():
         )
 
 
-def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
+def test_mixed_family_calc_fails_precheck_with_math_operand_bank():
     Enable = Bool("Enable")
     A = Int("A")
     H = Block("H", TagType.WORD, 1, 1)
@@ -1090,16 +1090,19 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
 
     assert list(exc_info.value.issues) == [
         {
-            "path": "main.rung[1].instruction[0](CalcInstruction).instruction.expression",
+            "path": "main.rung[1].instruction[0](CalcInstruction).instruction",
             "message": (
-                "[CLK_MATH_MODE_MIXED] error\n"
-                "  math() at "
-                "main.rung[1].instruction[0](CalcInstruction).instruction.expression mixes "
-                "WORD operands with other operands. CLICK runs a Math in hex or in decimal, "
-                "not both.\n"
-                " --> main.rung[1].instruction[0](CalcInstruction).instruction.expression\n"
-                "  = hint: Split it into a math() of WORD tags and a math() of the other "
-                "tags. Pass the result from one to the other through a tag."
+                "[math-operand-bank] error\n"
+                " --> Main:R1\n"
+                "  |\n"
+                "  |  math((A + H1), Dest)\n"
+                "  |       ^^^^^^^^ DH1 is refused\n"
+                "  |\n"
+                "  = hint: A decimal Math takes only DS, DD, DF, TD, CTD and SD registers and "
+                "decimal constants, and X, Y, C, T and SC bits only as the range of "
+                "SUM ( a : b ). Split it into a math() of WORD tags and a math() of the other "
+                "tags. Pass the result from one to the other through a tag. CLICK's error is "
+                "OBJ-1002."
             ),
             "source_file": None,
             "source_line": None,

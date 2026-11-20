@@ -53,7 +53,7 @@ An expectation is what pyrung reads where no CLICK reading backs it.
   (Result4 = 0: SC43 and SC46 after the Math are bits 1 and 2, SC43 after the
   Copies bits 4 and 8).  A Math of NaN or an infinity into a Word, and a Math
   of an infinity into one, are not probed: CLICK's Math takes Word operands in
-  hex mode only, which a Real cannot enter ("CLK_MATH_MODE_MIXED").
+  hex mode only, which a Real cannot enter ("math-operand-bank").
 - ``real_into_text_and_fill`` (probe): a finite Real copied into a TXT as it is,
   66.7 over a seeded ``Z``, writes its digits, as ``to_text()`` does: the first
   character's code is 54 ('6', Result1; the number kept would read 0) and a

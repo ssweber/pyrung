@@ -384,10 +384,13 @@ for finding in (*report.errors, *report.warnings, *report.hints):
 Each finding prints like this:
 
 ```text
-[CLK_MATH_MODE_MIXED] hint
-  math() at main.rung[1].instruction[0](CalcInstruction).instruction.expression mixes WORD operands with other operands. CLICK runs a Math in hex or in decimal, not both.
- --> main.rung[1].instruction[0](CalcInstruction).instruction.expression
-  = hint: Split it into a math() of WORD tags and a math() of the other tags. Pass the result from one to the other through a tag.
+[math-operand-bank] hint
+ --> Main:R1
+  |
+  |  math((Count + Mask), Total)
+  |       ^^^^^^^^^^^^^^ DH1 is refused
+  |
+  = hint: A decimal Math takes only DS, DD, DF, TD, CTD and SD registers and decimal constants, and X, Y, C, T and SC bits only as the range of SUM ( a : b ). Split it into a math() of WORD tags and a math() of the other tags. Pass the result from one to the other through a tag. CLICK's error is OBJ-1002.
 ```
 
 Common findings:
@@ -397,9 +400,9 @@ Common findings:
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
 | `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Y, C or an SC bit that CLICK writes. `out`, `latch` and `reset` all take the same SC bits. A range that spans read-only SC bits passes as typed (`bank-not-allowed`, `not-writable`). Clear a register with `copy()` or `fill()` |
-| Whole-number constant in `math()` | Any. Hex mode cuts it to 16 bits, as a CLICK does | −2147483648..2147483647, and 0..65535 in hex mode (`CLK_MATH_WIDE_CONSTANT`). In hex mode the export writes −32768..−1 as its 16 bits. It rejects any other hex constant, even when allowed |
+| Whole-number constant in `math()` | Any. Hex mode cuts it to 16 bits, as a CLICK does | −2147483648..2147483647, and 0..65535 in hex mode (`math-constant-out-of-range`). In hex mode the export writes −32768..−1 as its 16 bits. It rejects any other hex constant, even when allowed |
 | Constant in `copy()` or `fill()` into a `Word` | Any | 0..65535 into DH, XD or YD (`CLK_COPY_WIDE_CONSTANT`). The export writes −32768..−1 as its 16 bits. A `copy()` may have a fraction, and a CLICK drops it (`copy(1.5, DH1)` stores 1). A `fill()` of several registers must be a whole number. The export rejects any other constant, even with `allow=` |
-| A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK. In pyrung it is 0, because the `sc` block does not follow the system points |
+| A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`math-operand-bank`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK. In pyrung it is 0, because the `sc` block does not follow the system points |
 | Compare of a `Word` mapped to `DH`, `XD` or `YD` with a `DS`, `DD`, `DF`, `TD`, `CTD` or `SD` tag | Compares the values | Both sides hex, or a hex tag against a constant. Copy the `Word` into a `DS` tag first (`compare-mixed-types`, OBJ-007) |
 | Compare of text with a number (`txt[1] == 5`, `ds[1] == "A"`, `txt[1] == ds[1]`) | Runs the compare | Text on both sides, or a number on both sides (`compare-mixed-types`, OBJ-007). To compare a character's code, copy it into an `Int` with `convert=to_ascii` first |
 | Compare of a bit with `True` or `False` (`c[1] == True`) | Runs the compare | A contact. Write `c[1]` or `~c[1]` (`bank-not-allowed`) |

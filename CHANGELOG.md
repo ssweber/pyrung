@@ -36,7 +36,7 @@
   Pass a tag, a pointer, a finite number or text in its place.
 - A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
   If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
-- The CLICK export now refuses a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`).
+- CLICK validation and the export now refuse a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`). Validation reports `math-invalid-token`.
   Copy the value into a DH and use that DH in the formula.
 - CLICK validation of these calls now reports new codes for what CLICK refuses, in place of the old ones. Old -> new:
   - `copy()`, `blockcopy()`, `fill()` and the pack and unpack calls:
@@ -84,8 +84,21 @@
     - `CLK_TEXT_ORDER_COMPARE` -> `text-order-compare`.
     - `CLK_COMPARE_HEX_MIX` -> `compare-mixed-types`.
     - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`, for a pointer in a comparison.
+  - `math()` and `randint()`:
+    - `CLK_MATH_BIT_OPERAND` or `CLK_MATH_BIT_RANGE_AGGREGATE` -> `math-operand-bank`, for a bit outside `.sum()`.
+    - `CLK_MATH_MODE_MIXED` -> `math-operand-bank` for a `Word` tag in a formula with other tags, or `bank-not-allowed` for a DH or YD destination of a formula without `Word` tags.
+    - `CLK_MATH_DEST_BANK` -> `bank-not-allowed`.
+    - `CLK_BANK_NOT_WRITABLE` -> `not-writable`, for a destination in a read-only SD.
+    - `CLK_MATH_FUNC_MODE_MISMATCH` -> `math-function-mode`.
+    - `CLK_MATH_NESTING_DEPTH` -> `math-nesting-depth`.
+    - `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` -> `median-range-too-large`.
+    - `CLK_MATH_SUM_BANK_NOT_AVAILABLE` -> `sum-bank-unavailable`.
+    - `CLK_MATH_ARG_NOT_PLAIN` -> `math-arg-expression`.
+    - `CLK_MATH_WIDE_CONSTANT` -> `math-constant-out-of-range`, or `math-constant-kind` for a fraction in a hex Math.
+    - `CLK_RAND_BOUND_TYPE` -> `random-bound-type`.
+    - `CLK_RAND_EQUAL_BOUNDS` -> `random-equal-bounds`.
 
-  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that validation never reports, and names the codes that replace a removed one. `CLK_BANK_NOT_WRITABLE` still reports a `math()` result in a bank that CLICK cannot write. No call reports `CLK_BANK_WRONG_ROLE` now. For the calls above, `allow=["CLK_BANK_NOT_WRITABLE"]` and `allow=["CLK_BANK_WRONG_ROLE"]` are still accepted but no longer let the finding through. The same holds for `allow=["CLK_PTR_CONTEXT_ONLY_COPY"]` and `allow=["CLK_PTR_POINTER_MUST_BE_DS"]`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets the finding through for `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
+  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that validation never reports, and names the codes that replace a removed one. No call reports `CLK_BANK_NOT_WRITABLE` or `CLK_BANK_WRONG_ROLE` now. For the calls above, `allow=["CLK_BANK_NOT_WRITABLE"]` and `allow=["CLK_BANK_WRONG_ROLE"]` are still accepted but no longer let the finding through. The same holds for `allow=["CLK_PTR_CONTEXT_ONLY_COPY"]` and `allow=["CLK_PTR_POINTER_MUST_BE_DS"]`. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets the finding through for `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
 - CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
 - The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
@@ -126,8 +139,7 @@
   - An event that is not a single bit, such as `~C5`, `rise(C5)` or `Or(C5, C6)`. Copy the condition into a C bit, and use that bit as the event.
   - An output that is also the completion flag, such as `outputs=[y[1], c[9]], completion_flag=c[9]`. Use a different bit for the flag.
 - `pyrung.click.validation` no longer exports 28 `CLK_` constants. An import of one raises `ImportError`.
-  - The checks of these 16 are gone, so use the new code from the list above: `CLK_COPY_BANK_INCOMPATIBLE`, `CLK_COPY_CONSTANT_INTO_BIT`, `CLK_COPY_CONVERTER_INCOMPATIBLE`, `CLK_PACK_TEXT_BANK_INCOMPATIBLE`, `CLK_FORLOOP_COUNT_BANK`, `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS`, `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`, `CLK_OUT_UNIT_UNSUPPORTED`, `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`, `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`, `CLK_TIMER_PRESET_OVERFLOW`, `CLK_TIMER_PRESET_TOO_LOW`, `CLK_TEXT_ORDER_COMPARE`, `CLK_COMPARE_HEX_MIX` and `CLK_IMMEDIATE_CONTACT_MUST_BE_X`.
-  - Validation still reports these 12 codes of `math()` and `rand()`. Pass one as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`. The codes are `CLK_MATH_MODE_MIXED`, `CLK_MATH_FUNC_MODE_MISMATCH`, `CLK_MATH_NESTING_DEPTH`, `CLK_MATH_MEDIAN_RANGE_TOO_LARGE`, `CLK_MATH_BIT_RANGE_AGGREGATE`, `CLK_MATH_SUM_BANK_NOT_AVAILABLE`, `CLK_MATH_BIT_OPERAND`, `CLK_MATH_DEST_BANK`, `CLK_MATH_ARG_NOT_PLAIN`, `CLK_MATH_WIDE_CONSTANT`, `CLK_RAND_BOUND_TYPE` and `CLK_RAND_EQUAL_BOUNDS`.
+  - The checks of these 28 are gone, so use the new code from the list above: `CLK_COPY_BANK_INCOMPATIBLE`, `CLK_COPY_CONSTANT_INTO_BIT`, `CLK_COPY_CONVERTER_INCOMPATIBLE`, `CLK_PACK_TEXT_BANK_INCOMPATIBLE`, `CLK_FORLOOP_COUNT_BANK`, `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS`, `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`, `CLK_OUT_UNIT_UNSUPPORTED`, `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`, `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`, `CLK_TIMER_PRESET_OVERFLOW`, `CLK_TIMER_PRESET_TOO_LOW`, `CLK_TEXT_ORDER_COMPARE`, `CLK_COMPARE_HEX_MIX`, `CLK_IMMEDIATE_CONTACT_MUST_BE_X`, `CLK_MATH_MODE_MIXED`, `CLK_MATH_FUNC_MODE_MISMATCH`, `CLK_MATH_NESTING_DEPTH`, `CLK_MATH_MEDIAN_RANGE_TOO_LARGE`, `CLK_MATH_BIT_RANGE_AGGREGATE`, `CLK_MATH_SUM_BANK_NOT_AVAILABLE`, `CLK_MATH_BIT_OPERAND`, `CLK_MATH_DEST_BANK`, `CLK_MATH_ARG_NOT_PLAIN`, `CLK_MATH_WIDE_CONSTANT`, `CLK_RAND_BOUND_TYPE` and `CLK_RAND_EQUAL_BOUNDS`.
 - CLICK validation and the export now refuse these contact and comparison forms, which CLICK's editor rejects (they exported them):
   - A comparison of a bit, such as `c[1] == True`, `c[1] == 1` or `c[1] == c[2]`. Use a contact, such as `c[1]` or `~c[1]`.
   - An edge contact on a register, such as `rise(ds[1])`. Use a bit.
@@ -148,6 +160,13 @@
   Map the tags to consecutive addresses. Drop `.reverse()`.
 - CLICK validation and the export now refuse a coil range of one address, such as `out(c.select(1, 1))`, which CLICK's editor rejects (they exported it).
   Write `out(c[1])`.
+- CLICK validation and the export now refuse these `math()` forms, which CLICK's editor rejects (they exported them):
+  - A TXT tag in the formula, such as `math(txt[5], ds[1])` or `math(txt.select(1, 8).max(), ds[1])`. Copy the text into a number register first.
+  - One tag as both bounds of `randint()`, such as `randint(ds[1], ds[1])`. Use two different bounds.
+  - A formula longer than CLICK's Math stores (`math-formula-too-long`). Split it into `math()` steps that store each part in a tag.
+  - A text constant in the formula, such as `math('A' + ds[1], ds[2])`. Write the number, such as 65 for `'A'`.
+- CLICK validation now reports `CLK_BANK_UNRESOLVED` for a `math()` tag with no CLICK address. 0.17.0 exported an element or a `.sum()` of an unmapped block by its tag names, such as `Bk2 + 1`. CLICK cannot load that.
+  Map the tag to a CLICK address.
 
 ### Fixes
 

@@ -126,19 +126,18 @@ def test_a_bit_in_a_math_formula_is_refused(build, bank):
         with rung(x[1]):
             math(build(bank), ds[100])
 
-    (finding,) = _found(body, "CLK_MATH_BIT_OPERAND")
-    assert "reads the bit" in finding.message or "reads the bits" in finding.message
-    assert bank.name in finding.message
-    assert "except in a SUM over a bit range" in finding.message
+    (finding,) = _found(body, Code.MATH_OPERAND_BANK)
+    assert f"{bank.name}" in finding.message
+    assert "bits only as the range of SUM ( a : b )" in finding.message
     if bank is ct:
         assert "select(1, 1)" not in finding.suggestion
         # SUM over CT is a finding of its own, in the formula that has a bit sum.
-        allowed = ("CLK_MATH_SUM_BANK_NOT_AVAILABLE",)
+        allowed = (Code.SUM_BANK_UNAVAILABLE,)
     else:
         assert "select(1, 1).sum()" in finding.suggestion
         assert "0 in pyrung" in finding.suggestion
         allowed = ()
-    _export_refuses(body, "CLK_MATH_BIT_OPERAND", allowed=allowed)
+    _export_refuses(body, Code.MATH_OPERAND_BANK, allowed=allowed)
 
 
 def test_each_bit_is_named_once():
@@ -146,8 +145,11 @@ def test_each_bit_is_named_once():
         with rung(x[1]):
             math(c[1] + c[2] * c[1], ds[100])
 
-    (finding,) = _found(body, "CLK_MATH_BIT_OPERAND")
-    assert "reads the bits C1, C2;" in finding.message
+    findings = _found(body, Code.MATH_OPERAND_BANK)
+    assert [f.display.frames[0].caret_label for f in findings] == [
+        "C1 is refused",
+        "C2 is refused",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -174,7 +176,7 @@ def test_a_formula_without_a_bit_operand_passes(build, dest):
         with rung(x[1]):
             math(build(), dest)
 
-    assert _found(body, "CLK_MATH_BIT_OPERAND") == []
+    assert _found(body, Code.MATH_OPERAND_BANK) == []
 
 
 def test_a_one_bit_sum_exports_as_a_range_of_one_bit():
@@ -191,7 +193,7 @@ def test_a_bit_rand_bound_is_the_rand_finding_only():
         with rung(x[1]):
             math(randint(c[1], 9), ds[100])
 
-    assert _found(body, "CLK_MATH_BIT_OPERAND") == []
+    assert _found(body, Code.MATH_OPERAND_BANK) == []
 
 
 # --- The Math Result ----------------------------------------------------------------
@@ -207,14 +209,10 @@ def test_a_math_result_outside_the_dialogs_banks_is_refused(dest):
         with rung(x[2]):
             math(ds[1] + 1, dest)
 
-    (finding,) = _found(body, "CLK_MATH_DEST_BANK")
-    bank = dest.name.rstrip("0123456789")
-    assert f"math() into {bank} at" in finding.message
-    assert "Result in DS, DD, DF, TD, CTD or SD, or DH or YD in a hex Math" in finding.message
-    # X, T, CT and XD are also not writable, and XD makes a mixed-mode Math.
-    report = validate_click_program(_program(body), TagMap(), mode="strict")
-    others = tuple({f.code for f in report.errors} - {"CLK_MATH_DEST_BANK"})
-    _export_refuses(body, "CLK_MATH_DEST_BANK", allowed=others)
+    (finding,) = _found(body, Code.BANK_NOT_ALLOWED)
+    assert f"{dest.name} is not allowed" in finding.message
+    assert "This field takes DS, DD, DF, TD, CTD, SD." in finding.display.hint
+    _export_refuses(body, Code.BANK_NOT_ALLOWED)
 
 
 def test_a_math_result_in_each_bank_the_dialog_takes_passes():
@@ -227,21 +225,19 @@ def test_a_math_result_in_each_bank_the_dialog_takes_passes():
             math(ds[1] + 1, ctd[2])
             math(dh[1] + 1, dh[2])
 
-    assert _found(body, "CLK_MATH_DEST_BANK") == []
+    assert _found(body, Code.BANK_NOT_ALLOWED) == []
 
 
 def test_a_decimal_math_into_dh_is_refused_as_a_mixed_math():
-    # The dialog refuses a decimal Math into DH (2026-11-06).  A Word destination makes the
-    # Math decimal only through a non-Word operand, which "CLK_MATH_MODE_MIXED" flags, so the
-    # destination check has nothing of its own to add.
+    # The dialog refuses a decimal Math into DH (2026-11-06).  A non-Word operand makes the
+    # Math decimal, and a decimal Math takes no DH result.
     def body():
         with rung(x[1]):
             math(ds[1] + 1, dh[3])
 
-    assert _found(body, "CLK_MATH_DEST_BANK") == []
-    (finding,) = _found(body, "CLK_MATH_MODE_MIXED")
-    assert "mixes WORD" in finding.message
-    _export_refuses(body, "CLK_MATH_MODE_MIXED")
+    (finding,) = _found(body, Code.BANK_NOT_ALLOWED)
+    assert finding.display.frames[0].caret_label == "DH3 is not allowed"
+    _export_refuses(body, Code.BANK_NOT_ALLOWED)
 
 
 # --- Search banks -------------------------------------------------------------------

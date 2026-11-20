@@ -209,7 +209,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         return node
     if isinstance(value, RandIntExpr):
         # A bound keeps its ops, and only its constants are cut.  CLICK's editor takes
-        # no formula as a bound (CLK_MATH_ARG_NOT_PLAIN).
+        # no formula as a bound (math-arg-expression).
         form = replace(form, calc_ops=False)
         lo = _rebuild(value.lo, form)
         hi = _rebuild(value.hi, form)
@@ -372,6 +372,7 @@ class CalcInstruction(OneShotMixin, Instruction):
         ),
     }
     _operand_rules = (NumberInto(value="source_expression", dest="dest", text=True),)
+    _call_operands = (("expression", "source_expression"), ("dest", "dest"))
 
     def __init__(
         self,
