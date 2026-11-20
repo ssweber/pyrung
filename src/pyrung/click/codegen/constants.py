@@ -86,8 +86,35 @@ def _ascending_range_str(range_str: str) -> str:
 # Matches a function-call token like out(Y001) or on_delay(T1,TD1,preset=100,unit=Tms)
 _FUNC_RE = re.compile(r"^(\~?)(\w+)\((.*)?\)$")
 
-# Matches a comparison condition like DS1==5 or DS1!=DS2
-_COMPARE_RE = re.compile(r"^(.+?)(==|!=|<=|>=|<|>)(.+)$")
+_COMPARE_OPERATOR_RE = re.compile(r"==|!=|<=|>=|<|>")
+
+
+def _split_compare(token: str) -> tuple[str, str, str] | None:
+    """Split a comparison like ``DS1==5`` or ``"x<y"=="B"`` at its first operator.
+
+    An operator inside a quoted text, where ``""`` is one quote, is a character of the text.
+    Return the left side, the operator and the right side, or None for a token with no
+    operator.
+    """
+    index = 0
+    while index < len(token):
+        if token[index] == '"':
+            index += 1
+            while index < len(token):
+                if token[index] == '"':
+                    if token.startswith('""', index):
+                        index += 2
+                        continue
+                    break
+                index += 1
+            index += 1
+            continue
+        match = _COMPARE_OPERATOR_RE.match(token, index)
+        if match is not None and index > 0 and match.end() < len(token):
+            return token[:index], match.group(), token[match.end() :]
+        index += 1
+    return None
+
 
 # Matches a pin row like .reset() or .jump(5)
 _PIN_RE = re.compile(r"^\.(\w+)\((.*)\)$")

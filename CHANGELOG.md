@@ -102,7 +102,6 @@
   - A value that does not suit the range, such as `ds.select(1, 10) == dh[30]`. The `search()` docs list the values that each range takes.
   - `>`, `>=`, `<` or `<=` on a TXT range. Use `==` or `!=`.
   - A range of one address, such as `ds.select(5, 5)`. Search two or more addresses.
-  - A quote inside the text, such as `'sub"name'`. Write the text without it.
   - A constant outside its range, such as `2147483648` or text of more than 128 characters. Use a constant that fits.
 - CLICK validation and the export now refuse these `send()` and `receive()` forms, which CLICK's editor rejects (they exported them):
   - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
@@ -123,10 +122,12 @@
 - `pyrung.click.validation` no longer exports 28 `CLK_` constants. An import of one raises `ImportError`.
   - The checks of these 13 are gone, so use the new code from the list above: `CLK_COPY_BANK_INCOMPATIBLE`, `CLK_COPY_CONSTANT_INTO_BIT`, `CLK_COPY_CONVERTER_INCOMPATIBLE`, `CLK_PACK_TEXT_BANK_INCOMPATIBLE`, `CLK_FORLOOP_COUNT_BANK`, `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS`, `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`, `CLK_OUT_UNIT_UNSUPPORTED`, `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`, `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`, `CLK_TIMER_PRESET_OVERFLOW` and `CLK_TIMER_PRESET_TOO_LOW`.
   - Validation still reports these 15 codes of `math()`, `rand()` and contacts. Pass one as a string, such as `allow=["CLK_MATH_MODE_MIXED"]`. The codes are `CLK_MATH_MODE_MIXED`, `CLK_MATH_FUNC_MODE_MISMATCH`, `CLK_MATH_NESTING_DEPTH`, `CLK_MATH_MEDIAN_RANGE_TOO_LARGE`, `CLK_MATH_BIT_RANGE_AGGREGATE`, `CLK_MATH_SUM_BANK_NOT_AVAILABLE`, `CLK_MATH_BIT_OPERAND`, `CLK_MATH_DEST_BANK`, `CLK_MATH_ARG_NOT_PLAIN`, `CLK_MATH_WIDE_CONSTANT`, `CLK_RAND_BOUND_TYPE`, `CLK_RAND_EQUAL_BOUNDS`, `CLK_TEXT_ORDER_COMPARE`, `CLK_COMPARE_HEX_MIX` and `CLK_IMMEDIATE_CONTACT_MUST_BE_X`.
-- The CLICK export now refuses a text constant that holds a quote among other characters in a comparison, `fill()` or `search()`, such as `txt[1] == 'a"b'` (it wrote `"a""b"`).
+- The CLICK export now refuses a `fill()` text that holds a quote among other characters, such as `fill('a"b', txt.select(1, 4))` (it wrote `"a""b"`).
   Write the text without the quote.
-- Validation and the CLICK export now refuse a `copy()` text that the CSV can't read back (`invalid-text-constant`), such as `'a",b'`, where a quote before a comma ends the text early (it wrote `"a"",b"`).
-  Write the text without the quote.
+- CLICK validation and the export now refuse a comparison of text with a number, such as `txt[1] == 5`, `ds[1] == 'A'` or `txt[1] == ds[1]`. CLICK's editor refuses it with OBJ-007 (0.17.0 exported it). Validation reports `compare-mixed-types`.
+  Compare text with text. To compare a character's code, copy the character into an Int with `convert=to_ascii` and compare that.
+- Warn mode now reports `CLK_COPY_WIDE_CONSTANT`, `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS` as warnings (they were hints). The export refuses these faults even when you allow the code.
+  If a test counts the hints of a warn-mode report, count its warnings as well.
 - CLICK validation and the export now refuse these timer and counter forms, which CLICK's editor rejects (they exported them):
   - A negative constant preset on `on_delay()` or `off_delay()`, such as `preset=-1`. Use a preset of 0 or more.
   - A constant preset on `count_up()` or `count_down()` that does not fit 32 bits, such as `preset=2**40`. Use a preset from -2147483648 to 2147483647.
@@ -149,8 +150,8 @@
 - `generate_circuitpy()` now writes an `IntEnum` member as its number. `copy(Mode.RUN, ds[1])` writes 1 (it raised `RuntimeError`).
 - `run_for()`, `history.at()` and the generated code.py now run a pack, an unpack or a `blockcopy()` with a pointer outside its bank the same way `step()` does. They set the address-error flag only when `step()` sets it (the code.py could raise `ValueError`, and `run_for()` could set the flag when `step()` did not).
 - The CLICK export now writes a text constant of one quote, such as `copy('"', txt[1])`, as the ASCII code `$22` (it wrote `""""`).
-- `copy()` of a text that holds a quote among other characters now writes that text on a CLICK, as typed. `copy('a"b', txt[1])` exports as `copy("a"b",TXT1)` (it exported `copy("a""b",TXT1)`, and a CLICK wrote `a""b`).
-- `ladder_to_pyrung()` now reads a `copy()` text as typed, as a CLICK does. `copy("a""b",TXT1)` imports as `'a""b'` (it imported `'a"b'`), and `copy("a"b",TXT1)` imports as `'a"b'` (it raised `ValueError`).
+- `copy()`, `search()` and a comparison now write a text that holds a quote as typed. CLICK's editor accepts a quote in the text of all three. `copy('a"b', txt[1])` exports as `copy("a"b",TXT1)`, and `txt[1] == 'a"b'` exports as `TXT1=="a"b"` (they exported `"a""b"`).
+- `ladder_to_pyrung()` now reads the text of a `copy()`, a `search()` and a comparison as typed. `copy("a""b",TXT1)` imports as `'a""b'` (it imported `'a"b'`), and `copy("a"b",TXT1)` imports as `'a"b'` (it raised `ValueError`).
 
 ## v0.17.0 (2026-11-18)
 

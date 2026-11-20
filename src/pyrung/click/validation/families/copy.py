@@ -280,6 +280,26 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     raise Unbuildable
 
 
+def _export_ignores_allow(code: str, instruction: Any) -> bool:
+    """Return True if the export refuses the fault of *code* even when the code is allowed.
+
+    The export refuses a Fill of text with a quote among other characters, and a Fill of
+    one register with text of several characters. It has no form of either to write.
+    """
+    if type(instruction).__name__ != "FillInstruction" or not isinstance(instruction.value, str):
+        return False
+    value = instruction.value
+    if code == "invalid-text-constant":
+        return '"' in value and value != '"'
+    one_register = single_register_fill_dest(instruction.dest)
+    return (
+        code == "constant-out-of-range"
+        and one_register is not None
+        and one_register.type == TagType.CHAR
+        and len(value) > 1
+    )
+
+
 FAMILY = Family(
     name="copy",
     classes=_CLASSES,
@@ -287,6 +307,7 @@ FAMILY = Family(
     arguments=_FIELD_ARGUMENTS,
     advice=_advice,
     ranges=_RANGE_FIELDS,
+    export_ignores_allow=_export_ignores_allow,
     replaced_codes={
         "CLK_COPY_BANK_INCOMPATIBLE": "copy-bank-incompatible or bank-not-allowed",
         "CLK_COPY_CONVERTER_INCOMPATIBLE": (

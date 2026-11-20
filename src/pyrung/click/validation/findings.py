@@ -176,12 +176,26 @@ class ClickValidationReport:
         return ", ".join(parts) + "."
 
 
+_REFUSED_WHEN_ALLOWED = frozenset(
+    {
+        CLK_PROFILE_UNAVAILABLE,
+        CLK_NOP_NO_COIL,
+        "text-past-bank",
+        CLK_COPY_RANGE_NOT_CONSECUTIVE,
+        CLK_MATH_RANGE_NOT_CONTIGUOUS,
+        CLK_MATH_RANGE_MIXED_BANKS,
+        CLK_COPY_WIDE_CONSTANT,
+    }
+)
+
+
 def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
     if mode == "strict":
         return "error"
     # The export refuses a Copy whose text runs past TXT1000 in every mode, so warn mode
-    # reports it as a warning, not a hint.
-    if code in (CLK_PROFILE_UNAVAILABLE, CLK_NOP_NO_COIL, "text-past-bank"):
+    # reports it as a warning, not a hint. A range that CLICK cannot hold, and a constant that
+    # a hex bank cannot hold, are refused the same way.
+    if code in _REFUSED_WHEN_ALLOWED:
         return "warning"
     return "hint"
 

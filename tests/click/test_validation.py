@@ -853,7 +853,7 @@ class TestRangeAggregateRules:
         )
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == "CLK_MATH_RANGE_NOT_CONTIGUOUS" for f in report.hints)
+        assert any(f.code == "CLK_MATH_RANGE_NOT_CONTIGUOUS" for f in report.warnings)
 
     def test_reversed_range_gives_finding(self):
         """OBJ-1014: a range must be ordered Low:High."""
@@ -883,7 +883,7 @@ class TestRangeAggregateRules:
         tag_map = TagMap({V[1]: ds[1], V[2]: sd[1], dest: ds[10]}, include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        codes = [f.code for f in report.hints]
+        codes = [f.code for f in report.warnings]
         assert "CLK_MATH_RANGE_MIXED_BANKS" in codes
         assert "CLK_MATH_RANGE_NOT_CONTIGUOUS" not in codes
 
