@@ -11,6 +11,12 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Fixes
+
+- A link to an address that no rung uses is still refused, and the message now says that no rung uses it (it said `unknown tag`).
+
 ## v0.18.0 (2026-11-20)
 
 pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, which is installed for you.

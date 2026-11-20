@@ -99,10 +99,42 @@ def build_coupling_locked(
     except ValueError as exc:
         raise adapter.DAPAdapterError(f"cannot link {fb_name}: {exc}") from exc
     coupling = Coupling(en_name, fb_name, physical, trigger)
+    # link_problem refuses the first end that the runner does not know.  When that end
+    # is a project address, say that no rung uses it, because "unknown tag" reads as a typo.
+    for typed, name in ((feedback, fb_name), (en_text, en_name)):
+        if name in runner._known_tags_by_name:
+            continue
+        address = _address_no_rung_uses(adapter, typed, name)
+        if address is not None:
+            raise adapter.DAPAdapterError(
+                f"cannot link {fb_name}: no rung uses {address}, so the program has no tag for it"
+            )
+        break
     problem = link_problem(runner, coupling)
     if problem is not None:
         raise adapter.DAPAdapterError(f"cannot link {fb_name}: {problem}")
     return coupling
+
+
+def _address_no_rung_uses(adapter: Any, typed: str, name: str) -> str | None:
+    """Return the address *typed* names, if the TagMap or bank blocks serve it as *name*.
+
+    Return None for anything else.  The text also names the tag when the TagMap gives
+    the address a nickname: ``Start (X001)``.  Without a provider, nothing tells a real
+    address from a typo.
+    """
+    from pyclickplc.addresses import format_address_display, parse_address
+
+    provider = adapter._click_provider
+    if provider is None:
+        return None
+    try:
+        display = format_address_display(*parse_address(typed))
+    except ValueError:
+        return None
+    if provider.tag_name(display) != name:
+        return None
+    return display if name == display else f"{name} ({display})"
 
 
 def same_wiring(a: Coupling, b: Coupling) -> bool:
