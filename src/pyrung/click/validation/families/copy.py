@@ -108,7 +108,7 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
         if converter is not None and converter.exponential:
             return "Remove exponential=True from to_text(). Only a Real source takes it."
         return None
-    if code == "range-not-ascending" and kind == "BlockCopyInstruction":
+    if code == "duplicate-address" and kind == "BlockCopyInstruction":
         return "Use copy() for one register."
     if (
         code == "bank-not-allowed"
@@ -202,7 +202,7 @@ def _single_register_fill_refusals(instruction: Any, tag: Any, exporter: Any) ->
     )
     # laddercodec refuses a Fill range of one address. The export writes a Copy in its
     # place, so CLICK never sees that range.
-    return [refusal for refusal in refusals if str(refusal.code) != "range-not-ascending"]
+    return [refusal for refusal in refusals if str(refusal.code) != "duplicate-address"]
 
 
 def _build(instruction: Any, exporter: Any) -> list[Any]:

@@ -465,13 +465,13 @@ def test_a_finding_names_the_call_and_clicks_error():
 )
 def test_a_pack_of_one_bit_is_refused(write):
     (finding,) = _errors(write)
-    assert finding.code == Code.RANGE_NOT_ASCENDING
+    assert finding.code == Code.DUPLICATE_ADDRESS
     assert finding.suggestion is None
 
 
 def test_a_block_copy_of_one_register_suggests_copy():
     (finding,) = _errors(lambda: blockcopy(ds.select(1, 1), ds.select(5, 5)))
-    assert finding.code == Code.RANGE_NOT_ASCENDING
+    assert finding.code == Code.DUPLICATE_ADDRESS
     assert finding.suggestion == "Use copy() for one register."
 
 
@@ -538,7 +538,7 @@ def _named_errors(write):
         ),
         (
             lambda count, valve: blockcopy(ds.select(1, 1), ds.select(5, 5)),
-            Code.RANGE_NOT_ASCENDING,
+            Code.DUPLICATE_ADDRESS,
             "BlockCopyInstruction",
             "blockcopy(DS1..DS1, DS5..DS5)",
             (0, 10, 8),
@@ -583,14 +583,14 @@ def test_the_label_leaves_out_the_name_under_the_caret():
     assert "OBJ-024" in finding.display.hint
 
 
-def test_a_refusal_with_no_explanation_keeps_laddercodecs_message():
+def test_a_converter_refusal_labels_the_caret_and_leads_the_hint_with_the_explanation():
     (finding,) = _errors(lambda: copy(ds[1], txt[1], convert=to_value))
     assert finding.code == Code.COPY_CONVERTER_BANK
     (frame,) = finding.display.frames
     assert (frame.lines, frame.caret) == (("copy(DS1, TXT1, convert=to_value)",), (0, 24, 8))
-    assert frame.caret_label == ""
-    assert finding.display.problem
-    assert finding.display.hint == finding.suggestion
+    assert frame.caret_label
+    assert finding.display.problem == ""
+    assert finding.suggestion in finding.display.hint
 
 
 def test_a_label_names_an_address_without_quotes_when_the_map_names_none():
@@ -767,8 +767,8 @@ def test_a_problem_line_names_the_tags():
     prog = _program(lambda: copy(count, txt[1], convert=to_value))
     mapping = TagMap([count.map_to(ds[1])], include_system=False)
     (finding,) = validate_click_program(prog, mapping, mode="strict").errors
-    assert finding.display.frames[0].caret_label == ""
-    assert "Count (DS1)" in finding.display.problem
+    assert "Count (DS1)" in finding.display.frames[0].caret_label
+    assert finding.display.problem == ""
     assert "Count (DS1)" in finding.message
 
 

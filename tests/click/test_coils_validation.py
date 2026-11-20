@@ -156,9 +156,9 @@ def test_an_immediate_range_that_click_cannot_hold_is_refused_by_both(mapping):
 
 @pytest.mark.parametrize("write", [lambda: out(c.select(1, 1)), lambda: reset(c.select(7, 7))])
 def test_a_range_of_one_address_is_refused(write):
-    # CLICK refuses a range whose end is not above its start (OBJ-012).
+    # CLICK refuses a range whose end is its start (OBJ-012).
     (finding,) = _errors(write)
-    assert finding.code == Code.RANGE_NOT_ASCENDING
+    assert finding.code == Code.DUPLICATE_ADDRESS
 
 
 @pytest.mark.parametrize("coil", [out, latch, reset])
