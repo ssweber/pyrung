@@ -142,10 +142,14 @@ def test_a_refused_event_gives_the_advice_to_copy_it_into_a_c_bit():
     assert finding.suggestion == "Copy the condition into a C bit and use that bit as the event."
 
 
-def test_allow_with_the_old_event_code_no_longer_lets_the_finding_through():
+def test_allow_with_the_old_event_code_names_what_replaced_it():
     write = lambda: _event(events=(x[3], ds[5] > 3)).reset(x[4])  # noqa: E731
-    with pytest.raises(LadderExportError, match=Code.NOT_AN_ADDRESS):
+    with pytest.raises(
+        ValueError,
+        match="CLK_BANK_WRONG_ROLE. Pass bank-not-allowed, invalid-modbus-target or not-an",
+    ):
         pyrung_to_ladder(_program(write), TagMap(), allow=("CLK_BANK_WRONG_ROLE",))
+    pyrung_to_ladder(_program(write), TagMap(), allow=(Code.NOT_AN_ADDRESS,))
 
 
 def test_a_pin_with_several_conditions_prints_them_as_separate_arguments():
@@ -306,10 +310,9 @@ def test_allow_names_what_replaced_the_removed_code():
 
 
 @pytest.mark.parametrize("code", ["CLK_BANK_NOT_WRITABLE", "CLK_BANK_WRONG_ROLE"])
-def test_allow_with_a_shared_old_code_no_longer_lets_the_finding_through(code):
-    # Other checks still report these codes, so allow= takes them. A drum no longer does.
+def test_allow_with_a_shared_old_code_names_what_replaced_it(code):
     write = lambda: _event(outputs=(y[1], x[2])).reset(x[4])  # noqa: E731
-    with pytest.raises(LadderExportError, match=Code.BANK_NOT_ALLOWED):
+    with pytest.raises(ValueError, match=f"no longer reports {code}. Pass .*bank-not-allowed"):
         pyrung_to_ladder(_program(write), TagMap(), allow=(code,))
     pyrung_to_ladder(_program(write), TagMap(), allow=(Code.BANK_NOT_ALLOWED,))
 

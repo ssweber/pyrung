@@ -8,5 +8,5 @@ from pyrung.click.profile import load_default_profile
 def test_default_profile_loads():
     profile = load_default_profile()
     assert profile is not None
-    assert profile.is_writable("SC", 50) is True
-    assert profile.is_writable("SC", 1) is False
+    assert profile.valid_for_role("T", "timer_done_bit") is True
+    assert profile.valid_for_role("C", "timer_done_bit") is False

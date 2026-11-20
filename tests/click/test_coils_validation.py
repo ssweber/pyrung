@@ -188,13 +188,17 @@ def test_the_export_refuses_an_immediate_coil_outside_y():
         pyrung_to_ladder(_program(lambda: latch(immediate(c[1]))), TagMap())
 
 
-def test_allow_accepts_the_codes_that_other_checks_still_report():
-    # CLK_BANK_NOT_WRITABLE and CLK_BANK_WRONG_ROLE stay in findings.py, so allow= takes
-    # them. The coil's finding no longer carries either code, so they let nothing through.
+@pytest.mark.parametrize(
+    ("code", "replacement"),
+    [
+        ("CLK_BANK_NOT_WRITABLE", "not-writable or bank-not-allowed"),
+        ("CLK_BANK_WRONG_ROLE", "bank-not-allowed, invalid-modbus-target or not-an-address"),
+    ],
+)
+def test_allow_names_what_replaced_a_removed_bank_code(code, replacement):
     write = lambda: out(ds[1])  # noqa: E731
-    for code in ("CLK_BANK_NOT_WRITABLE", "CLK_BANK_WRONG_ROLE"):
-        with pytest.raises(LadderExportError, match=Code.BANK_NOT_ALLOWED):
-            pyrung_to_ladder(_program(write), TagMap(), allow=(code,))
+    with pytest.raises(ValueError, match=f"no longer reports {code}. Pass {replacement} to"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(code,))
     assert pyrung_to_ladder(_program(write), TagMap(), allow=(Code.BANK_NOT_ALLOWED,)).main_rows
 
 

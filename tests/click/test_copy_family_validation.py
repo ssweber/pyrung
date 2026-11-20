@@ -15,7 +15,6 @@ from laddercodec import BlockCopy, Code, Copy, Fill, Pack, Unpack
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
-    CLK_BANK_NOT_WRITABLE,
     CLK_COPY_RANGE_NOT_CONSECUTIVE,
     CLK_PTR_CONTEXT_ONLY_COPY,
     validate_click_program,
@@ -826,7 +825,7 @@ def test_allow_refuses_a_code_that_no_finding_has():
 def test_allow_takes_a_pyrung_code_and_a_laddercodec_code():
     write = lambda: fill(ds[1], txt.select(5, 5))  # noqa: E731
     with pytest.raises(LadderExportError, match="copy-bank-incompatible"):
-        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_BANK_NOT_WRITABLE,))
+        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_PTR_CONTEXT_ONLY_COPY,))
     # With laddercodec's code allowed, the export's own refusal is reached.
     with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
         pyrung_to_ladder(_program(write), TagMap(), allow=(Code.COPY_BANK_INCOMPATIBLE,))

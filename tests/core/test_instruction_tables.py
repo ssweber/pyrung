@@ -17,9 +17,8 @@ compiler raise on an instruction they do not know, so a miss there already fails
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 import pytest
 
@@ -29,7 +28,6 @@ from pyrung.circuitpy.validation import _evaluate_timer_resolution
 from pyrung.click.ladder.instructions import _InstructionMixin
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
-from pyrung.click.validation import legacy
 from pyrung.click.validation.families import FAMILIES
 from pyrung.core import Int
 from pyrung.core.analysis.causal.why import _INSTRUCTION_LABELS
@@ -144,23 +142,7 @@ class Table:
         return self.name
 
 
-def _hardware_keys(table: Iterable[str | tuple[str, str]]) -> frozenset[str]:
-    return frozenset(key[0] if isinstance(key, tuple) else key for key in table)
-
-
-# laddercodec checks each instruction of a family in families/. pyrung's own tables leave
-# those instructions out, so that a family branch deletes its rows and edits nothing here.
-_IN_FAMILIES = frozenset(name for family in FAMILIES for name in family.classes)
-
-
-def _legacy_table(name: str, *kinds: str) -> Table:
-    return Table(
-        f"legacy {name}", _hardware_keys(legacy.table(name)), _of_kinds(*kinds) - _IN_FAMILIES
-    )
-
-
 TABLES = [
-    _legacy_table("ROLE_ASSIGNMENT_FIELDS", "timer", "out_timer", "counter", "drum"),
     Table(
         "the copy family's operands",
         frozenset(next(f for f in FAMILIES if f.name == "copy").classes),
@@ -221,34 +203,13 @@ def _family_operands() -> set[tuple[str, str]]:
     return found
 
 
-# How to read the fields out of a row of each table in legacy/.
-_FIELDS_OF_ROW: dict[str, Callable[[Any], Iterable[str]]] = {
-    "WRITE_TARGET_FIELDS": lambda fields: fields,
-    "ROLE_ASSIGNMENT_FIELDS": lambda roles: [field for field, _role in roles],
-}
-
-
-def _legacy_fields(*names: str) -> set[tuple[str, str]]:
-    """Return each (class, field) that the tables *names* in legacy/ read."""
-    found: set[tuple[str, str]] = set()
-    for name in names:
-        for key, row in legacy.table(name).items():
-            if isinstance(key, tuple):
-                found.add(key)
-            else:
-                found.update((key, field) for field in _FIELDS_OF_ROW[name](row))
-    return found
-
-
 def _checked_writes() -> set[tuple[str, str]]:
-    # Timers, counters and drums reach the write check through a role. Send and Receive
-    # reach it through the banks that CLICK's help pages list for them. laddercodec checks
-    # every operand of an instruction in one of its families.
-    return _legacy_fields("WRITE_TARGET_FIELDS", "ROLE_ASSIGNMENT_FIELDS") | _family_operands()
+    # laddercodec checks every operand of an instruction in one of its families.
+    return _family_operands()
 
 
 def _hardware_fields() -> list[tuple[str, str]]:
-    return sorted(_legacy_fields(*_FIELDS_OF_ROW) | _family_operands())
+    return sorted(_family_operands())
 
 
 def _assigned_fields(cls: type) -> set[str]:
@@ -318,8 +279,8 @@ def test_every_pin_is_exported() -> None:
 @pytest.mark.parametrize("cls,field", _writes_to_check())
 def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None:
     assert (cls.__name__, field) in _checked_writes(), (
-        f"nothing checks that CLICK can write {cls.__name__}.{field}: add it to a table in "
-        "legacy/, or to _WRITES_CHECKED_ELSEWHERE in this file with the reason"
+        f"nothing checks that CLICK can write {cls.__name__}.{field}: add it to a family in "
+        "families/, or to _WRITES_CHECKED_ELSEWHERE in this file with the reason"
     )
 
 

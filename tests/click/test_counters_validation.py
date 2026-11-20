@@ -162,15 +162,22 @@ def test_the_export_refuses_a_form_that_click_refuses():
 @pytest.mark.parametrize(
     ("old", "new", "mapping"),
     [
-        ("CLK_BANK_WRONG_ROLE", Code.BANK_NOT_ALLOWED, {"done": c[1]}),
         ("CLK_TIMER_PAIR_MISMATCH", Code.TIMER_PAIR_MISMATCH, {"acc": ctd[2]}),
     ],
 )
 def test_the_old_code_no_longer_lets_the_finding_through(old, new, mapping):
-    # Other checks still report both old codes, so allow= accepts them. The old code no
-    # longer allows laddercodec's finding, and the new code does.
+    # debounce(), flasher() and timed() still report CLK_TIMER_PAIR_MISMATCH, so allow=
+    # accepts it. The old code does not allow laddercodec's finding, and the new code does.
     counter, mappings = _counter(**mapping)
     program = _program(lambda: count_up(counter, preset=5).reset(x[2]))
     with pytest.raises(LadderExportError, match=new):
         pyrung_to_ladder(program, TagMap(mappings), allow=(old,))
     pyrung_to_ladder(program, TagMap(mappings), allow=(new,))
+
+
+def test_allow_with_the_old_bank_code_names_what_replaced_it():
+    counter, mappings = _counter(done=c[1])
+    program = _program(lambda: count_up(counter, preset=5).reset(x[2]))
+    with pytest.raises(ValueError, match="no longer reports CLK_BANK_WRONG_ROLE. Pass bank-not"):
+        pyrung_to_ladder(program, TagMap(mappings), allow=("CLK_BANK_WRONG_ROLE",))
+    pyrung_to_ladder(program, TagMap(mappings), allow=(Code.BANK_NOT_ALLOWED,))

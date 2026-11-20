@@ -10,12 +10,6 @@ from .capabilities import CLICK_HARDWARE_PROFILE
 class HardwareProfile(Protocol):
     """Validation profile contract consumed by the pyrung click validator."""
 
-    def is_writable(self, memory_type: str, address: int | None = None) -> bool: ...
-
-    def field_writable(
-        self, instruction_type: str, field_name: str, memory_type: str, address: int | None
-    ) -> bool: ...
-
     def valid_for_role(self, memory_type: str, role: str) -> bool: ...
 
 

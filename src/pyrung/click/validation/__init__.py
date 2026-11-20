@@ -31,15 +31,13 @@ from .findings import (
     _route_severity,
 )
 from .hardware import (
-    _evaluate_role_assignments,
     _evaluate_text_past_bank,
     _evaluate_timer_pairs,
     _evaluate_wide_copy_constant,
-    _evaluate_write_targets,
 )
 from .hardware import _load_default_profile as _hardware_load_default_profile
 from .identity import _evaluate_address_identity_conflicts
-from .legacy import CHECKS as _FAMILY_CHECKS
+from .math_ranges import _evaluate_range_aggregates
 from .nicknames import _evaluate_nickname_lengths
 from .pointer_range import (
     _evaluate_condition_pointer_past_bank,
@@ -329,8 +327,7 @@ def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding
     ]
 
 
-# The checks that stay in pyrung, and the checks that several families share. Each family's
-# own checks are in legacy/, and their order numbers fit between these.
+# The checks that stay in pyrung, and the checks that several families share.
 _CHECKS = (
     Check("program", 10, lambda c: _evaluate_immediate_usage(c.facts.operands, c.tag_map, c.mode)),
     Check("program", 30, lambda c: _evaluate_status_bit_usage(c.program, c.mode)),
@@ -338,6 +335,11 @@ _CHECKS = (
     Check("program", 70, lambda c: _evaluate_forloop_structure(c.program, c.mode)),
     Check("program", 80, lambda c: _evaluate_nested_calls(c.program, c.mode)),
     Check("instruction", 20, lambda i, loc, c: _evaluate_instruction_portability(i, loc, c.mode)),
+    Check(
+        "instruction",
+        30,
+        lambda i, loc, c: _evaluate_range_aggregates(i, loc, c.mode, c.resolver),
+    ),
     Check(
         "instruction",
         100,
@@ -350,18 +352,6 @@ _CHECKS = (
     ),
     Check(
         "profile",
-        10,
-        lambda i, loc, c: _evaluate_write_targets(i, loc, c.tag_map, c.profile, c.mode, c.resolver),
-    ),
-    Check(
-        "profile",
-        20,
-        lambda i, loc, c: _evaluate_role_assignments(
-            i, loc, c.tag_map, c.profile, c.mode, c.resolver
-        ),
-    ),
-    Check(
-        "profile",
         50,
         lambda i, loc, c: _evaluate_timer_pairs(i, loc, c.profile, c.mode, c.resolver),
     ),
@@ -369,8 +359,8 @@ _CHECKS = (
 
 
 def _phase(phase: str) -> list[Check]:
-    """Return the checks of *phase*, the shared ones and the families' ones, in their order."""
-    checks = [check for check in (*_CHECKS, *_FAMILY_CHECKS) if check.phase == phase]
+    """Return the checks of *phase* in their order."""
+    checks = [check for check in _CHECKS if check.phase == phase]
     return sorted(checks, key=lambda check: check.order)
 
 

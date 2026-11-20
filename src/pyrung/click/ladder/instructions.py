@@ -822,7 +822,16 @@ class _InstructionMixin:
             ]
             return f"ModbusRtuTarget({','.join(parts)})"
         if instruction.host is None:
-            return _quote(instruction.target_name)
+            verb = "send" if type(instruction).__name__ == "ModbusSendInstruction" else "receive"
+            self._raise_issue(
+                path=f"{path}.target",
+                message=(
+                    f"target={instruction.target_name!r} is only a name. A CLICK {verb}() "
+                    "needs the address of its target. Give the address with ModbusTcpTarget "
+                    "or ModbusRtuTarget."
+                ),
+                source=instruction,
+            )
         parts = [
             f"name={_quote(instruction.target_name)}",
             f"ip={_quote(instruction.host)}",

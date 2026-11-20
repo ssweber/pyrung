@@ -10,7 +10,6 @@ from laddercodec import Code
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import (
-    FIELD_WRITABLE,
     HEX_CONSTANT_BANKS,
     single_register_fill_dest,
 )
@@ -20,13 +19,10 @@ from pyrung.core.instruction.conversions import (
     copy_source_kind,
 )
 from pyrung.core.memory_block import _element_name, _store_block, block_room
-from pyrung.core.rung import dsl_call
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
-    CLK_BANK_NOT_WRITABLE,
-    CLK_BANK_WRONG_ROLE,
     CLK_COPY_WIDE_CONSTANT,
     CLK_TEXT_PAST_BANK,
     CLK_TEXT_PAST_BLOCK,
@@ -46,14 +42,6 @@ from .resolve import (
 
 if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
-    from pyrung.click.tag_map import TagMap
-
-
-def _family_rows(name: str) -> dict[Any, Any]:
-    """Return the rows of a table that several families share, from the families in legacy/."""
-    from .legacy import table
-
-    return table(name)
 
 
 def _load_default_profile() -> HardwareProfile | None:
@@ -62,133 +50,9 @@ def _load_default_profile() -> HardwareProfile | None:
     return load_default_profile()
 
 
-def _evaluate_write_targets(
-    instruction: Any,
-    base_location: ProgramLocation,
-    tag_map: TagMap,
-    profile: HardwareProfile,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    findings: list[ClickFinding] = []
-    instruction_type = type(instruction).__name__
-
-    for field_name in _family_rows("WRITE_TARGET_FIELDS").get(instruction_type, ()):
-        location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
-        written_by = (instruction_type, field_name)
-
-        if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "operand"))
-            continue
-
-        for slot in resolution.slots:
-            if slot.address is None and slot.memory_type in {"SC", "SD"}:
-                findings.append(_unresolved_finding(location, mode, "SC or SD write target"))
-                continue
-
-            if not profile.field_writable(*written_by, slot.memory_type, slot.address):
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_BANK_NOT_WRITABLE,
-                        severity=_route_severity(CLK_BANK_NOT_WRITABLE, mode),
-                        message=_not_writable_text(instruction, slot, location_text, written_by),
-                        location=location_text,
-                    )
-                )
-
-    return findings
-
-
-def _not_writable_text(
-    instruction: Any,
-    slot: Any,
-    location_text: str,
-    written_by: tuple[str, str] | None = None,
-) -> str:
-    """Return the message for a write that CLICK refuses to the instruction that makes it.
-
-    CLICK lets some instructions write a bank that others cannot, such as out() on SC162.
-    The advice names those instructions, read from ``FIELD_WRITABLE``.
-    """
-    call = dsl_call(instruction)
-    others: list[str] = []
-    for key, banks in FIELD_WRITABLE.items():
-        if key == written_by or slot.memory_type not in banks:
-            continue
-        subset = banks[slot.memory_type]
-        if subset is None or (slot.address is not None and slot.address in subset):
-            other = dsl_call(key[0])
-            if other != call and other not in others:
-                others.append(other)
-    if not others:
-        advice = "Write to another address."
-    else:
-        listed = others[0] if len(others) == 1 else f"{', '.join(others[:-1])} or {others[-1]}"
-        # out() drops its bit when the rung goes false, so it cannot stand in for a latch.
-        if call in _HELD_COILS:
-            advice = f"Only {listed} can write it."
-        else:
-            advice = f"Use {listed} instead."
-    return f"CLICK does not let {call} write {_bank_label(slot)}, at {location_text}. {advice}"
-
-
-_HELD_COILS = frozenset({"latch()", "reset()"})
-
-
-def _role_words(role: str) -> str:
-    """Return a role id such as ``timer_done_bit`` as the words ``timer done bit``."""
-    return role.replace("_", " ")
-
-
 def _role_banks(profile: HardwareProfile, role: str) -> str:
     """Return the banks that *profile* allows for *role*, as ``"Y, C"``."""
     return ", ".join(bank for bank in BANKS if profile.valid_for_role(bank, role))
-
-
-def _evaluate_role_assignments(
-    instruction: Any,
-    base_location: ProgramLocation,
-    tag_map: TagMap,
-    profile: HardwareProfile,
-    mode: ValidationMode,
-    resolver: _ResolutionCache,
-) -> list[ClickFinding]:
-    findings: list[ClickFinding] = []
-    instruction_type = type(instruction).__name__
-
-    for field_name, role in _family_rows("ROLE_ASSIGNMENT_FIELDS").get(instruction_type, ()):
-        value = getattr(instruction, field_name)
-        if value is None:
-            continue
-        if (field_name == "jump_step" or field_name.endswith("preset")) and not isinstance(
-            value, Tag
-        ):
-            continue
-
-        location = _instruction_location(base_location, f"instruction.{field_name}")
-        resolution = resolver.resolve_operand_slots(value)
-
-        if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "operand"))
-            continue
-
-        for slot in resolution.slots:
-            if not profile.valid_for_role(slot.memory_type, role):
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_BANK_WRONG_ROLE,
-                        severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                        message=_wrong_role_text(
-                            slot, _role_words(role), location_text, _role_banks(profile, role)
-                        ),
-                        location=location_text,
-                    )
-                )
-
-    return findings
 
 
 def _wide_constant_into_hex(

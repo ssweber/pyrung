@@ -10,8 +10,6 @@ from pyrung.click.capabilities import (
     COMPARE_COMPATIBILITY,
     COMPARE_CONSTANT_COMPATIBILITY,
     INSTRUCTION_ROLE_COMPATIBILITY,
-    LADDER_WRITABLE_SC,
-    LADDER_WRITABLE_SD,
     ClickHardwareProfile,
     CompareConstantKind,
     InstructionRole,
@@ -39,64 +37,9 @@ def test_profile_export_available():
 
 
 @pytest.mark.parametrize(
-    ("memory_type", "address", "expected"),
-    [
-        ("X", 1, False),
-        ("Y", 1, True),
-        ("C", 1, True),
-        ("T", 1, False),
-        ("CT", 1, False),
-        ("DS", 1, True),
-        ("DD", 1, True),
-        ("DH", 1, True),
-        ("DF", 1, True),
-        ("XD", 1, False),
-        ("YD", 1, False),
-        ("TD", 1, True),
-        ("CTD", 1, True),
-        ("TXT", 1, True),
-    ],
-)
-def test_is_writable_baseline(memory_type: str, address: int, expected: bool):
-    assert CLICK_HARDWARE_PROFILE.is_writable(memory_type, address) is expected
-
-
-def test_is_writable_sc_subset():
-    for address in LADDER_WRITABLE_SC:
-        assert CLICK_HARDWARE_PROFILE.is_writable("SC", address) is True
-    assert CLICK_HARDWARE_PROFILE.is_writable("SC", 1) is False
-    assert CLICK_HARDWARE_PROFILE.is_writable("SC", None) is False
-
-
-def test_sd_control_sc_addresses_remain_writable():
-    for address in (65, 66, 67):
-        assert address in LADDER_WRITABLE_SC
-        assert CLICK_HARDWARE_PROFILE.is_writable("SC", address) is True
-
-
-def test_is_writable_sd_subset():
-    for address in LADDER_WRITABLE_SD:
-        assert CLICK_HARDWARE_PROFILE.is_writable("SD", address) is True
-    assert CLICK_HARDWARE_PROFILE.is_writable("SD", 1) is False
-    assert CLICK_HARDWARE_PROFILE.is_writable("SD", None) is False
-
-
-@pytest.mark.parametrize(
     ("role", "ok_bank", "bad_bank"),
     [
         ("timer_done_bit", "T", "C"),
-        ("timer_accumulator", "TD", "DS"),
-        ("timer_preset", "DS", "DD"),
-        ("counter_done_bit", "CT", "C"),
-        ("counter_accumulator", "CTD", "DD"),
-        ("counter_preset", "DD", "TD"),
-        ("drum_output_bit", "Y", "DS"),
-        ("drum_current_step", "DS", "DD"),
-        ("drum_completion_flag", "C", "Y"),
-        ("drum_accumulator", "TD", "DS"),
-        ("drum_jump_step", "DS", "DD"),
-        ("drum_event_condition", "X", "DS"),
-        ("copy_pointer", "DS", "DD"),
     ],
 )
 def test_role_compatibility(role: InstructionRole, ok_bank: str, bad_bank: str):
@@ -264,7 +207,6 @@ def test_compare_constant_compatibility(bank: str, const_kind: CompareConstantKi
 
 def test_lookup_tables_exported():
     assert "timer_done_bit" in INSTRUCTION_ROLE_COMPATIBILITY
-    assert "drum_output_bit" in INSTRUCTION_ROLE_COMPATIBILITY
     assert ("DS", "DD") in COMPARE_COMPATIBILITY
     assert "DS" in COMPARE_CONSTANT_COMPATIBILITY
 
@@ -272,7 +214,6 @@ def test_lookup_tables_exported():
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: CLICK_HARDWARE_PROFILE.is_writable("ZZ", 1),
         lambda: CLICK_HARDWARE_PROFILE.valid_for_role("ZZ", "timer_done_bit"),
         lambda: CLICK_HARDWARE_PROFILE.valid_for_role("T", "bad_role"),
         lambda: CLICK_HARDWARE_PROFILE.compare_compatible("ZZ", "DS"),

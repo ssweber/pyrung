@@ -14,7 +14,6 @@ from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_UNRESOLVED,
-    CLK_BANK_WRONG_ROLE,
     validate_click_program,
 )
 from pyrung.core import Block, Bool, Dint, Int, TagType
@@ -191,6 +190,23 @@ def test_a_call_that_click_takes_passes(write):
     assert _errors(write) == ()
 
 
+@pytest.mark.parametrize(
+    ("write", "verb"),
+    [(_send(target="plc"), "send"), (_receive(target="plc"), "receive")],
+    ids=["send", "receive"],
+)
+def test_the_export_refuses_a_target_that_is_only_a_name(write, verb):
+    # Validation passes this call. The export refuses it, because CLICK needs the address.
+    with pytest.raises(LadderExportError) as refused:
+        pyrung_to_ladder(_program(write), TagMap())
+    (issue,) = refused.value.issues
+    assert issue["message"] == (
+        f"target='plc' is only a name. A CLICK {verb}() needs the address of its target. "
+        "Give the address with ModbusTcpTarget or ModbusRtuTarget."
+    )
+    assert issue["path"].endswith(".target")
+
+
 def test_a_status_bit_left_off_needs_no_address():
     source = Int("Src")
     assert _errors(_send(source=source), [source.map_to(ds[5])]) == ()
@@ -262,11 +278,9 @@ def test_allow_names_the_code_that_laddercodec_reports():
     pyrung_to_ladder(_program(write), TagMap(), allow=(Code.BANK_NOT_ALLOWED,))
 
 
-def test_allow_with_the_old_bank_code_no_longer_lets_the_call_through():
-    # CLK_BANK_WRONG_ROLE stays for the other checks, so allow= accepts it. The call is
-    # refused under laddercodec's code, which the old code does not allow.
-    with pytest.raises(LadderExportError, match=Code.BANK_NOT_ALLOWED):
-        pyrung_to_ladder(_program(_send(source=x[5])), TagMap(), allow=(CLK_BANK_WRONG_ROLE,))
+def test_allow_with_the_old_bank_code_names_what_replaced_it():
+    with pytest.raises(ValueError, match="no longer reports CLK_BANK_WRONG_ROLE. Pass bank-not"):
+        pyrung_to_ladder(_program(_send(source=x[5])), TagMap(), allow=("CLK_BANK_WRONG_ROLE",))
 
 
 def test_a_local_tag_at_the_remote_address_does_not_name_it():
