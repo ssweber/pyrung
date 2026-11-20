@@ -7,6 +7,10 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pyclickplc
+import pytest
+from pyclickplc.addresses import get_addr_key
+
 from pyrung.click import (
     ClickBlocks,
     TagMap,
@@ -20,6 +24,7 @@ from pyrung.core import (
     Block,
     Bool,
     Counter,
+    Int,
     Or,
     Program,
     TagType,
@@ -1146,3 +1151,76 @@ class TestRunFile:
 
         assert run["runner"].current_state.scan_id == 0
         assert run["check"].current_state.scan_id == 1
+
+
+_CLICK_NICKNAME_ROWS = (
+    "Address,Data Type,Nickname,Initial Value,Retentive,Address Comment\r\n"
+    'X001,BIT,Go,0,No,"Café, 50°C"\r\n'
+    "DS1,INT,Café,5,Yes,\r\n"
+    "DS2,INT,Temp50°C,0,No,50°C here\r\n"
+)
+
+
+def _nickname_project_inputs(tmp_path: Path) -> Path:
+    local_x, local_y, *_ = ClickBlocks()
+    go, lamp = Bool("Go"), Bool("Lamp")
+    with Program() as logic:
+        with rung(go):
+            out(lamp)
+    csv_dir = tmp_path / "csv"
+    pyrung_to_ladder(logic, TagMap({go: local_x[1], lamp: local_y[1]})).write(csv_dir)
+    return csv_dir
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        _CLICK_NICKNAME_ROWS.encode("cp1252"),
+        _CLICK_NICKNAME_ROWS.encode("utf-8"),
+        b"\xef\xbb\xbf" + _CLICK_NICKNAME_ROWS.encode("utf-8"),
+    ],
+    ids=["cp1252", "utf-8", "utf-8-bom"],
+)
+def test_nickname_csv_is_copied_into_the_project(tmp_path: Path, raw: bytes):
+    """The copy reads back with the same text, and has one line ending on disk."""
+    csv_dir = _nickname_project_inputs(tmp_path)
+    source = tmp_path / "source.csv"
+    source.write_bytes(raw)
+    out_dir = tmp_path / "project"
+
+    files = ladder_to_pyrung_project(csv_dir, nickname_csv=source, output_dir=out_dir)
+
+    assert "\r" not in files["nicknames.csv"]
+    expected = tmp_path / "expected.csv"
+    pyclickplc.write_csv(expected, pyclickplc.read_csv(source))
+    assert (out_dir / "nicknames.csv").read_bytes() == expected.read_bytes()
+    for path in (source, out_dir / "nicknames.csv"):
+        rows = pyclickplc.read_csv(path)
+        assert rows[get_addr_key("DS", 1)].nickname == "Café"
+        assert rows[get_addr_key("DS", 2)].comment == "50°C here"
+        assert rows[get_addr_key("X", 1)].comment == "Café, 50°C"
+    assert TagMap.from_nickname_file(out_dir / "nicknames.csv").resolve("Temp50°C") == "DS2"
+
+
+def test_nickname_csv_written_by_pyrung_is_copied_into_the_project(tmp_path: Path):
+    csv_dir = _nickname_project_inputs(tmp_path)
+    ds = ClickBlocks()[6]
+    source = tmp_path / "source.csv"
+    TagMap({Int("Café"): ds[1]}).to_nickname_file(source)
+
+    files = ladder_to_pyrung_project(csv_dir, nickname_csv=source)
+
+    assert "Café" in files["nicknames.csv"]
+
+
+def test_nickname_csv_with_a_character_cp1252_lacks_is_refused(tmp_path: Path):
+    csv_dir = _nickname_project_inputs(tmp_path)
+    source = tmp_path / "source.csv"
+    source.write_bytes(
+        (
+            "Address,Data Type,Nickname,Initial Value,Retentive,Address Comment\r\nDS1,INT,温度,0,No,\r\n"
+        ).encode()
+    )
+
+    with pytest.raises(ValueError, match=r"DS1 .*cp1252"):
+        ladder_to_pyrung_project(csv_dir, nickname_csv=source)

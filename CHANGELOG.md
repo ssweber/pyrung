@@ -13,179 +13,213 @@
 
 ## Unreleased
 
+pyrung now checks each CLICK instruction the way CLICK's editor does. It uses the laddercodec package for this, and installs laddercodec 0.5.0 or later for you. Read Behaviour changes before you upgrade. Most of it is for CLICK export, but `copy()` of a number into a TXT now stores its digits, and some forms are now refused when you build the program. If you pass `CLK_` codes to `allow=`, the table there gives the new codes. Fixes lists the wrong answers that 0.17.0 gave. Most are CLICK exports. The others are the TXT `copy()` above, and results of `run_for()`, `run_until()`, `history.at()`, `fork_from()` and the code.py that differed from `step()`. Export your program again before you paste it into CLICK.
+
 ### What's new
 
-- When CLICK refuses a value in `copy()`, `blockcopy()`, `fill()` or a pack or unpack call, the finding now prints your call with a caret under that value. Its text names a mapped address by its tag, such as `Count (DS1)`. Each refused value gets a finding of its own.
-- A finding for a refused contact or comparison now prints the line that holds it, such as `with rung(X001, TXT1 > TXT2):`. A caret marks the contact.
+- Most CLICK findings now print your line with a caret under the refused value, such as `with rung(X001, TXT1 > TXT2):`. A finding's text names a mapped address by its tag, such as `Count (DS1)`. Each refused value gets a finding of its own.
+- The CLICK export now accepts `fill()` into two or more YD registers, as a CLICK does (it was refused).
 
 ### Behaviour changes
 
+#### Results that change
+
 - `copy()` of a number constant into a TXT now stores the number's digits, as a CLICK does. `copy(-5, txt[1])` writes "-" into TXT1 and "5" into TXT2 (it stored the number -5 in TXT1).
   If a test expects the number in the TXT, expect the digits.
-- The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, which CLICK cannot hold).
-  Export the program again before you paste it into CLICK.
+
+#### Refused when you build the program
+
+- These forms are now refused when you build the program. The message says what to write. In 0.17.0 each one built and then raised on the first scan, or only set an error flag.
+  - A list in place of a `.select()` range, such as `blockcopy([ds[1], ds[2]], ds.select(10, 11))`. Pass a range from `.select()`.
+  - A constant as the destination, such as `copy(5, 7)`. Pass a tag.
+  - `None` as a source, such as `copy(None, ds[1])`. Pass a tag, a pointer or a constant.
+  - A `blockcopy()` between ranges of different lengths, such as `blockcopy(ds.select(1, 3), ds.select(10, 13))`. Write ranges of the same length. `y.select(1, 20)` holds 16 tags, because Y017..Y020 do not exist.
+  - A `copy()` into a range or of a range, such as `copy(5, ds.select(1, 3))`. Use `fill()` or `blockcopy()`.
+  - A `fill()` into one register, such as `fill(0, ds[1])`. Use `copy()`.
+  - A `copy()` or `fill()` of text that holds no number into a number register, such as `copy("AB", ds[1])`. Copy a number without quotes, or copy the text into a TXT.
+  - A `pack_bits()` or `unpack_to_bits()` of more bits than the register holds, such as `pack_bits(c.select(1, 33), dd[1])`. An Int or a Word holds 16 bits, and a Dint or a Real holds 32.
+  - A `pack_words()` or `unpack_to_words()` range of more or fewer than 2 words, such as `pack_words(ds.select(1, 3), dd[1])`. Pass 2 words.
+  - A `shift()` over tags that are not Bool, such as `shift(ds.select(1, 3))`. Shift a range of Bool tags.
+  - Any other operand of the wrong kind in `copy()`, `blockcopy()`, `fill()`, `math()`, `forloop()`, `run_function()`, `run_enabled_function()`, `shift()` or a pack or unpack call. Write the form that the message names.
 - `fill()` of a TXT into number registers is now refused when you build the program (it raised on a blank TXT and could not be exported).
   Copy the TXT into a number register with `convert=to_value`, then fill from that register.
-- The CLICK export now refuses `fill()` of a number into one TXT, such as `fill(5, txt.select(1, 1))` (it exported `copy(5,TXT1)`, which a CLICK runs as a conversion to digits).
-  Write `copy(5, txt[1])`, which stores the digit "5".
-- An operand of the wrong kind is now refused when you build the program, such as a list in place of a `.select()` range or a constant as the destination (the program raised on the first scan, or only set an error flag). The check covers `copy()`, `blockcopy()`, `fill()`, `math()`, `forloop()`, `run_function()`, `run_enabled_function()`, `shift()`, `pack_bits()`, `pack_words()`, `pack_text()`, `unpack_to_bits()` and `unpack_to_words()`.
-  Write the form that the message names.
 - A constant `forloop()` count with a decimal point, such as `forloop(5.0)`, is now refused when you build the program (`forloop(3.5)` ran 3 times). CLICK's editor refuses it too.
-  Pass a whole number or a tag. Write `forloop(5)`, not `forloop(5.0)`.
+  Write `forloop(5)`, or pass a tag.
 - `generate_circuitpy()` now raises `NotImplementedError` for a value that a code.py cannot hold, such as `Timer[1]`, a whole block, a `.select()` range, `float("inf")` or `b"7"` (the code.py raised `NameError` or `TypeError` on the board).
   Pass a tag, a pointer, a finite number or text in its place.
-- A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
-  If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
-- CLICK validation and the export now refuse a hex `math()` constant that CLICK's Math refuses, such as `0x1E` (`1Eh`). Validation reports `math-invalid-token`.
-  Copy the value into a DH and use that DH in the formula.
-- CLICK validation of these calls now reports new codes for what CLICK refuses, in place of the old ones. Old -> new:
-  - `copy()`, `blockcopy()`, `fill()` and the pack and unpack calls:
-    - `CLK_COPY_BANK_INCOMPATIBLE` -> `copy-bank-incompatible` or `bank-not-allowed`.
-    - `CLK_COPY_CONSTANT_INTO_BIT` -> `constant-into-bit` or `bank-not-allowed`.
-    - `CLK_COPY_CONVERTER_INCOMPATIBLE` -> `copy-converter-bank`, `copy-txt-needs-convert` or `option-not-offered`.
-    - `CLK_PACK_TEXT_BANK_INCOMPATIBLE` -> `pack-kind-mismatch` or `copy-bank-incompatible`.
-    - `CLK_BANK_NOT_WRITABLE` -> `not-writable` or `bank-not-allowed`.
-    - `CLK_BANK_UNRESOLVED` -> `pointer-bank-not-allowed`, for a pointer into SD as the destination.
-    - `CLK_PTR_POINTER_MUST_BE_DS` -> `pointer-not-ds`.
-    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`.
-  - `forloop()`:
-    - `CLK_FORLOOP_COUNT_BANK` -> `for-count-bank`.
-    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`, for a pointer count.
-  - `search()`:
-    - `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS` or `CLK_BANK_NOT_WRITABLE` -> `bank-not-allowed`, for a range, a result or a `found` flag in a bank that CLICK refuses.
-    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`, for a pointer value.
-  - `send()` and `receive()`:
-    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`, for a status bit, an exception response or a destination in a bank that CLICK refuses.
-    - `CLK_BANK_WRONG_ROLE` -> `invalid-modbus-target`, for a device id tag outside DS.
-  - `shift()`: `CLK_BANK_NOT_WRITABLE` -> `bank-not-allowed`, for a range outside C.
-  - `event_drum()`, `time_drum()` and `time_event_drum()`:
-    - `CLK_BANK_WRONG_ROLE` or `CLK_BANK_NOT_WRITABLE` -> `bank-not-allowed`, for an output, completion flag, current step, accumulator, jump step or register preset in a bank that CLICK refuses.
-    - `CLK_BANK_WRONG_ROLE` -> `not-an-address`, for an event that compares a register, such as `DS5 > 3`.
-    - `CLK_DRUM_JUMP_STEP_TAG_REQUIRED` -> `not-an-address`, for a constant jump step such as `.jump(Found, step=2)`.
-    - `CLK_TIMER_PRESET_TOO_LOW` -> `constant-out-of-range`, for a constant preset below 0 in `time_drum()` and `time_event_drum()`.
-  - `on_delay()`, `off_delay()`, `count_up()` and `count_down()`:
-    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`, for a Done bit, an Acc or a preset in a bank that CLICK refuses.
-    - `CLK_TIMER_PAIR_MISMATCH` -> `timer-pair-mismatch`, for a Done bit and an Acc with different numbers, such as T5 with TD7.
-    - `CLK_TIMER_PRESET_OVERFLOW` -> `constant-out-of-range`, for an `on_delay()` or `off_delay()` preset above 32767.
-  - `out()`, `latch()` and `reset()`:
-    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`.
-    - `CLK_BANK_NOT_WRITABLE` -> `not-writable`.
-    - `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y` -> `immediate-coil-not-y`.
-  - `toggle()`, `debounce()`, `flasher()` and `timed()`:
-    - `CLK_BANK_WRONG_ROLE` -> `bank-not-allowed`, for a target, a timer or a Done bit in a wrong bank.
-    - `CLK_BANK_NOT_WRITABLE` -> `not-writable`, for a target that CLICK cannot write.
-    - `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y` -> `immediate-coil-not-y`, for an `immediate()` target outside Y.
-    - `CLK_OUT_UNIT_UNSUPPORTED` -> `coil-time-unit`, for a unit that the coil does not take.
-    - `CLK_TIMER_PRESET_TOO_LOW` or `CLK_TIMER_PRESET_OVERFLOW` -> `constant-out-of-range`, for a constant preset that CLICK's Out dialog refuses.
-    - `debounce()`, `flasher()` and `timed()` still report `CLK_TIMER_PAIR_MISMATCH`.
-  - An `immediate()` coil range: `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS` -> `CLK_COPY_RANGE_NOT_CONSECUTIVE`.
-  - Contacts and comparisons:
-    - `CLK_IMMEDIATE_CONTACT_MUST_BE_X` -> `immediate-contact-not-x`.
-    - `CLK_TEXT_ORDER_COMPARE` -> `text-order-compare`.
-    - `CLK_COMPARE_HEX_MIX` -> `compare-mixed-types`.
-    - `CLK_PTR_CONTEXT_ONLY_COPY` -> `pointer-outside-copy`, for a pointer in a comparison.
-  - `math()` and `randint()`:
-    - `CLK_MATH_BIT_OPERAND` or `CLK_MATH_BIT_RANGE_AGGREGATE` -> `math-operand-bank`, for a bit outside `.sum()`.
-    - `CLK_MATH_MODE_MIXED` -> `math-operand-bank` for a `Word` tag in a formula with other tags, or `bank-not-allowed` for a DH or YD destination of a formula without `Word` tags.
-    - `CLK_MATH_DEST_BANK` -> `bank-not-allowed`.
-    - `CLK_BANK_NOT_WRITABLE` -> `not-writable`, for a destination in a read-only SD.
-    - `CLK_MATH_FUNC_MODE_MISMATCH` -> `math-function-mode`.
-    - `CLK_MATH_NESTING_DEPTH` -> `math-nesting-depth`.
-    - `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` -> `median-range-too-large`.
-    - `CLK_MATH_SUM_BANK_NOT_AVAILABLE` -> `sum-bank-unavailable`.
-    - `CLK_MATH_ARG_NOT_PLAIN` -> `math-arg-expression`.
-    - `CLK_MATH_WIDE_CONSTANT` -> `math-constant-out-of-range`, or `math-constant-kind` for a fraction in a hex Math.
-    - `CLK_RAND_BOUND_TYPE` -> `random-bound-type`.
-    - `CLK_RAND_EQUAL_BOUNDS` -> `random-equal-bounds`.
 
-  Pass the new code to `allow=`. `allow=` now raises `ValueError` for a name that validation never reports, and names the codes that replace a removed one. No call reports `CLK_BANK_NOT_WRITABLE` or `CLK_BANK_WRONG_ROLE` now. `allow=` raises for both. For the calls above, `allow=["CLK_PTR_CONTEXT_ONLY_COPY"]` and `allow=["CLK_PTR_POINTER_MUST_BE_DS"]` are still accepted but no longer let the finding through. `allow=["CLK_TIMER_PAIR_MISMATCH"]` no longer lets the finding through for `on_delay()`, `off_delay()`, `count_up()` and `count_down()`.
-- CLICK validation and the export now refuse a `blockcopy()`, `fill()`, pack or unpack range that is not consecutive addresses in one bank, such as `y.select(1, 21)`, which skips Y017..Y020. They also refuse a range with `.reverse()` (the export wrote either one as a list, which CLICK cannot load).
+#### CLICK findings and codes
+
+- A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. Most of the export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion). `str()` of a `ClickFinding` returns the same text (it returned `ClickFinding(code=..., ...)`).
+  If a test or a warnings filter matches the text of a finding, an export error or a warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
+- CLICK validation now reports laddercodec's code for most of what CLICK refuses, such as `bank-not-allowed`. The table below gives the code that replaces each old one. `pyrung.click.validation` no longer exports 30 `CLK_` constants, and an import of one raises `ImportError`.
+  Pass the new code to `allow=`. `pyrung_to_ladder()` now raises `ValueError` when `allow=` names a code that no check reports. The message names the codes that replace a removed one. `allow=` still accepts `CLK_PTR_CONTEXT_ONLY_COPY`, `CLK_PTR_POINTER_MUST_BE_DS` and `CLK_TIMER_PAIR_MISMATCH`, but they no longer let the findings in the table through.
+- Warn mode now reports `CLK_COPY_WIDE_CONSTANT`, `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS` as warnings (they were hints). The export refuses these faults even when you allow the code.
+  If a test counts the hints of a warn-mode report, count its warnings as well.
+
+| Instruction | Old code | New code |
+|---|---|---|
+| `copy()`, `blockcopy()`, `fill()`, pack and unpack | `CLK_COPY_BANK_INCOMPATIBLE` | `copy-bank-incompatible` or `bank-not-allowed` |
+| | `CLK_COPY_CONSTANT_INTO_BIT` | `constant-into-bit` or `bank-not-allowed` |
+| | `CLK_COPY_CONVERTER_INCOMPATIBLE` | `copy-converter-bank`, `copy-txt-needs-convert` or `option-not-offered` |
+| | `CLK_PACK_TEXT_BANK_INCOMPATIBLE` | `pack-kind-mismatch` or `copy-bank-incompatible` |
+| | `CLK_BANK_NOT_WRITABLE` | `not-writable` or `bank-not-allowed` |
+| | `CLK_BANK_UNRESOLVED`, for a pointer into SD as the destination | `pointer-bank-not-allowed` |
+| | `CLK_PTR_POINTER_MUST_BE_DS` | `pointer-not-ds` |
+| | `CLK_PTR_CONTEXT_ONLY_COPY` | `pointer-outside-copy` |
+| | `CLK_TEXT_PAST_BANK`, for a text constant that runs past TXT1000 | `text-past-bank` |
+| `forloop()` | `CLK_FORLOOP_COUNT_BANK` | `for-count-bank` |
+| | `CLK_PTR_CONTEXT_ONLY_COPY`, for a pointer count | `pointer-outside-copy` |
+| `search()` | `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS` or `CLK_BANK_NOT_WRITABLE`, for a range, a result or a `found` flag in a bank that CLICK refuses | `bank-not-allowed` |
+| | `CLK_PTR_CONTEXT_ONLY_COPY`, for a pointer value | `pointer-outside-copy` |
+| `send()` and `receive()` | `CLK_BANK_WRONG_ROLE`, for a status bit, an exception response or a destination in a bank that CLICK refuses | `bank-not-allowed` |
+| | `CLK_BANK_WRONG_ROLE`, for a device id tag outside DS | `invalid-modbus-target` |
+| `shift()` | `CLK_BANK_NOT_WRITABLE`, for a range outside C | `bank-not-allowed` |
+| `event_drum()`, `time_drum()` and `time_event_drum()` | `CLK_BANK_WRONG_ROLE` or `CLK_BANK_NOT_WRITABLE`, for an output, completion flag, current step, accumulator, jump step or register preset in a bank that CLICK refuses | `bank-not-allowed` |
+| | `CLK_BANK_WRONG_ROLE`, for an event that compares a register, such as `DS5 > 3` | `not-an-address` |
+| | `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`, for a constant jump step such as `.jump(Found, step=2)` | `not-an-address` |
+| | `CLK_TIMER_PRESET_TOO_LOW`, for a constant preset below 0 in `time_drum()` and `time_event_drum()` | `constant-out-of-range` |
+| `on_delay()`, `off_delay()`, `count_up()` and `count_down()` | `CLK_BANK_WRONG_ROLE`, for a Done bit, an Acc or a preset in a bank that CLICK refuses | `bank-not-allowed` |
+| | `CLK_TIMER_PAIR_MISMATCH`, for a Done bit and an Acc with different numbers, such as T5 with TD7 | `timer-pair-mismatch` |
+| | `CLK_TIMER_PRESET_OVERFLOW`, for an `on_delay()` or `off_delay()` preset above 32767 | `constant-out-of-range` |
+| `out()`, `latch()` and `reset()` | `CLK_BANK_WRONG_ROLE` | `bank-not-allowed` |
+| | `CLK_BANK_NOT_WRITABLE` | `not-writable` |
+| | `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y` | `immediate-coil-not-y` |
+| | `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`, for an `immediate()` coil range | `CLK_COPY_RANGE_NOT_CONSECUTIVE` |
+| `toggle()`, `debounce()`, `flasher()` and `timed()` | `CLK_BANK_WRONG_ROLE`, for a target, a timer or a Done bit in a wrong bank | `bank-not-allowed` |
+| | `CLK_BANK_NOT_WRITABLE`, for a target that CLICK cannot write | `not-writable` |
+| | `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`, for an `immediate()` target outside Y | `immediate-coil-not-y` |
+| | `CLK_OUT_UNIT_UNSUPPORTED`, for a unit that the coil does not take | `coil-time-unit` |
+| | `CLK_TIMER_PRESET_TOO_LOW` or `CLK_TIMER_PRESET_OVERFLOW`, for a constant preset that CLICK's Out dialog refuses | `constant-out-of-range` |
+| Contacts and comparisons | `CLK_IMMEDIATE_CONTACT_MUST_BE_X` | `immediate-contact-not-x` |
+| | `CLK_TEXT_ORDER_COMPARE` | `text-order-compare` |
+| | `CLK_COMPARE_HEX_MIX` | `compare-mixed-types` |
+| | `CLK_PTR_CONTEXT_ONLY_COPY`, for a pointer in a comparison | `pointer-outside-copy` |
+| `math()` and `randint()` | `CLK_MATH_BIT_OPERAND` or `CLK_MATH_BIT_RANGE_AGGREGATE`, for a bit outside `.sum()` | `math-operand-bank` |
+| | `CLK_MATH_MODE_MIXED`, for a `Word` tag in a formula with other tags | `math-operand-bank` |
+| | `CLK_MATH_MODE_MIXED`, for a DH or YD destination of a formula without `Word` tags | `bank-not-allowed` |
+| | `CLK_MATH_DEST_BANK` | `bank-not-allowed` |
+| | `CLK_BANK_NOT_WRITABLE`, for a destination in a read-only SD | `not-writable` |
+| | `CLK_MATH_FUNC_MODE_MISMATCH` | `math-function-mode` |
+| | `CLK_MATH_NESTING_DEPTH` | `math-nesting-depth` |
+| | `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` | `median-range-too-large` |
+| | `CLK_MATH_SUM_BANK_NOT_AVAILABLE` | `sum-bank-unavailable` |
+| | `CLK_MATH_ARG_NOT_PLAIN` | `math-arg-expression` |
+| | `CLK_MATH_WIDE_CONSTANT` | `math-constant-out-of-range`, or `math-constant-kind` for a fraction in a hex Math |
+| | `CLK_RAND_BOUND_TYPE` | `random-bound-type` |
+| | `CLK_RAND_EQUAL_BOUNDS` | `random-equal-bounds` |
+
+Validation still reports `CLK_TIMER_PAIR_MISMATCH` for `debounce()`, `flasher()` and `timed()`. It still reports `CLK_BANK_UNRESOLVED` for a tag that has no CLICK address. It still reports pyrung's own pointer codes in these cases:
+
+- `CLK_PTR_CONTEXT_ONLY_COPY` for a pointer outside `copy()` whose index tag has no CLICK address.
+- `CLK_PTR_DS_UNVERIFIED` for a pointer in `copy()` whose index tag has no CLICK address.
+- `CLK_PTR_POINTER_MUST_BE_DS` for a pointer whose index tag is not a DS, in a `copy()` that has a tag with no CLICK address.
+
+#### Forms that CLICK's editor rejects
+
+CLICK validation and the export now refuse these forms. 0.17.0 exported them, and CLICK's editor rejects them. After each form is what to write.
+
+- **Ranges.** CLICK validation and the export refuse a range that is not consecutive ascending addresses in one bank. The rule covers `blockcopy()`, `fill()`, the pack and unpack calls, `shift()`, `search()`, `send()`, `receive()` and coil ranges. `y.select(1, 21)` is refused, because Y017..Y020 do not exist. A range with `.reverse()` is refused too. 0.17.0 exported either one as a list, such as `[Y015,Y016,Y021]`, which CLICK cannot load. The export refuses such a range even with `allow=["CLK_COPY_RANGE_NOT_CONSECUTIVE"]`.
   Map the tags to consecutive addresses, or write one call for each run of consecutive addresses. Drop `.reverse()`.
-- The CLICK export now refuses a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` in `math()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`, even with `allow=`. CLICK validation now also reports an X or Y range with a gap, such as tags at X001 and X003 (the export wrote `SUM ( X001 : X003 )`, and CLICK also read X002).
-  Map the tags to consecutive addresses in one bank. Drop `.reverse()`.
-- CLICK validation now refuses these forms, which the export wrote and CLICK's editor rejects:
+- **`copy()`, `blockcopy()`, `fill()`, pack and unpack:**
   - A `blockcopy()` of one register, such as `blockcopy(ds.select(1, 1), ds.select(5, 5))`. Use `copy()`.
   - A `pack_bits()` or `unpack_to_bits()` of one bit, such as `pack_bits(c.select(1, 1), ds[1])`. Use a range of two or more bits.
-  - Text into a number register, such as `copy("AB", ds[1])`. Copy text into TXT.
+  - A `pack_text()` of one TXT, such as `pack_text(txt.select(1, 1), ds[1])`. Use `copy(txt[1], ds[1], convert=to_value)`.
   - A `blockcopy()` of TXT into DF, such as `blockcopy(txt.select(1, 3), df.select(1, 3))`. Copy each TXT into its DF with `copy()`.
   - A `fill()` into TXT of more than one character, such as `fill("AB", txt.select(2, 3))` or `fill(123, txt.select(1, 3))`. CLICK refuses the value, or saves a number in place of the text. Fill one character.
+  - A `fill()` into TXT of a character outside printable ASCII, such as `fill('é', txt.select(1, 2))`. Fill a character from space to `~`.
   - A `copy()` of text into TXT with `convert=to_text()` or `convert=to_binary`, such as `copy("AB", txt[1], convert=to_text())`. Drop the converter.
   - A `copy()` of `True` or `False` into TXT, such as `copy(True, txt[1])`. Copy the text or the number that you want the TXT to hold.
-  - A pointer into X, Y or T, such as `copy(x[ds[1]], c[5])` or `copy(c[1], y[ds[1]])`. CLICK's pointer does not reach these banks. Point into a bank that it reaches, such as C or DS.
-  - A pack or unpack of more bits than the register holds, such as `pack_bits(c.select(1, 33), dd[1])`. A DS or DH holds 16 bits, and a DD or DF holds 32.
+  - A pointer into a bank that CLICK's pointer does not reach, such as `copy(x[ds[1]], c[5])`, `copy(c[1], y[ds[1]])` or `copy(t[ds[1]], c[5])`. Validation reports `pointer-bank-not-allowed`. Point into a bank that CLICK's pointer reaches, such as C or DS.
   - `pack_bits()` of X, Y, T, CT or SC into DS, DD or DF, and `unpack_to_bits()` of DS, DD or DF into Y. Pack into a DH, or unpack from one.
+  - A `pack_words()` of DH into a DF, such as `pack_words(dh.select(1, 2), df[1])`. Pack into a DD.
   - A constant outside its register's range, such as `copy(99999999999, dd[1])`. Use a constant that fits.
-  - A `blockcopy()` into X or Y that crosses a 16-point slot, such as `blockcopy(c.select(1, 20), y.select(1, 20))`. Split it at the end of the slot, Y016. 0.17.0 exported this example into Y001..Y016, which is not what the program does. Export such a program again after you split it.
-- CLICK validation and the export now refuse these `search()` forms, which CLICK's editor rejects (they exported them):
+  - A text constant copied into a number register, such as `copy("12", ds[1])`. pyrung stores 12, but CLICK's editor refuses the form. Write the number without quotes: `copy(12, ds[1])`.
+- **`search()`:**
   - A `found` flag in Y, such as `found=y[2]`. Map it to a C bit.
-  - A value that does not suit the range, such as `ds.select(1, 10) == dh[30]`. The `search()` docs list the values that each range takes.
+  - A value that does not suit the range, such as `ds.select(1, 10) == dh[30]`. The [`search()` docs](https://pyrung.com/pyrung/instructions/drum-shift-search/) list the values that each range takes.
   - `>`, `>=`, `<` or `<=` on a TXT range. Use `==` or `!=`.
   - A range of one address, such as `ds.select(5, 5)`. Search two or more addresses.
   - A constant outside its range, such as `2147483648` or text of more than 128 characters. Use a constant that fits.
-- CLICK validation and the export now refuse these `send()` and `receive()` forms, which CLICK's editor rejects (they exported them):
+- **`send()` and `receive()`:**
   - A `send()` source or `receive()` destination in a bank that does not pair with the remote start, such as `source=x[5]` with `remote_start="DS1"`. Use a remote start in the matching bank, such as `"C1"`.
   - A remote start in SD, such as `send(remote_start="SD1", ...)`. Send to another bank.
   - A `send()` of TXT that starts at an even address, such as `source=txt[2]`. Start at an odd TXT address, such as `txt[1]`.
+  - A `send()` or `receive()` of an odd number of TXT characters, three or more, such as `txt.select(1, 3)`. Pass an even number, such as `txt.select(1, 4)`. A `receive()` of one TXT is refused too, but a `send()` of one TXT still exports.
   - More registers than one request holds, such as `source=ds.select(1, 128)`. Split the transfer.
   - `word_swap=True` for a form that has no word swap, such as one DS register. Drop `word_swap`.
-  - A source or destination range that is not consecutive addresses in one bank. Map the tags to consecutive addresses.
+  - The same bit as two status flags, such as `sending=c[1], success=c[1]`. Give each flag a bit of its own.
+  - A `receive()` into SD, such as `dest=sd[1]`. Receive into a DS.
   - An IP address that is not four numbers from 0 to 255, such as `"999.1.1.1"`. Write a valid address.
-- The CLICK export now refuses a `send()` or `receive()` whose target is only a name, such as `target="plc"`. CLICK needs the address of the other device (0.17.0 exported `target="plc"`, which CLICK cannot load).
-  Pass a `ModbusTcpTarget` or a `ModbusRtuTarget` as the target.
-- CLICK validation and the export now refuse these `shift()` forms, which CLICK's editor rejects (they exported them):
+- **`shift()`:**
   - A range in Y, such as `y.select(1, 8)`. Shift over C bits.
   - A range of one address, such as `c.select(2, 2)`. Use two or more bits.
-  - A range that is not one run of addresses, such as a block mapped to C1, C5 and C9 or to C1, Y2 and C3. Map the block to consecutive C addresses. Validation reports `CLK_COPY_RANGE_NOT_CONSECUTIVE`.
-- CLICK validation and the export now refuse these drum forms, which CLICK's editor rejects (they exported them):
+- **Drums:**
   - A constant preset above 32767, such as `presets=[40000]`. Use a preset from 0 to 32767.
   - A register preset in a bank other than DS, such as `presets=[dd[7]]`. Copy it into a DS first.
   - An event that is not a single bit, such as `~C5`, `rise(C5)` or `Or(C5, C6)`. Copy the condition into a C bit, and use that bit as the event.
   - An output that is also the completion flag, such as `outputs=[y[1], c[9]], completion_flag=c[9]`. Use a different bit for the flag.
-- `pyrung.click.validation` no longer exports 28 `CLK_` constants. An import of one raises `ImportError`.
-  - The checks of these 28 are gone, so use the new code from the list above: `CLK_COPY_BANK_INCOMPATIBLE`, `CLK_COPY_CONSTANT_INTO_BIT`, `CLK_COPY_CONVERTER_INCOMPATIBLE`, `CLK_PACK_TEXT_BANK_INCOMPATIBLE`, `CLK_FORLOOP_COUNT_BANK`, `CLK_SEARCH_RANGE_BANK`, `CLK_SEARCH_RESULT_NOT_DS`, `CLK_DRUM_JUMP_STEP_TAG_REQUIRED`, `CLK_OUT_UNIT_UNSUPPORTED`, `CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y`, `CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS`, `CLK_TIMER_PRESET_OVERFLOW`, `CLK_TIMER_PRESET_TOO_LOW`, `CLK_TEXT_ORDER_COMPARE`, `CLK_COMPARE_HEX_MIX`, `CLK_IMMEDIATE_CONTACT_MUST_BE_X`, `CLK_MATH_MODE_MIXED`, `CLK_MATH_FUNC_MODE_MISMATCH`, `CLK_MATH_NESTING_DEPTH`, `CLK_MATH_MEDIAN_RANGE_TOO_LARGE`, `CLK_MATH_BIT_RANGE_AGGREGATE`, `CLK_MATH_SUM_BANK_NOT_AVAILABLE`, `CLK_MATH_BIT_OPERAND`, `CLK_MATH_DEST_BANK`, `CLK_MATH_ARG_NOT_PLAIN`, `CLK_MATH_WIDE_CONSTANT`, `CLK_RAND_BOUND_TYPE` and `CLK_RAND_EQUAL_BOUNDS`.
-- CLICK validation and the export now refuse these contact and comparison forms, which CLICK's editor rejects (they exported them):
+- **Timers and counters:**
+  - A negative constant preset on `on_delay()` or `off_delay()`, such as `preset=-1`. Use a preset of 0 or more.
+  - A constant preset on `count_up()` or `count_down()` that does not fit 32 bits, such as `preset=2**40`. Use a preset from -2147483648 to 2147483647.
+- **Coils:**
+  - A coil range of one address, such as `out(c.select(1, 1))`. Write `out(c[1])`.
+- **Contacts and comparisons:**
   - A comparison of a bit, such as `c[1] == True`, `c[1] == 1` or `c[1] == c[2]`. Use a contact, such as `c[1]` or `~c[1]`.
   - An edge contact on a register, such as `rise(ds[1])`. Use a bit.
   - A text constant of more than 128 characters in a comparison. Use a shorter text.
   - A text compare with `>`, `>=`, `<` or `<=` in an instruction's condition, such as `.reset(txt[1] > txt[2])`. Use `==` or `!=`.
-- CLICK validation now reports `CLK_BANK_UNRESOLVED` for a contact or comparison on a tag with no CLICK address (validation passed it, and the export refused it).
-  Map the tag to a CLICK address.
-- The CLICK export now refuses a `fill()` text that holds a quote among other characters, such as `fill('a"b', txt.select(1, 4))` (it wrote `"a""b"`).
-  Write the text without the quote.
-- CLICK validation and the export now refuse a comparison of text with a number, such as `txt[1] == 5`, `ds[1] == 'A'` or `txt[1] == ds[1]`. CLICK's editor refuses it with OBJ-007 (0.17.0 exported it). Validation reports `compare-mixed-types`.
-  Compare text with text. To compare a character's code, copy the character into an Int with `convert=to_ascii` and compare that.
-- Warn mode now reports `CLK_COPY_WIDE_CONSTANT`, `CLK_MATH_RANGE_NOT_CONTIGUOUS` and `CLK_MATH_RANGE_MIXED_BANKS` as warnings (they were hints). The export refuses these faults even when you allow the code.
-  If a test counts the hints of a warn-mode report, count its warnings as well.
-- CLICK validation and the export now refuse these timer and counter forms, which CLICK's editor rejects (they exported them):
-  - A negative constant preset on `on_delay()` or `off_delay()`, such as `preset=-1`. Use a preset of 0 or more.
-  - A constant preset on `count_up()` or `count_down()` that does not fit 32 bits, such as `preset=2**40`. Use a preset from -2147483648 to 2147483647.
-- CLICK validation and the export now refuse a coil range that is not consecutive ascending addresses in one bank, such as `out(c.select(1, 3).reverse())` or `out(y.select(15, 21))`, which skips Y017..Y020. 0.17.0 exported either one as a list, which CLICK cannot load. The export refuses such a range even with `allow=["CLK_COPY_RANGE_NOT_CONSECUTIVE"]`.
-  Map the tags to consecutive addresses. Drop `.reverse()`.
-- CLICK validation and the export now refuse a coil range of one address, such as `out(c.select(1, 1))`, which CLICK's editor rejects (they exported it).
-  Write `out(c[1])`.
-- CLICK validation and the export now refuse these `math()` forms, which CLICK's editor rejects (they exported them):
+  - A comparison of text with a number, such as `txt[1] == 5`, `ds[1] == 'A'` or `txt[1] == ds[1]`. Validation reports `compare-mixed-types`. Compare text with text. To compare a character's code, copy the character into an Int with `convert=to_ascii` and compare that.
+- **`math()`:**
   - A TXT tag in the formula, such as `math(txt[5], ds[1])` or `math(txt.select(1, 8).max(), ds[1])`. Copy the text into a number register first.
   - One tag as both bounds of `randint()`, such as `randint(ds[1], ds[1])`. Use two different bounds.
   - A formula longer than CLICK's Math stores (`math-formula-too-long`). Split it into `math()` steps that store each part in a tag.
   - A text constant in the formula, such as `math('A' + ds[1], ds[2])`. Write the number, such as 65 for `'A'`.
-- CLICK validation now reports `CLK_BANK_UNRESOLVED` for a `math()` tag with no CLICK address. 0.17.0 exported an element or a `.sum()` of an unmapped block by its tag names, such as `Bk2 + 1`. CLICK cannot load that.
+  - A hex constant with a digit before an E, such as `0x1E` (`1Eh`). CLICK reads `1Eh` as 1 followed by `Eh`. Validation reports `math-invalid-token`. Copy the value into a DH and use that DH in the formula.
+  - A `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` whose tags are not consecutive addresses in one bank, or that uses `.reverse()`. The export refuses it even with `allow=`. Map the tags to consecutive addresses in one bank. Drop `.reverse()`.
+
+#### Other CLICK changes
+
+- CLICK validation now reports `CLK_BANK_UNRESOLVED` for a contact, a comparison or a `math()` tag that has no CLICK address. 0.17.0's validation passed them. Its export refused the contact and the comparison. It wrote the `math()` tag by its name, such as `Bk2 + 1`, and CLICK cannot load that.
   Map the tag to a CLICK address.
+- The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, and CLICK's editor never saves a plain Copy between TXT and a number).
+  Export the program again before you paste it into CLICK.
+- The CLICK export now refuses `fill()` of a number into one TXT, such as `fill(5, txt.select(1, 1))`. "Wrong answers in 0.17.0" under Fixes says why.
+  Write `copy(5, txt[1])`.
+- The CLICK export now refuses a `fill()` text that holds a quote among other characters, such as `fill('a"b', txt.select(1, 4))` (it wrote `"a""b"`).
+  Write the text without the quote.
+- The CLICK export now refuses a `send()` or `receive()` whose target is only a name, such as `target="plc"`. CLICK needs the address of the other device (0.17.0 exported `target="plc"`, which CLICK cannot load).
+  Pass a `ModbusTcpTarget` or a `ModbusRtuTarget` as the target.
+- `to_nickname_file()` now writes the nickname CSV in cp1252, the encoding that CLICK reads (it wrote UTF-8). CLICK now imports a nickname such as `Température` as typed. `ladder_to_pyrung_project(output_dir=...)` writes its `nicknames.csv` in cp1252 too. A nickname, comment or initial value with a character that cp1252 lacks, such as `温度` or an emoji, now makes `to_nickname_file()` and `ladder_to_pyrung_project(nickname_csv=...)` raise `ValueError`. The message names the address, such as `DS1`.
+  Rename the tag, or change its comment or initial value, to characters that CLICK can show.
 
 ### Fixes
 
-- `history.at()` and `fork_from()` now return an older scan of a program with one of these forms (they raised `TypeError` or `NameError` once the scan had left the recent-state cache):
+#### Wrong answers in 0.17.0
+
+- `run_for()`, `run_until()`, `history.at()`, `fork_from()` and the generated code.py now give the result that `step()` gives for these forms:
+  - `copy()` with `convert=to_text()` or `convert=to_binary` into a register that is not a TXT sets the out-of-range flag and writes nothing. They wrote one digit into each register from the target on, with no flag.
+  - A pack, an unpack or a `blockcopy()` with a pointer outside its bank sets the address-error flag only when `step()` sets it. `run_for()` could set the flag when `step()` did not, and the code.py could raise `ValueError`.
+- A constant that you `copy()` or `fill()` into a DH or YD now stores its value on a CLICK. `copy(14, dh[1])` exports as `copy(14,DH1)`. 0.17.0 exported `copy(Eh,DH1)`, which a CLICK reads as a Real and stores as 0. Any constant whose hex form holds an E was affected, such as 30 (`1Eh`).
+  Export the program again.
+- The CLICK export no longer writes a `.sum()`, `.max()`, `.min()`, `.median()` or `.mean()` over tags that skip addresses as one CLICK range. For tags at X001 and X003, 0.17.0 wrote `SUM ( X001 : X003 )`, and CLICK also read X002. The export now refuses such a range (see `math()` under Behaviour changes).
+- The CLICK export now refuses `fill()` of a number into one TXT, such as `fill(5, txt.select(1, 1))`. 0.17.0 exported `copy(5,TXT1)`, and a CLICK stores the digit "5" for that, not the number 5.
+  Write `copy(5, txt[1])`.
+- The CLICK export now writes a quote in the text of a `copy()`, a `search()` or a comparison as you typed it. 0.17.0 exported `copy('a"b', txt[1])` as `copy("a""b",TXT1)`, and a CLICK stores `a""b` for that. `txt[1] == 'a"b'` now exports as `TXT1=="a"b"`. A text of one quote, such as `copy('"', txt[1])`, exports as the ASCII code `$22` (it exported `""""`).
+  Export the program again.
+- `copy()` of a number constant into a TXT now stores the digits, as a CLICK does. See "Results that change" under Behaviour changes.
+
+#### Calls that raised and now work
+
+- `history.at()` and `fork_from()` now return an older scan of a program with one of these forms (they raised `TypeError` or `NameError`):
   - Text or a TXT in `math()` into a DF, such as `math(txt[1] + txt[2], df[1])`.
   - A value that is not a tag, a pointer, a finite number or text, such as `copy(Timer[1], txt[1])` or `copy(float("inf"), ds[1])`.
-- `copy()` with `convert=to_text()` or `convert=to_binary` into a register that is not a TXT now sets the out-of-range flag and writes nothing in `run_for()`, `run_until()`, `history.at()` and the generated code.py, as stepping does (they wrote one digit into each register from the target on, with no flag).
-- `fill()` into two or more YD registers now exports, as a CLICK does (it was refused).
 - A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does (it raised `ValueError` on a letter or a blank TXT).
 - `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
 - `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
-- A constant that you `copy()` or `fill()` into a DH or YD now stores its value on a CLICK. `copy(14, dh[1])` exports as `copy(14,DH1)` (it exported `copy(Eh,DH1)`, and a CLICK stored 0).
+- `out()`, `latch()` and `reset()` over an SC range that CLICK's coils take, such as `sc.select(50, 60)`, now export (the export refused them).
 - `generate_circuitpy()` now writes an `IntEnum` member as its number. `copy(Mode.RUN, ds[1])` writes 1 (it raised `RuntimeError`).
-- `run_for()`, `history.at()` and the generated code.py now run a pack, an unpack or a `blockcopy()` with a pointer outside its bank the same way `step()` does. They set the address-error flag only when `step()` sets it (the code.py could raise `ValueError`, and `run_for()` could set the flag when `step()` did not).
-- The CLICK export now writes a text constant of one quote, such as `copy('"', txt[1])`, as the ASCII code `$22` (it wrote `""""`).
-- `copy()`, `search()` and a comparison now write a text that holds a quote as typed. CLICK's editor accepts a quote in the text of all three. `copy('a"b', txt[1])` exports as `copy("a"b",TXT1)`, and `txt[1] == 'a"b'` exports as `TXT1=="a"b"` (they exported `"a""b"`).
+- `TagMap.from_nickname_file()`, `ladder_to_pyrung(nickname_csv=...)` and `ladder_to_pyrung_project(nickname_csv=...)` now read a cp1252 nickname CSV, such as one that CLICK exports with `é` or `°` in it, or one that `to_nickname_file()` writes. With pyclickplc 0.10.0 or older, all three raised `ValueError` ("is not UTF-8 text"). With pyclickplc 0.11.0, `ladder_to_pyrung_project()` raised `UnicodeDecodeError`.
 - `ladder_to_pyrung()` now reads the text of a `copy()`, a `search()` and a comparison as typed. `copy("a""b",TXT1)` imports as `'a""b'` (it imported `'a"b'`), and `copy("a"b",TXT1)` imports as `'a"b'` (it raised `ValueError`).
 
 ## v0.17.0 (2026-11-18)

@@ -40,11 +40,11 @@ classifiers = [
 
 dependencies = [
     "pyrsistent>=0.20.0",
-    "pyclickplc>=0.9.1",
+    "pyclickplc>=0.11.0",
     "pymodbus>=3.12,<4",
     "executing>=2.2.0",
     "tomlkit>=0.13.3",
-    "laddercodec",
+    "laddercodec>=0.5.0",
 ]
 
 
@@ -99,13 +99,7 @@ packages = ["src/pyrung"]
 [tool.uv]
 required-version = ">=0.13.8"
 exclude-newer = "7 days"
-exclude-newer-package = { pyclickplc = "0 days", ty = "0 days" }
-
-[tool.uv.sources]
-# uv builds laddercodec from its main branch until pyrung and laddercodec release together.
-# A built wheel drops this source and names `laddercodec` with no version. Pin a released
-# version before you publish.
-laddercodec = { git = "https://github.com/ssweber/laddercodec", branch = "main" }
+exclude-newer-package = { laddercodec = "0 days", pyclickplc = "0 days", ty = "0 days" }
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
