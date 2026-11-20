@@ -103,6 +103,10 @@ class Family:
     # Return the argument that a laddercodec refusal marks, from ``place(refusal)``. None
     # reads the refusal's field through :func:`default_place`.
     place: Callable[[Any], Place | None] | None = None
+    # Return True if the export refuses a laddercodec refusal even when its code is allowed,
+    # from ``export_ignores_allow(code, instruction)``. Warn mode then reports the refusal
+    # as a warning. None means the export lets every refusal of the family through.
+    export_ignores_allow: Callable[[str, Any], bool] | None = None
 
     def operands_of(self, instruction: Any) -> tuple[Operand, ...]:
         """Return each argument of the call of *instruction* that holds tags."""
@@ -257,12 +261,8 @@ def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) 
         return exporter._render_operand(value, path=f"instruction.{attribute}", source=instruction)
     except _RenderError as exc:
         if isinstance(value, str) and '"' in value:
-            # The export refused the text. Fill and search hand laddercodec the quote doubled,
-            # which it refuses in its own words. A Copy hands it the text as typed, so
-            # laddercodec judges the rest of the text. A pyrung check in hardware.py reports a
-            # quote that the CSV can't hold.
-            if type(instruction).__name__ == "CopyInstruction":
-                return f'"{value}"'
+            # Only a Fill refuses a quote in text. It hands laddercodec the quote doubled,
+            # which laddercodec refuses in its own words.
             return '"{}"'.format(value.replace('"', '""'))
         raise Unbuildable from exc
 
@@ -559,9 +559,16 @@ def _refusal(
     message = f"CLICK refuses {call.text} at {location_text}. {text}"
     if refusal.click_id and refusal.click_id not in text:
         message += f" CLICK's error is {refusal.click_id}."
+    severity = _route_severity(code, mode)
+    if (
+        severity == "hint"
+        and family.export_ignores_allow is not None
+        and family.export_ignores_allow(code, instruction)
+    ):
+        severity = "warning"
     return _Refusal(
         code=code,
-        severity=_route_severity(code, mode),
+        severity=severity,
         message=message,
         location=location_text,
         frame=frame,

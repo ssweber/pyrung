@@ -815,7 +815,7 @@ def _quote_search(value):
 
 
 def test_a_quote_on_its_own_exports_as_its_character_code():
-    # No one has yet checked on a CLICK how search reads a quote. $22 is the quote.
+    # $22 is the code of the quote character.
     bundle = pyrung_to_ladder(*_quote_search('"'))
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
@@ -841,12 +841,20 @@ def test_a_quote_on_its_own_loads_from_the_csv(tmp_path: Path):
     assert "$22" in values
 
 
-def test_the_export_refuses_a_quote_among_other_characters():
-    # No one has yet checked on a CLICK how search reads a quote, so the export refuses a
-    # quote among other characters there, even when the finding is allowed.
+def test_a_search_writes_a_quote_among_other_characters_as_typed(tmp_path: Path):
+    from laddercodec import read_csv
+
     logic, mapping = _quote_search('sub"name')
-    with pytest.raises(LadderExportError, match="holds a quote among other characters"):
-        pyrung_to_ladder(logic, mapping, allow=["invalid-text-constant"])
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens[0] == 'search(TXT1..TXT4 == "sub"name",result=DS1,found=C1)'
+    bundle.write(tmp_path)
+    values = [
+        getattr(instruction, "value", None)
+        for loaded in read_csv(tmp_path / "main.csv")
+        for instruction in loaded.instructions
+    ]
+    assert values[0] == '"sub"name"'
 
 
 def test_tokens_include_explicit_defaults_and_oneshot():

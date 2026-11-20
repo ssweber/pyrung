@@ -19,10 +19,8 @@ _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
 from pyrung.click.codegen._syntax import (
     _csv_string_value,
     _string_literal,
-    _typed_copy_source,
 )
 from pyrung.click.codegen.constants import (
-    _COMPARE_RE,
     _CONDITION_WRAPPERS,
     _DROP_KWARGS,
     _FUNC_RE,
@@ -30,6 +28,7 @@ from pyrung.click.codegen.constants import (
     _OPERAND_PREFIXES,
     _PIN_NAMES,
     _RANGE_RE,
+    _split_compare,
 )
 from pyrung.click.codegen.models import (
     RungRole,
@@ -1083,12 +1082,10 @@ def _render_condition(
             return f"{func_name}({inner})"
 
     # Comparison: DS1==5, DS1!=DS2
-    cmp_match = _COMPARE_RE.match(token)
-    if cmp_match:
-        left_token = cmp_match.group(1)
-        right_token = cmp_match.group(3)
+    cmp_parts = _split_compare(token)
+    if cmp_parts:
+        left_token, op, right_token = cmp_parts
         left = _sub_operand(left_token, collection, nicknames, structured_map)
-        op = cmp_match.group(2)
         right = _render_choice_literal(
             right_token, left_token, collection, nicknames, structured_map
         )
@@ -1356,13 +1353,7 @@ def _render_af_token(
     if not args_str:
         return f"{py_func}()"
 
-    typed = _typed_copy_source(args_str) if func_name == "copy" else None
-    if typed is not None:
-        typed_text, rest = typed
-        args, kwargs = _parse_af_args(rest)
-        args = [f'"{typed_text}"', *args]
-    else:
-        args, kwargs = _parse_af_args(args_str)
+    args, kwargs = _parse_af_args(args_str)
 
     if func_name in {"copy", "blockcopy"} and args:
         for key, value in kwargs:
@@ -1398,19 +1389,12 @@ def _render_af_token(
 
     rendered_parts = []
     choice_source = None
-    if (
-        func_name == "copy"
-        and typed is None
-        and len(args) >= 2
-        and not any(k == "convert" for k, _ in kwargs)
-    ):
+    if func_name == "copy" and len(args) >= 2 and not any(k == "convert" for k, _ in kwargs):
         choice_source = _render_choice_literal(
             args[0], args[1], collection, nicknames, structured_map
         )
     for index, arg in enumerate(args):
-        if index == 0 and typed is not None:
-            rendered_parts.append(_string_literal(typed[0]))
-        elif index == 0 and choice_source is not None:
+        if index == 0 and choice_source is not None:
             rendered_parts.append(choice_source)
         else:
             rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))

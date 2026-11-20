@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import HEX_CONSTANT_BANKS
+from pyrung.click.codegen._syntax import _text_pair_splits
 from pyrung.click.tag_map._map import unmapped_tag_text
 from pyrung.click.validation.findings import (
     CLK_COPY_WIDE_CONSTANT,
@@ -343,6 +344,17 @@ class _TranslatorMixin:
                     path=f"{path}.right",
                     source=condition,
                 )
+            if text_pair_reads_two_ways(f"{left}{condition.symbol}{right}"):
+                # The export refuses it even when the finding is allowed, so the CSV always
+                # reads back.
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"invalid-text-constant: {left}{condition.symbol}{right} compares two "
+                        f"texts, and the CSV reads it as two different compares. {TEXT_PAIR_ADVICE}"
+                    ),
+                    source=condition,
+                )
             return f"{left}{condition.symbol}{right}"
 
         compare_op = _COMPARE_OPS.get(type(condition))
@@ -484,6 +496,13 @@ class _TranslatorMixin:
             source=source,
         )
 
+    @staticmethod
+    def _quote_as_typed(source: Any) -> bool:
+        """Return True if the instruction or condition *source* keeps a quote in text as typed."""
+        return type(source).__name__ in ("CopyInstruction", "SearchInstruction") or (
+            type(source) in _COMPARE_OPS or isinstance(source, ExprCompare)
+        )
+
     def _render_text(self, value: str, *, path: str, source: Any) -> str:
         """Return a text constant as CLICK spells it.  The blank character is ``$00``.
 
@@ -493,39 +512,26 @@ class _TranslatorMixin:
         NUL inside quotes would end the constant early.  pyrung's ``""`` is the
         blank too (a CHAR stores it as NUL), so it exports the same way.
 
-        CLICK keeps a Copy's text as typed and has no escape for a quote.  So a
-        ``copy()`` text with a quote exports between plain outer quotes.  No one has yet
-        checked on a CLICK how Fill, compare and search read a quote, so the export
-        refuses a quote among other characters there.  A quote on its own exports as
-        ``$22``.
+        CLICK's editor accepts a quote in the text of a Copy, a Search and a comparison, and
+        keeps it as typed with no escape. So a text with a quote exports between plain outer
+        quotes. Only Copy has been checked on a CLICK. No one has yet checked Search, a
+        comparison or Fill. The export refuses a quote among other characters in a Fill. A
+        quote on its own exports as ``$22``.
         """
         if value in ("", BLANK_CHAR):
             return BLANK_TEXT_CONSTANT
         if value == '"':
             return QUOTE_TEXT_CONSTANT
-        if '"' in value:
-            if type(source).__name__ != "CopyInstruction":
-                self._raise_issue(
-                    path=path,
-                    message=(
-                        f"Text constant {value!r} holds a quote among other characters, "
-                        "which the CLICK export can't write. Write the text without the "
-                        f"quote. A quote on its own exports as {QUOTE_TEXT_CONSTANT}."
-                    ),
-                    source=source,
-                )
-            if unreadable_copy_text(value):
-                # The export refuses it even when the finding is allowed, so the CSV
-                # always reads back.
-                self._raise_issue(
-                    path=path,
-                    message=(
-                        f"invalid-text-constant: copy() of the text {value!r} can't be "
-                        f"written to the CSV. {UNREADABLE_COPY_TEXT} Write the text "
-                        "without the quote."
-                    ),
-                    source=source,
-                )
+        if '"' in value and not self._quote_as_typed(source):
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"Text constant {value!r} holds a quote among other characters, "
+                    "which the CLICK export can't write. Write the text without the "
+                    f"quote. A quote on its own exports as {QUOTE_TEXT_CONSTANT}."
+                ),
+                source=source,
+            )
         if BLANK_CHAR in value:
             self._raise_issue(
                 path=path,
@@ -536,7 +542,7 @@ class _TranslatorMixin:
                 ),
                 source=source,
             )
-        return f'"{value}"' if '"' in value else _quote(value)
+        return text_constant_token(value)
 
     def _render_contact_token(self, value: Any, *, path: str, source: Any) -> str:
         return self._render_operand(
@@ -1034,30 +1040,22 @@ def click_real_literal(value: float) -> str | None:
     return f"{mantissa}E{'+' if exponent >= 0 else '-'}{abs(exponent):02d}"
 
 
-#: Why the CSV can't hold a copy() text that ``unreadable_copy_text()`` finds.
-UNREADABLE_COPY_TEXT = "A quote in the text ends it early when the CSV is read."
+#: What to do about a compare of two texts that the CSV reads two ways.
+TEXT_PAIR_ADVICE = "Compare a TXT register with the text instead."
 
 
-def unreadable_copy_text(value: Any) -> bool:
-    """Return True if *value* is a copy() source text that the CSV can't hold."""
-    if not isinstance(value, str) or '"' not in value or value == '"':
-        return False
-    return not _copy_text_reads_back(value)
+def text_pair_reads_two_ways(token: str) -> bool:
+    """Return True if the compare cell *token* reads as two compares of two quoted texts."""
+    return len(_text_pair_splits(token)) > 1
 
 
-def _copy_text_reads_back(value: str) -> bool:
-    """Return True if laddercodec reads ``copy("<value>",TXT1)`` back as the text *value*.
-
-    A Copy keeps a quote inside its text as typed.  A quote before a comma can then end
-    the text early when the CSV is read.  Validation reports laddercodec's other
-    refusals of the text, such as its length, so this check skips them.
-    """
-    from laddercodec import Copy
-    from laddercodec.csv.converter import reads_back
-    from laddercodec.operands.unchecked import unchecked
-
-    with unchecked():
-        return reads_back(Copy(f'"{value}"', "TXT1"))
+def text_constant_token(value: str) -> str:
+    """Return the text constant *value* as the export writes it into a Copy, Search or compare."""
+    if value in ("", BLANK_CHAR):
+        return BLANK_TEXT_CONSTANT
+    if value == '"':
+        return QUOTE_TEXT_CONSTANT
+    return f'"{value}"'
 
 
 def _quote(value: str) -> str:

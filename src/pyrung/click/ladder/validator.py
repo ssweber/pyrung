@@ -213,12 +213,21 @@ class _RoundTripValidationMixin:
         subroutine_name: str | None,
     ) -> None:
         """Fail loudly when emitted CSV rows lose rung semantics."""
-        actual_rungs = _analyze_rungs(_parse_rows([tuple(_HEADER), *rendered_rows]))
+        rows = [tuple(_HEADER), *rendered_rows]
+        actual_rungs = _analyze_rungs(_parse_rows(rows, typed_quotes=False))
+        # The importer rewrites a text that holds a quote before it analyzes the rows, so
+        # the check analyzes the rewritten rows.
+        imported = _parse_rows(rows)
+        imported_rungs = (
+            actual_rungs
+            if imported == _parse_rows(rows, typed_quotes=False)
+            else _analyze_rungs(imported)
+        )
         scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
 
         # The rows must also come back as the same logic through codegen.
         # ladder_to_pyrung renders the blocks that this check walks.
-        mismatch = emitted_logic_mismatch(actual_rungs)
+        mismatch = emitted_logic_mismatch(imported_rungs)
         if mismatch is not None:
             self._raise_issue(
                 path=scope_path,
