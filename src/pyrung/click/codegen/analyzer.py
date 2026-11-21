@@ -868,13 +868,15 @@ def _analyze_rungs(
                     raise ValueError(
                         f"{where(i)}the undecoded marker says stop={stop}, and a subroutine "
                         'can only return. Make the marker with stop="return", then read the '
-                        'program again. decode_program() and write_csv(..., stop="return") do this.'
+                        'program again. decode_program() and write_csv(..., stop="return") do this. '
+                        "write_csv() keeps the stop of a marker that it is given."
                     )
                 if not subroutine and stop not in (None, "end"):
                     raise ValueError(
                         f"{where(i)}the undecoded marker says stop={stop}, and the main "
                         'program can only end. Make the marker with stop="end", then read the '
-                        "program again. decode_program() and write_csv() do this."
+                        "program again. decode_program() and write_csv() do this. "
+                        "write_csv() keeps the stop of a marker that it is given."
                     )
             whole = analyze_one(i)
             source_outputs = whole.source_outputs

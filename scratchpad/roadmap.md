@@ -429,8 +429,10 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   - Do it only if a user's project hits it.
 - **What a program loses after an undecoded marker.** The rungs after the marker are in the generated source but
   not in `Program`. A breakpoint on one does not bind. `check()`, coverage and the DataView don't see them, so a
-  tag used only there drops out of ClickNick's address editor. A subroutine called only there shows as never
-  called. This is by design. Revisit it if ClickNick's views need those rungs. [nothing]
+  tag used only there drops out of ClickNick's address editor. A subroutine called only there is never called, and
+  `check()` says nothing about it. A `call()` to an undefined subroutine there no longer raises when the program is
+  built. The importer still refuses a missing subroutine file, so only hand-edited code gets there. This is by
+  design. Revisit it if ClickNick's views need those rungs. [nothing]
 - **A non-ASCII `fill()` into TXT doesn't export.** pyrung refuses `fill('é', txt.select(1, 2))` and prints
   laddercodec's hint, which says to write the character as its `$hh` code. No pyrung form takes that hint.
   `fill('$E9', ...)` is a three-character string, which raises at the scan. [nothing]
