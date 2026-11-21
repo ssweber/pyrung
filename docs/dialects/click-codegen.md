@@ -143,7 +143,11 @@ with rung():
     undecoded("unknown instruction (40 bytes)", rung=4, row=0, column=31, stop="end")
 ```
 
-The scan stops at `undecoded()`. In the main program the scan ends there (`stop="end"`). In a subroutine the subroutine returns there (`stop="return"`). The rungs after the marker never run, so the `Program` leaves them out. The debugger console names each marker and why it is there. `mapping.validate(logic)` reports each marker as `undecoded-rung`.
+`rung`, `row` and `column` count from 0, as laddercodec counts them. CLICK numbers its rungs from 1, so `rung=4` is CLICK rung 5.
+
+The scan stops at `undecoded()`. In the main program the scan ends there (`stop="end"`). In a subroutine the subroutine returns there (`stop="return"`). The debugger console names each marker and why it is there. `mapping.validate(logic)` reports each marker as `undecoded-rung`.
+
+pyrung leaves out the rungs after `undecoded()`. A breakpoint on one of them does not bind.
 
 The export to CLICK and the CircuitPython code refuse `undecoded()`. Write the rung's logic in its place, or remove the rung. Codegen refuses a marker inside a For loop.
 

@@ -15,7 +15,7 @@
 
 ### What's new
 
-- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode as `undecoded()`, a stop that says why (it raised `ValueError`). The scan stops at the marker, and the export to CLICK refuses it.
+- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode (it raised `ValueError`). The rung becomes `undecoded()`, which ends the scan there and says why. The export to CLICK refuses it.
 
 ### Fixes
 

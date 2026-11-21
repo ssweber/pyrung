@@ -87,14 +87,20 @@ class UndecodedInstruction(Instruction):
         return True
 
     def reason(self, at: str | None = None) -> str:
-        """Return why the marker is there, as a sentence that names the marker *at* a place."""
+        """Return why the marker is there, in two sentences.
+
+        The first names the rung as CLICK numbers it, from 1. The second names *at*, the
+        marker's place in pyrung, when it is given. The two numbers can differ, because the
+        importer splits a CLICK rung that holds several wires into several pyrung rungs.
+        """
         error = self.error.rstrip()
         if not error.endswith((".", "!", "?")):
             error += "."
-        where = f" at {at}" if at else ""
+        scope = "the main program" if self.stop == "end" else "its subroutine"
+        where = f" at {at} in pyrung" if at else ""
         return (
-            f"undecoded(){where} stands in for a CLICK rung that laddercodec could not "
-            f"decode: {error}"
+            f"laddercodec could not decode CLICK rung {self.rung + 1} of {scope}: {error} "
+            f"undecoded() stands in for that rung{where}."
         )
 
     def effect(self) -> str:

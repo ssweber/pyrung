@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,17 @@ from laddercodec.undecoded import marker_rung
 
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.circuitpy.codegen import compile_kernel
-from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder, undecoded
+from pyrung.click import (
+    ClickBlocks,
+    TagMap,
+    pyrung_to_ladder,
+    undecoded,
+    undecoded_notice,
+    undecoded_rungs,
+)
 from pyrung.click.codegen.api import ladder_to_pyrung, ladder_to_pyrung_project
 from pyrung.click.ladder.types import LadderExportError
-from pyrung.click.undecoded import UndecodedInstruction, undecoded_notice
+from pyrung.click.undecoded import UndecodedInstruction
 from pyrung.core import (
     PLC,
     Bool,
@@ -136,6 +144,54 @@ def test_the_import_refuses_a_marker_inside_a_for_loop(tmp_path: Path) -> None:
         ladder_to_pyrung(source)
 
 
+def _write_main(tmp_path: Path, rungs: list[Any]) -> Path:
+    source = tmp_path / "ladder"
+    source.mkdir()
+    write_csv(source / "main.csv", rungs)
+    return source
+
+
+def test_the_import_refuses_a_subroutine_marker_that_says_end(tmp_path: Path) -> None:
+    source = _write_project(tmp_path)
+    sub = _rungs(tmp_path, [("X004", "out(Y003)")])
+    # write_csv() writes stop=end unless it is told otherwise.
+    marker = marker_rung(Undecoded(_SUB_ERROR, 1, 2, 31, "end"))
+    write_csv(source / "subroutines" / "sub.csv", [sub[0], marker])
+    expected = 'Subroutine "Sub" (sub.csv), rung 2: the undecoded marker says stop=end'
+    with pytest.raises(ValueError, match=re.escape(expected)) as raised:
+        ladder_to_pyrung(source)
+    assert 'write_csv(..., stop="return")' in str(raised.value)
+
+
+def test_the_import_refuses_a_main_marker_that_says_return(tmp_path: Path) -> None:
+    main = _rungs(tmp_path, [("X001", "out(Y001)")])
+    marker = marker_rung(Undecoded(_MAIN_ERROR, 1, 0, 31, "return"))
+    source = _write_main(tmp_path, [main[0], marker])
+    expected = r"Main program \(main.csv\), rung 2: the undecoded marker says stop=return"
+    with pytest.raises(ValueError, match=expected):
+        ladder_to_pyrung(source)
+
+
+def test_the_import_refuses_a_next_whose_for_became_a_marker(tmp_path: Path) -> None:
+    rungs = _rungs(tmp_path, [("X001", "out(Y001)"), ("X002", "out(Y002)"), ("-", "next()")])
+    marker = marker_rung(Undecoded(_MAIN_ERROR, 1, 0, 31, "end"))
+    source = _write_main(tmp_path, [rungs[0], marker, rungs[1], rungs[2]])
+    expected = (
+        r"Main program \(main.csv\), rung 4: this next\(\) has no for\(\) above it\. "
+        r"laddercodec could not decode rung 2, and that rung may have held the for\(\)"
+    )
+    with pytest.raises(ValueError, match=expected):
+        ladder_to_pyrung(source)
+
+
+def test_the_import_refuses_a_next_with_no_for(tmp_path: Path) -> None:
+    rungs = _rungs(tmp_path, [("X001", "out(Y001)"), ("-", "next()")])
+    source = _write_main(tmp_path, rungs)
+    expected = r"Main program \(main.csv\), rung 2: this next\(\) has no for\(\) above it\. Add"
+    with pytest.raises(ValueError, match=expected):
+        ladder_to_pyrung(source)
+
+
 # ---- The stop -----------------------------------------------------------------------------
 
 
@@ -247,7 +303,8 @@ def _main_marker() -> tuple[Program, TagMap]:
         with rung(go):
             out(light)
         with rung():
-            undecoded(_MAIN_ERROR, rung=1, row=0, column=31, stop="end")
+            # laddercodec counts CLICK rungs from 0, so rung=4 is CLICK rung 5.
+            undecoded(_MAIN_ERROR, rung=4, row=0, column=31, stop="end")
     blocks = ClickBlocks()
     return logic, TagMap({go: blocks.x[1], light: blocks.y[1]})
 
@@ -264,7 +321,10 @@ def test_click_validation_reports_the_marker(mode, severity) -> None:
     assert len(findings) == 1
     finding = findings[0]
     assert finding.severity == severity
-    assert f"could not decode: {_MAIN_ERROR}." in finding.message
+    assert finding.message.startswith(
+        f"laddercodec could not decode CLICK rung 5 of the main program: {_MAIN_ERROR}. "
+        "undecoded() stands in for that rung at main.rung[2]"
+    )
     assert "Each scan ends at this rung" in finding.message
     assert "main.rung[2]" in finding.location
     assert finding.suggestion is not None and "CLICK cannot take undecoded()" in finding.suggestion
@@ -289,12 +349,15 @@ def test_circuitpython_refuses_a_marker() -> None:
 
 def test_the_notice_names_each_marker(imported) -> None:
     _, namespace = imported
-    assert undecoded_notice(namespace["logic"]).splitlines() == [
-        f"undecoded() at main rung 2 stands in for a CLICK rung that laddercodec could not "
-        f"decode: {_MAIN_ERROR}. Each scan ends at this rung, so no rung after it in main runs.",
-        f"undecoded() at subroutine 'Sub' rung 2 stands in for a CLICK rung that laddercodec "
-        f"could not decode: {_SUB_ERROR}. The subroutine returns at this rung, so no rung "
-        "after it runs.",
+    logic = namespace["logic"]
+    assert [(sub, index) for sub, index, _ in undecoded_rungs(logic)] == [(None, 1), ("Sub", 1)]
+    assert undecoded_notice(logic).splitlines() == [
+        f"laddercodec could not decode CLICK rung 2 of the main program: {_MAIN_ERROR}. "
+        "undecoded() stands in for that rung at main rung 2 in pyrung. Each scan ends at this "
+        "rung, so no rung after it in main runs.",
+        f"laddercodec could not decode CLICK rung 2 of its subroutine: {_SUB_ERROR}. "
+        "undecoded() stands in for that rung at subroutine 'Sub' rung 2 in pyrung. The "
+        "subroutine returns at this rung, so no rung after it runs.",
     ]
 
 
