@@ -861,20 +861,20 @@ def _analyze_rungs(
             if af0.startswith("undecoded("):
                 if first_marker is None:
                     first_marker = i
-                # write_csv() writes stop=end unless it is told otherwise, so a subroutine's
-                # CSV can hold a marker that pyrung's undecoded() would refuse in a subroutine.
+                # laddercodec's decode() always makes stop=end, so a subroutine's CSV can hold
+                # a marker that pyrung's undecoded() would refuse in a subroutine.
                 stop = _undecoded_stop(af0)
                 if subroutine and stop not in (None, "return"):
                     raise ValueError(
                         f"{where(i)}the undecoded marker says stop={stop}, and a subroutine "
-                        "can only return. Write the subroutine's CSV with "
-                        'write_csv(..., stop="return"), then read the program again.'
+                        'can only return. Make the marker with stop="return", then read the '
+                        'program again. decode_program() and write_csv(..., stop="return") do this.'
                     )
                 if not subroutine and stop not in (None, "end"):
                     raise ValueError(
                         f"{where(i)}the undecoded marker says stop={stop}, and the main "
-                        "program can only end. Write the main program's CSV with "
-                        'write_csv(..., stop="end"), then read the program again.'
+                        'program can only end. Make the marker with stop="end", then read the '
+                        "program again. decode_program() and write_csv() do this."
                     )
             whole = analyze_one(i)
             source_outputs = whole.source_outputs
