@@ -450,6 +450,13 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **A scan that raises during a free run leaves the client showing "running".** The continue worker's thread dies
+  with no last frame and no `stopped` event, so ClickNick's Simulator keeps showing RUN. Base 0.18.0 does the same.
+  The fix is for the worker's `finally` to queue a frame with `running` false, a `stopped` event and the exception.
+  The bob/stop-frame review found it (2026-11-21). [nothing]
+- **On the live socket, a new frame request merges into one already queued.** `_request_state_frame` (dap) keeps the
+  earlier place in the queue. If a Modbus write queued a frame and a live `step` then pauses the worker, the step's
+  frame goes out at the earlier place, and the worker's frame comes after it. [nothing]
 - **A launch can borrow another project's TagMap.** `_find_project_tags_module` (dap/handlers/lifecycle_launch.py)
   falls back to any top-level `tags` module in `sys.modules`. A program with no TagMap then takes the TagMap of a
   project that ran before it in the same process. CI showed it, because a test left `tags` behind. Use the fallback
