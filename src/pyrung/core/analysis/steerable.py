@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.instruction.operands import as_authored
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -45,9 +46,9 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
     for instr in ro._instructions:
-        target = getattr(instr, "target", None)
+        target = as_authored(getattr(instr, "target", None))
         if target is None:
-            target = getattr(instr, "dest", None)
+            target = as_authored(getattr(instr, "dest", None))
         if target is None:
             continue
         name = getattr(target, "name", None)
@@ -70,12 +71,12 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
         if isinstance(instr, LatchInstruction):
             return True
         if isinstance(instr, CopyInstruction):
-            src = instr.source
+            src = as_authored(instr.source)
             if hasattr(src, "name"):
                 return getattr(src, "default", None) if getattr(src, "readonly", False) else None
             return src if isinstance(src, (bool, int, float, str)) else None
         if isinstance(instr, FillInstruction):
-            val = instr.value
+            val = as_authored(instr.value)
             if hasattr(val, "name"):
                 return None
             return val if isinstance(val, (bool, int, float, str)) else None
@@ -111,7 +112,7 @@ def _is_bulk_fill_reset(ro: Any, tag: str) -> bool:
     for instr in ro._instructions:
         if not isinstance(instr, FillInstruction):
             continue
-        dest = getattr(instr, "dest", None)
+        dest = as_authored(getattr(instr, "dest", None))
         if dest is None or not hasattr(dest, "tags"):
             continue
         try:

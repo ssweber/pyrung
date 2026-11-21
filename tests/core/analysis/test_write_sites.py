@@ -114,7 +114,9 @@ def test_pdg_retains_dynamic_range_region_and_address_reads() -> None:
         {"WindowValues1", "WindowValues2", "WindowValues3", "WindowValues4"}
     )
     assert _writer_for_tag(logic.rungs[0], "WindowValues2") is None
-    assert instruction_write_targets(instr) == (instr.dest,)
+    # A range's == builds a comparison, so the test checks identity.
+    (target,) = instruction_write_targets(instr)
+    assert target is instr.dest.span
 
 
 def test_static_copy_fanout_is_shared_by_pdg_and_writer_lookup() -> None:

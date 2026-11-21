@@ -21,6 +21,7 @@ from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
+from pyrung.core.instruction.operands import ConstArg, Value, held
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import ImmediateRef, Tag, TagType
@@ -271,18 +272,19 @@ class _InstructionMixin:
         several characters, because it would fill several TXT. It also refuses a value
         that would need a Copy between text and a number, because that Copy converts.
         """
-        value = instruction.value
-        if isinstance(value, str) and len(value) > 1 and tag.type == TagType.CHAR:
+        value: Value = instruction.value
+        text = value.value if isinstance(value, ConstArg) else None
+        if isinstance(text, str) and len(text) > 1 and tag.type == TagType.CHAR:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
-                    f"constant-out-of-range: fill({value!r}, ...) writes one register, "
+                    f"constant-out-of-range: fill({text!r}, ...) writes one register, "
                     "which CLICK takes as a Copy. A Copy of several characters fills "
                     "several TXT. Fill one character, or use copy() into the TXT you mean."
                 ),
                 source=instruction,
             )
-        if _plain_text_converter(value, tag) is not None:
+        if _plain_text_converter(held(value), tag) is not None:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
@@ -294,7 +296,7 @@ class _InstructionMixin:
             )
         dest = self._render_operand(tag, path=f"{path}.dest", source=instruction)
         with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
-            source = self._render_operand(value, path=f"{path}.value", source=instruction)
+            source = self._render_operand(held(value), path=f"{path}.value", source=instruction)
         return self._fn("copy", source, dest, **oneshot_kw)
 
     def _range_text(
@@ -417,11 +419,15 @@ class _InstructionMixin:
         if instruction_type == "CopyInstruction":
             convert_kw = {}
             converter = _exported_converter(instruction)
-            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
+            # The export writes what the author passed, so an immediate() operand that
+            # CLICK refuses in a Copy is refused in the words that every instruction uses.
+            dest = self._render_operand(
+                held(instruction.dest), path=f"{path}.dest", source=instruction
+            )
             self._refuse_constant_text_past_txt(instruction, dest, path=f"{path}.dest")
             with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
                 copy_source = self._render_operand(
-                    instruction.source, path=f"{path}.source", source=instruction
+                    held(instruction.source), path=f"{path}.source", source=instruction
                 )
             if converter is not None:
                 convert_kw["convert"] = self._render_converter(
@@ -431,7 +437,7 @@ class _InstructionMixin:
         if instruction_type == "BlockCopyInstruction":
             convert_kw = {}
             block_source = self._render_run(
-                instruction.source, path=f"{path}.source", instruction=instruction
+                held(instruction.source), path=f"{path}.source", instruction=instruction
             )
             if instruction.convert is not None:
                 convert_kw["convert"] = self._render_converter(
@@ -440,7 +446,9 @@ class _InstructionMixin:
             return self._fn(
                 "blockcopy",
                 block_source,
-                self._render_run(instruction.dest, path=f"{path}.dest", instruction=instruction),
+                self._render_run(
+                    held(instruction.dest), path=f"{path}.dest", instruction=instruction
+                ),
                 **convert_kw,
                 **oneshot_kw,
             )
@@ -450,10 +458,12 @@ class _InstructionMixin:
                 return self._single_register_fill_token(
                     instruction, single, path=path, oneshot_kw=oneshot_kw
                 )
-            dest = self._render_run(instruction.dest, path=f"{path}.dest", instruction=instruction)
+            dest = self._render_run(
+                held(instruction.dest), path=f"{path}.dest", instruction=instruction
+            )
             with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
                 fill_value = self._render_operand(
-                    instruction.value, path=f"{path}.value", source=instruction
+                    held(instruction.value), path=f"{path}.value", source=instruction
                 )
             return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, assert_never
+
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _coil_reset_value,
@@ -16,7 +18,6 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.expression import Expression
 from pyrung.core.instruction import (
     CallInstruction,
     CopyInstruction,
@@ -30,11 +31,19 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    Dest,
+    ExprArg,
+    PointerArg,
+    TagArg,
+    Value,
+)
 from pyrung.core.instruction.timers import tof_armed_key
 from pyrung.core.kernel import prove_effective_preset_key
-from pyrung.core.memory_block import block_room, element_names_after
+from pyrung.core.memory_block import IndirectExprRef, IndirectRef, block_room, element_names_after
 from pyrung.core.relations.records import Const, TagValue
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import Tag
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._emit import (
@@ -391,54 +400,95 @@ def _compile_count_down_instruction(
     return lines
 
 
+def _copy_target(dest: Dest) -> Tag | IndirectRef | IndirectExprRef:
+    """Return the tag or the pointer that a Copy writes, as the shared helpers take it.
+
+    The generated code writes an ``immediate()`` tag as it writes the plain tag.
+    """
+    match dest:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return ref
+        case _:
+            assert_never(dest)
+
+
+def _copy_source(source: Value) -> Any:
+    """Return what a Copy reads, as ``_compile_value`` and the pointer helpers take it."""
+    match source:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return ref
+        case ExprArg(expr=expr):
+            return expr
+        case ConstArg(value=value):
+            return value
+        case _:
+            assert_never(source)
+
+
 def _compile_copy_instruction(
     instr: CopyInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    target_type = _value_type_name(instr.target)
+    source = instr.source
+    target = _copy_target(instr.dest)
+    target_type = _value_type_name(target)
     # A text literal into a CHAR fans out, one character per register.
-    fanout = isinstance(instr.source, str) and len(instr.source) > 1 and target_type == "CHAR"
+    fanout = (
+        isinstance(source, ConstArg)
+        and isinstance(source.value, str)
+        and len(source.value) > 1
+        and target_type == "CHAR"
+    )
     convert = instr.convert
     if convert is not None or fanout:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent, convert)
-    source_expr = _compile_copy_source(instr.source, ctx)
-    if ctx.kernel_runtime and target_type == "REAL" and isinstance(instr.source, Expression):
+    source_expr = _compile_copy_source(_copy_source(source), ctx)
+    if ctx.kernel_runtime and target_type == "REAL" and isinstance(source, ExprArg):
         ctx.mark_helper("_computed_real")
         source_expr = f"_computed_real({source_expr})"
-    source_type = (
-        "CHAR" if isinstance(instr.source, str) else _optional_value_type_name(instr.source)
-    )
-    source_kind = copy_source_kind(instr.source)
+    match source:
+        case ConstArg(value=str()):
+            source_type: str | None = "CHAR"
+        case TagArg() | PointerArg() | ConstArg() | ExprArg():
+            source_type = _optional_value_type_name(source)
+        case _:
+            assert_never(source)
+    source_kind = copy_source_kind(source)
     clamp_cond = _copy_clamp_condition("_copy_value", target_type, source_type)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
-    if clamp_cond is None or fault_body == ["pass"] or _copy_source_fits(instr.source, target_type):
+    if clamp_cond is None or fault_body == ["pass"] or _copy_source_fits(source, target_type):
         value_expr = _copy_store_expr(source_expr, target_type, source_kind, ctx)
-        enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+        enabled_body = _compile_assignment_lines(target, value_expr, ctx, indent=0)
     else:
         value_expr = _copy_store_expr("_copy_value", target_type, source_kind, ctx)
         enabled_body = [
             f"_copy_value = {source_expr}",
-            *_compile_assignment_lines(instr.target, value_expr, ctx, indent=0),
+            *_compile_assignment_lines(target, value_expr, ctx, indent=0),
             f"if {clamp_cond}:",
             *_indent_body(fault_body, 4),
         ]
-    if _past_end_keeps(instr.source):
+    if isinstance(source, PointerArg) and _past_end_keeps(source.ref):
         # A source pointer past its bank's end drops the copy with no flag, but stepping
         # flags a target pointer below its bank first.
-        target_check = _pointer_check_lines(instr.target, ctx, past_end_drops=False)
+        target_check = _pointer_check_lines(target, ctx, past_end_drops=False)
         enabled_body = [*target_check, *enabled_body]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
-def _copy_source_fits(source: object, target_type: str) -> bool:
+def _copy_source_fits(source: Value, target_type: str) -> bool:
     """Return True for a literal that the store leaves alone, so it needs no clamp test."""
-    if type(source) is not int:
+    if not isinstance(source, ConstArg) or type(source.value) is not int:
         return False
+    value = source.value
     if target_type == "INT":
-        return -32768 <= source <= 32767
-    return -2147483648 <= source <= 2147483647
+        return -32768 <= value <= 32767
+    return -2147483648 <= value <= 2147483647
 
 
 def _compile_copy_converter_instruction(
@@ -459,22 +509,23 @@ def _compile_copy_converter_instruction(
     address_fault_body = _compile_set_address_error_fault_body(ctx)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     mode = "fanout" if converter is None else converter.mode
-    source_expr = _compile_copy_source(instr.source, ctx)
+    source = _copy_source(instr.source)
+    source_expr = _compile_copy_source(source, ctx)
     source_read: list[str] = []
-    if _past_end_keeps(instr.source):
+    if _past_end_keeps(source):
         # Read the source where a pointer past the end drops the copy (the guard's IndexError).
         # Reading it inside the conversion's own handler would flag it.
         source_read = [f"_{stem}_source = {source_expr}"]
         source_expr = f"_{stem}_source"
 
-    target = instr.target.tag if isinstance(instr.target, ImmediateRef) else instr.target
+    target = _copy_target(instr.dest)
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
         target, ctx, stem
     )
     if mode in {"text", "binary"} and target_type != "CHAR":
         # Only a TXT holds text, so stepping sets the out-of-range flag and writes nothing.
         # It reads no source, but a source pointer past its bank's end drops the copy.
-        past_end = _copy_source_past_end_test(instr.source, ctx)
+        past_end = _copy_source_past_end_test(source, ctx)
         body = [*setup, *fault_body]
         if past_end is not None:
             body = [*setup, f"if not ({past_end}):", *_indent_body(fault_body, 4)]

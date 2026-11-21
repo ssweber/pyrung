@@ -10,6 +10,8 @@ from typing import Any
 from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_real, store_value
 from pyrung.core.tag import Tag, TagType
 
+from .operands import ConstArg, ExprArg, PointerArg, TagArg
+
 _DINT_MIN = -2147483648
 
 
@@ -36,11 +38,21 @@ def copy_source_kind(source: Any) -> Any:
 
     The result is the source's ``TagType`` for a tag or a pointer, and :data:`LITERAL` for
     a constant.  It is ``None`` for anything else, such as an expression.  An expression
-    stores as a register does.
+    stores as a register does.  *source* is a parsed operand of a Copy or a Fill, or the
+    raw operand of another instruction.
     """
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import ImmediateRef
 
+    match source:
+        case TagArg(tag=tag):
+            return tag.type
+        case PointerArg():
+            return source.block.type
+        case ConstArg(value=value):
+            return LITERAL if isinstance(value, (bool, int, float, str)) else None
+        case ExprArg():
+            return None
     if isinstance(source, ImmediateRef):
         source = source.value
     if isinstance(source, Tag):

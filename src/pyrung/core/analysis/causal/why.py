@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pdg import continuous_search_results, resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.state import value_changed
 
 from .models import CausalChain, ChainStep, Transition
@@ -650,7 +651,7 @@ def _is_reset_for_tag(rung: Rung, tag_name: str) -> bool:
     for instr in rung._instructions:
         if not isinstance(instr, ResetInstruction):
             continue
-        target = instr.target
+        target = as_authored(instr.target)
         if isinstance(target, ImmediateRef):
             target = object.__getattribute__(target, "value")
         if isinstance(target, TagClass) and target.name == tag_name:

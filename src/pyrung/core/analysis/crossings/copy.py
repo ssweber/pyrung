@@ -70,6 +70,7 @@ from pyrung.core.instruction.data_transfer import (
     CopyInstruction,
     FillInstruction,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import TagType
 
@@ -139,7 +140,7 @@ def _dest_type(instr: Any, dest_name: str, ctx: CrossingContext) -> TagType | No
     A ``Tag`` dest exposes ``.type`` directly; a fill/block-copy range exposes it
     on its ``.block``; otherwise fall back to the context's tag table.
     """
-    dest = getattr(instr, "dest", None)
+    dest = as_authored(getattr(instr, "dest", None))
     t = getattr(dest, "type", None)
     if isinstance(t, TagType):
         return t
@@ -153,7 +154,7 @@ def _dest_type(instr: Any, dest_name: str, ctx: CrossingContext) -> TagType | No
 
 def _dest_tag(instr: Any, dest_name: str, ctx: CrossingContext) -> Any | None:
     """Resolve the concrete destination element named by *dest_name*."""
-    dest = getattr(instr, "dest", None)
+    dest = as_authored(getattr(instr, "dest", None))
     if getattr(dest, "name", None) == dest_name:
         return dest
     tags = range_tags(dest)
@@ -241,7 +242,7 @@ class CopyCrossing(BaseCrossing):
     def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         if getattr(instr, "convert", None) is not None:
             return UNKNOWN
-        src = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        src = as_authored(instr.source if isinstance(instr, CopyInstruction) else instr.value)
         storage = copy_store_transform(_dest_type(instr, target_tag, ctx), copy_source_kind(src))
         if storage is None:
             return UNKNOWN
@@ -280,7 +281,7 @@ class CopyCrossing(BaseCrossing):
         if conv is not None:
             return self._reverse_convert(instr, conv, dest_name, value, ctx)
 
-        src = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        src = as_authored(instr.source if isinstance(instr, CopyInstruction) else instr.value)
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):  # constant ref: dest is fixed
@@ -379,7 +380,7 @@ class CopyCrossing(BaseCrossing):
         retain this candidate reverse."""
         if target.op not in _INEQ_OPS or getattr(instr, "convert", None) is not None:
             return REVERSE_FALLTHROUGH
-        src = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        src = as_authored(instr.source if isinstance(instr, CopyInstruction) else instr.value)
         named = _named_source(src)
         if named is None or getattr(named, "readonly", False):
             return REVERSE_FALLTHROUGH  # literal / constant / indirect source -> defer
@@ -399,7 +400,7 @@ class CopyCrossing(BaseCrossing):
     def _reverse_convert(
         self, instr: Any, conv: Any, dest_name: str, value: Any, ctx: CrossingContext
     ) -> ReverseResult:
-        named = _named_source(getattr(instr, "source", None))
+        named = _named_source(as_authored(getattr(instr, "source", None)))
         if named is None:  # literal / indirect convert source
             return REVERSE_FALLTHROUGH
         if conv.mode == "ascii":  # Char -> Int: dest == ord(src_char)
@@ -449,8 +450,8 @@ class BlockCopyCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH  # multi-valued / non-Eq / converting -> defer
         dest_name, value = single_target
 
-        dst_tags = range_tags(getattr(instr, "dest", None))
-        src_tags = range_tags(getattr(instr, "source", None))
+        dst_tags = range_tags(as_authored(getattr(instr, "dest", None)))
+        src_tags = range_tags(as_authored(getattr(instr, "source", None)))
         if dst_tags is None or src_tags is None or len(dst_tags) != len(src_tags):
             return REVERSE_FALLTHROUGH
         for i, dst in enumerate(dst_tags):

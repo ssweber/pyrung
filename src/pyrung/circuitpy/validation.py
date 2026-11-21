@@ -10,6 +10,7 @@ from pyrung.circuitpy.p1am import is_board_tag
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import Expression
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -187,7 +188,7 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
         return found
 
     for field_name in fields:
-        walk(getattr(instruction, field_name))
+        walk(as_authored(getattr(instruction, field_name)))
 
     if instruction_type in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
         ins = getattr(instruction, "_ins", {})

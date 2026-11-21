@@ -7,7 +7,7 @@ import re
 import struct
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard, assert_never
 
 from laddercodec import Code
 from pyclickplc.banks import BANKS
@@ -70,6 +70,16 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
     UnaryExpr,
+)
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import BLANK_CHAR
@@ -1067,20 +1077,26 @@ def _quote(value: str) -> str:
     return f'"{escaped}"'
 
 
-def _operand_type(operand: Any) -> TagType | None:
-    """Return the tag type of a copy operand.
+def _operand_type(operand: Value | Span) -> TagType | None:
+    """Return the tag type of the source of a Copy or a Block copy.
 
     A pointer has its block's type.  A float constant counts as a Real.
     """
-    if isinstance(operand, ImmediateRef):
-        operand = operand.value
-    if isinstance(operand, Tag):
-        return operand.type
-    if isinstance(operand, (BlockRange, IndirectBlockRange, IndirectRef, IndirectExprRef)):
-        return operand.block.type
-    if isinstance(operand, float):
-        return TagType.REAL
-    return None
+    match operand:
+        case TagArg(tag=tag):
+            return tag.type
+        case PointerArg(ref=ref):
+            return ref.block.type
+        case RangeArg(span=span):
+            return span.block.type
+        case PointerRangeArg(span=pointed):
+            return pointed.block.type
+        case ConstArg(value=float()):
+            return TagType.REAL
+        case ConstArg() | ExprArg():
+            return None
+        case _:
+            assert_never(operand)
 
 
 def _bool_bit(value: bool) -> str:

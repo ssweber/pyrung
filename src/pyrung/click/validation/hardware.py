@@ -18,8 +18,9 @@ from pyrung.core.instruction.conversions import (
     _render_text_from_numeric,
     copy_source_kind,
 )
+from pyrung.core.instruction.operands import ConstArg, TagArg, inner
 from pyrung.core.memory_block import _element_name, _store_block, block_room
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import TagType
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
@@ -71,8 +72,6 @@ def _wide_constant_into_hex(
     A Copy writes a fraction as a Real constant, but a Fill of several registers
     (*range_fill*) has only the hex constant, so the export refuses any fraction there.
     """
-    if isinstance(value, ImmediateRef):
-        value = value.value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return []
     if isinstance(value, float) and not math.isfinite(value):
@@ -128,15 +127,15 @@ def _evaluate_wide_copy_constant(
         range_fill = single_register_fill_dest(dest) is None
     else:
         return []
-    if copy_source_kind(value) != LITERAL:
+    if not isinstance(value, ConstArg) or copy_source_kind(value) != LITERAL:
         return []
-    resolution = resolver.resolve_operand_slots(dest)
+    resolution = resolver.resolve_operand_slots(inner(dest))
     if resolution.unresolved:
         return []
     dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in resolution.slots))
     return _wide_constant_into_hex(
         instruction_type,
-        value,
+        value.value,
         dest_memory_types,
         _instruction_location(base_location, "instruction.dest"),
         mode,
@@ -192,13 +191,15 @@ def _fewest_elements_written(instruction: Any) -> _Written | None:
     Return ``None`` when it writes one.
     """
     source = instruction.source
+    constant = source.value if isinstance(source, ConstArg) else None
     converter = instruction.convert
     if converter is None:
-        target = instruction.target
-        is_text = isinstance(target, Tag) and target.type is TagType.CHAR
-        return _Written(len(source), True) if isinstance(source, str) and is_text else None
+        # An immediate() TXT is no plain tag, and this function skips it.
+        dest = instruction.dest
+        is_text = isinstance(dest, TagArg) and not dest.immediate and dest.tag.type is TagType.CHAR
+        return _Written(len(constant), True) if isinstance(constant, str) and is_text else None
     if converter.mode in {"value", "ascii"}:
-        return _Written(len(source), True) if isinstance(source, str) else None
+        return _Written(len(constant), True) if isinstance(constant, str) else None
     if converter.mode != "text":
         return None
     tail = 0 if converter.termination_code is None else 1
@@ -206,7 +207,7 @@ def _fewest_elements_written(instruction: Any) -> _Written | None:
     if kind == LITERAL:
         try:
             text = _render_text_from_numeric(
-                source,
+                constant,
                 source_tag=None,
                 suppress_zero=converter.suppress_zero,
                 exponential=converter.exponential,
@@ -239,8 +240,6 @@ def _saved_constant_length(value: Any) -> int | None:
     """
     from pyrung.click.ladder.translator import _float32, click_real_literal
 
-    if isinstance(value, ImmediateRef):
-        value = value.value
     if isinstance(value, str):
         return len(value)
     if isinstance(value, bool):
@@ -265,11 +264,12 @@ def constant_text_past_txt(instruction: Any, address: int) -> int | None:
     that store (OBJ-003). CLICK's Copy accepts a register source, which saves no end
     address, so this function does not judge a register source.
     """
-    if copy_source_kind(instruction.source) != LITERAL:
+    source = instruction.source
+    if not isinstance(source, ConstArg) or copy_source_kind(source) != LITERAL:
         return None
     if _fewest_elements_written(instruction) is None:
         return None
-    length = _saved_constant_length(instruction.source)
+    length = _saved_constant_length(source.value)
     if length is None or address + length - 1 <= BANKS["TXT"].max_addr:
         return None
     return length
@@ -283,11 +283,8 @@ def constant_text_past_bank_advice(instruction: Any, resolver: _ResolutionCache)
     """
     if type(instruction).__name__ != "CopyInstruction":
         return None
-    target = instruction.target
-    if isinstance(target, ImmediateRef):
-        target = target.value
     written = _fewest_elements_written(instruction)
-    resolution = resolver.resolve_operand_slots(target)
+    resolution = resolver.resolve_operand_slots(inner(instruction.dest))
     if written is None or resolution.unresolved or len(resolution.slots) != 1:
         return None
     address = resolution.slots[0].address
@@ -322,11 +319,10 @@ def _evaluate_text_past_bank(
     """
     if type(instruction).__name__ != "CopyInstruction":
         return []
-    target = instruction.target
-    if isinstance(target, ImmediateRef):
-        target = target.value
-    if not isinstance(target, Tag):
+    dest = instruction.dest
+    if not isinstance(dest, TagArg):
         return []
+    target = dest.tag
     written = _fewest_elements_written(instruction)
     if written is None:
         return []

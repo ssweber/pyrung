@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.simplified import Expr
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP, CompiledKernel, ForIterationsBeyondCap
 
 from .absorb import _prior_key_done_specs, _ThresholdAbsorptions
@@ -191,7 +192,7 @@ def _collect_receive_dest_names(program: Program) -> set[str]:
     for instr in walk_instructions(program):
         if not isinstance(instr, ModbusReceiveInstruction):
             continue
-        dest = instr.dest
+        dest = as_authored(instr.dest)
         if hasattr(dest, "name"):
             names.add(dest.name)
         elif hasattr(dest, "tags"):

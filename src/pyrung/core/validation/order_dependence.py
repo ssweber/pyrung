@@ -50,6 +50,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.validation._common import FactScope, compact_location
 from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
 from pyrung.core.validation.severity import Severity
@@ -266,7 +267,7 @@ class _RowBuilder:
         for name in getattr(type(instr), "_conditions", ()):
             if _is_power_field(instr, name):
                 continue
-            value = getattr(instr, name, None)
+            value = as_authored(getattr(instr, name, None))
             if isinstance(value, tuple):
                 legs.extend((f"{name}[{i}]", c) for i, c in enumerate(value) if c is not None)
             elif value is not None:

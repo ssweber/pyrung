@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.write_sites import static_write_target_tags
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import Tag
 from pyrung.core.validation._common import WriteSite, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
@@ -72,16 +73,20 @@ def _literal_copy_targets(instr: Any) -> list[tuple[Tag, str, Any]]:
     itype = type(instr).__name__
 
     if isinstance(instr, CopyInstruction):
-        source = instr.source
+        source = as_authored(instr.source)
         if isinstance(source, (Tag, type(None))) or hasattr(source, "_pyrung_structure_runtime"):
             return []  # dynamic source
         if isinstance(source, (int, float, str)):
-            return [(tag, itype, source) for tag in static_write_target_tags(instr.target)]
+            return [
+                (tag, itype, source) for tag in static_write_target_tags(as_authored(instr.dest))
+            ]
 
     if isinstance(instr, FillInstruction):
-        source = instr.value
+        source = as_authored(instr.value)
         if isinstance(source, (int, float, str)):
-            return [(tag, itype, source) for tag in static_write_target_tags(instr.dest)]
+            return [
+                (tag, itype, source) for tag in static_write_target_tags(as_authored(instr.dest))
+            ]
 
     return []
 

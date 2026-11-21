@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.relations.records import Record, Recorder
 from pyrung.core.tag import LiveTag, Tag, TagType
 
@@ -78,7 +79,7 @@ def shape_key(instr: Any) -> tuple[Any, ...] | None:
     fields, conditions, structural, skip = _fields(cls)
     key: list[Any] = [cls]
     for field in fields:
-        value = getattr(instr, field, None)
+        value = as_authored(getattr(instr, field, None))
         if value is None:
             key.append((field, None))
         elif field in conditions:
@@ -128,7 +129,7 @@ def _standin(instr: Any) -> tuple[Any, dict[str, str]]:
         delattr(new, attr)
     fields: dict[str, str] = {}
     for field in cls.walker_fields():
-        value = getattr(instr, field, None)
+        value = as_authored(getattr(instr, field, None))
         if value is None:
             continue
         name = PREFIX + field

@@ -100,8 +100,8 @@ def test_copy_hold_rung_keeps_copy_for_non_bool_destinations() -> None:
     rung = copy_hold_rung(value=1, dest=State)
     (instr,) = rung._instructions
     assert isinstance(instr, CopyInstruction)
-    assert instr.source == 1
-    assert instr.dest is State
+    assert instr.source.value == 1
+    assert instr.dest.tag is State
 
 
 def test_false_bool_hold_resets_default_true_target_off() -> None:

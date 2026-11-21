@@ -40,6 +40,7 @@ from pyrung.core.expression import (
     ExprCompare,
     Expression,
 )
+from pyrung.core.instruction.operands import PARSED, held, inner
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -429,6 +430,9 @@ def walk_rung_operands(
                 walk_value(cond)
 
     def walk_value(value: Any) -> None:
+        if isinstance(value, PARSED):
+            # The walk visits the object inside an immediate() and never the wrapper.
+            value = inner(value)
         value_id = id(value)
         if value_id in seen_values:
             return
@@ -735,8 +739,15 @@ class _Walker:
         instr_type: str | None,
         arg_path: str,
     ) -> None:
+        key = obj
+        if isinstance(obj, PARSED):
+            # The guard keys on the authored operand, so two copies into one tag give
+            # one fact, as for any other instruction. held() builds a new ImmediateRef on
+            # each call, so an immediate() operand keys on the parsed operand instead.
+            obj = held(obj)
+            key = key if isinstance(obj, ImmediateRef) else obj
         # Cycle guard
-        seen_key = (id(obj), arg_path)
+        seen_key = (id(key), arg_path)
         if seen_key in self._seen:
             return
         self._seen.add(seen_key)

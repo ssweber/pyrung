@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import Atom, Expr
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import TagType, tag_written_from_outside
 
 from .expr import _build_atom_index, _collect_atoms_for_tag
@@ -277,7 +278,7 @@ def _has_forbidden_data_read(
 
     for instr in walk_instructions(program):
         for field_name in getattr(type(instr), "_reads", ()):
-            value = getattr(instr, field_name)
+            value = as_authored(getattr(instr, field_name))
             reads = _extract_tag_names(value, {})
             if tag_name not in reads:
                 continue
@@ -1001,9 +1002,9 @@ def _direct_write_target(instr: Any) -> Any:
     from pyrung.core.tag import Tag
 
     if isinstance(instr, CopyInstruction):
-        target = instr.target
+        target = as_authored(instr.target)
     elif isinstance(instr, CalcInstruction):
-        target = instr.dest
+        target = as_authored(instr.dest)
     else:
         return None
     return target if isinstance(target, Tag) else None
@@ -1068,7 +1069,7 @@ def _stable_int_tag_value(
         target = _direct_write_target(instr)
         if target is None or target.name != tag_name:
             return None
-        value = _normalized_copy_literal_int_value(instr.source, target)
+        value = _normalized_copy_literal_int_value(as_authored(instr.source), target)
         if value is None:
             return None
         if stable_value is None:
@@ -1143,7 +1144,7 @@ def _int_progress_write_delta(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        source = instr.source
+        source = as_authored(instr.source)
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
@@ -1178,7 +1179,7 @@ def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
         target is not None
         and target.name == tag_name
         and instr.convert is None
-        and _is_zero_literal(instr.source)
+        and _is_zero_literal(as_authored(instr.source))
     )
 
 
@@ -1406,7 +1407,7 @@ def _numeric_progress_write_direction(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        source = instr.source
+        source = as_authored(instr.source)
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.sp_tree import SPLeaf, SPNode, SPSeries
 from pyrung.core.expression import Expression
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 if TYPE_CHECKING:
@@ -485,7 +486,7 @@ def _build_solve_order(program: Program) -> _SolveOrder:
                 walk(item, node)
                 continue
             writes[node] = position
-            target = getattr(item, "target", None)
+            target = as_authored(getattr(item, "target", None))
             if target is not None:
                 for name in _resolve_tag_names(target):
                     tag_writes[(node, name)] = position
@@ -609,7 +610,7 @@ def _resets_only(rung: Rung, tag: str) -> bool:
     has_reset = False
     has_driver = False
     for instr in rung._instructions:
-        target = getattr(instr, "target", None)
+        target = as_authored(getattr(instr, "target", None))
         if target is None or tag not in _resolve_tag_names(target):
             continue
         if isinstance(instr, ResetInstruction):

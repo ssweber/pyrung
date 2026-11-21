@@ -14,6 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.instruction.operands import as_authored
+
 if TYPE_CHECKING:
     from pyrung.core.program import Program
 
@@ -147,32 +149,32 @@ def build_reverse_edge_map(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = tag_name_from_value(instr.source)
+            source_name = tag_name_from_value(as_authored(instr.source))
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(instr.dest)
+            target_names = _resolve_tag_names(as_authored(instr.dest))
             if not target_names:
-                target_names = _expand(instr.dest)
+                target_names = _expand(as_authored(instr.dest))
             for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, FillInstruction):
-            source_name = tag_name_from_value(instr.value)
+            source_name = tag_name_from_value(as_authored(instr.value))
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(instr.dest)
+            target_names = _resolve_tag_names(as_authored(instr.dest))
             if not target_names:
-                target_names = _expand(instr.dest)
+                target_names = _expand(as_authored(instr.dest))
             for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _resolve_tag_names(instr.source)
-            dest_names = _resolve_tag_names(instr.dest)
+            source_names = _resolve_tag_names(as_authored(instr.source))
+            dest_names = _resolve_tag_names(as_authored(instr.dest))
             if not dest_names:
-                dest_names = _expand(instr.dest)
+                dest_names = _expand(as_authored(instr.dest))
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
@@ -183,7 +185,7 @@ def build_reverse_edge_map(
                             reverse_edges.setdefault(src, []).append((dst, IDENTITY))
 
         elif isinstance(instr, CalcInstruction):
-            target_name = tag_name_from_value(instr.dest)
+            target_name = tag_name_from_value(as_authored(instr.dest))
             if target_name is None:
                 continue
             edge = calc_reverse_edge(instr.expression)

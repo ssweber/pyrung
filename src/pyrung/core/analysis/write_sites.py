@@ -21,7 +21,7 @@ import math
 import sys
 import weakref
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.core.instruction.conversions import (
     _DINT_MAX,
@@ -31,6 +31,14 @@ from pyrung.core.instruction.conversions import (
     _render_text_from_numeric,
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    TagArg,
+    Value,
+    as_authored,
+)
 from pyrung.core.instruction.resolvers import _sequential_tags, _termination_char
 from pyrung.core.memory_block import (
     BlockRange,
@@ -80,21 +88,22 @@ _TEXT_EXTREMES: dict[TagType, tuple[Any, ...]] = {
 }
 
 
-def _source_text_type(source: Any) -> tuple[TagType, bool] | None:
+def _source_text_type(source: Value) -> tuple[TagType, bool] | None:
     """Return the type a ``to_text()`` copy formats *source* as, and whether it reads the type.
 
     The copy formats a tag or a pointer by its type.  It formats an ``immediate()``
     tag by its value alone, as it does a literal.  Return ``None`` for an expression,
     whose text has no bound.
     """
-    if isinstance(source, ImmediateRef):
-        value = source.value
-        return (value.type, False) if isinstance(value, Tag) else None
-    if isinstance(source, Tag):
-        return source.type, True
-    if isinstance(source, (IndirectRef, IndirectExprRef)):
-        return source.block.type, True
-    return None
+    match source:
+        case TagArg(tag=tag, immediate=immediate):
+            return tag.type, not immediate
+        case PointerArg(ref=ref):
+            return ref.block.type, True
+        case ExprArg() | ConstArg():
+            return None
+        case _:
+            assert_never(source)
 
 
 def _to_text_length(instr: CopyInstruction) -> int | None:
@@ -123,8 +132,8 @@ def _to_text_length(instr: CopyInstruction) -> int | None:
         return len(text) + tail
 
     source = instr.source
-    if isinstance(source, (bool, int, float, str)):
-        return length(source, None)
+    if isinstance(source, ConstArg) and isinstance(source.value, (bool, int, float, str)):
+        return length(source.value, None)
     typed = _source_text_type(source)
     if typed is None:
         return None
@@ -139,15 +148,16 @@ def _fanout_count(instr: CopyInstruction, dest_type: TagType) -> tuple[int | Non
     The count is ``None`` when it runs to the end of the block.
     """
     source = instr.source
+    constant = source.value if isinstance(source, ConstArg) else None
     converter = instr.convert
     if converter is None:
-        if isinstance(source, str) and len(source) > 1 and dest_type is TagType.CHAR:
-            return len(source), True
+        if isinstance(constant, str) and len(constant) > 1 and dest_type is TagType.CHAR:
+            return len(constant), True
         return 1, True
     if converter.mode in {"value", "ascii"}:
-        return (len(source), True) if isinstance(source, str) else (1, True)
+        return (len(constant), True) if isinstance(constant, str) else (1, True)
     if converter.mode == "text" and dest_type is TagType.CHAR:
-        literal = isinstance(source, (bool, int, float, str))
+        literal = isinstance(constant, (bool, int, float, str))
         return _to_text_length(instr), literal
     return 1, True
 
@@ -208,27 +218,26 @@ def _copy_fanout(instr: Any) -> _Fanout:
     """
     if not isinstance(instr, CopyInstruction):
         return (), ()
-    dest = instr.dest
-    if isinstance(dest, ImmediateRef):
-        dest = dest.value
-    if isinstance(dest, Tag):
-        cached = _cached(instr)
-        if cached is None:
-            cached = (instr.dest, instr.source, instr.convert, _fanout_count(instr, dest.type))
-            _FANOUT_CACHE[instr] = cached
-        count, always = cached[3]
-        extra = _static_fanout(dest, count)
-        return (extra, ()) if always else ((), extra)
-    if isinstance(dest, (IndirectRef, IndirectExprRef)):
-        cached = _cached(instr)
-        if cached is None:
-            # A pointer write is a write the copy may not make to each element it reaches.
-            count, _always = _fanout_count(instr, dest.block.type)
-            partial = _pointer_fanout(dest, count) if count is None or count > 1 else ()
-            cached = (instr.dest, instr.source, instr.convert, partial)
-            _FANOUT_CACHE[instr] = cached
-        return (), cached[3]
-    return (), ()
+    match instr.dest:
+        case TagArg(tag=dest):
+            cached = _cached(instr)
+            if cached is None:
+                cached = (instr.dest, instr.source, instr.convert, _fanout_count(instr, dest.type))
+                _FANOUT_CACHE[instr] = cached
+            count, always = cached[3]
+            extra = _static_fanout(dest, count)
+            return (extra, ()) if always else ((), extra)
+        case PointerArg(ref=dest):
+            cached = _cached(instr)
+            if cached is None:
+                # A pointer write is a write the copy may not make to each element it reaches.
+                count, _always = _fanout_count(instr, dest.block.type)
+                partial = _pointer_fanout(dest, count) if count is None or count > 1 else ()
+                cached = (instr.dest, instr.source, instr.convert, partial)
+                _FANOUT_CACHE[instr] = cached
+            return (), cached[3]
+        case _:
+            assert_never(instr.dest)
 
 
 def instruction_write_targets(instr: Any, *, status: bool = True) -> tuple[Any, ...]:
@@ -245,7 +254,7 @@ def instruction_write_targets(instr: Any, *, status: bool = True) -> tuple[Any, 
     fields = tuple(dict.fromkeys((*getattr(cls, "_writes", ()), *status_fields)))
     targets: list[Any] = []
     for field_name in fields:
-        targets.extend(_iter_target_leaves(getattr(instr, field_name, None)))
+        targets.extend(_iter_target_leaves(as_authored(getattr(instr, field_name, None))))
     definite, partial = _copy_fanout(instr)
     targets.extend(definite)
     targets.extend(partial)
@@ -278,6 +287,7 @@ def static_write_target_tags(target: Any) -> tuple[Tag, ...]:
     address or a PDG-specific conservative region, and neither is an exact
     instruction occurrence for a named-tag writer lookup.
     """
+    target = as_authored(target)
     if isinstance(target, ImmediateRef):
         target = target.value
     if isinstance(target, Tag):
