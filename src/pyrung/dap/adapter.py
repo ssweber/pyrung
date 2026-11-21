@@ -308,9 +308,17 @@ class DAPAdapter:
         if check_state:
             with self._state_lock:
                 before = self._state_fingerprint_locked()
-                was_executing = self._executor_running_locked()
+        flushed = False
         try:
             body, events = handler(request.get("arguments") or {})
+            if check_state:
+                with self._state_lock:
+                    flushed = self._state_fingerprint_locked() != before
+                if flushed:
+                    # A request that paused the worker finds the worker's last frame queued.
+                    # Sending it here keeps the events in the order they happened, and keeps
+                    # that frame from coming after this request's frame.
+                    self._send_queued_events()
             self._send_response(request, success=True, body=body)
             for event_name, event_body in events:
                 self._send_event(event_name, event_body)
@@ -325,9 +333,9 @@ class DAPAdapter:
         with self._state_lock:
             changed = self._state_fingerprint_locked() != before
         if changed:
-            if was_executing:
-                # The worker paused for this request and queued its last frame.  Sent after
-                # this request's frame, that frame would describe the state from before it.
+            if not flushed:
+                # The handler failed, or its events changed the state.  Any worker frame still
+                # queued would describe the state from before the request.
                 self._send_queued_events()
             self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
@@ -358,13 +366,17 @@ class DAPAdapter:
     def _send_queued_events(self) -> None:
         """Send the queued internal events and state frames now, in the order they were queued.
 
-        Requests stay queued in their own order.
+        Does nothing unless the continue worker has a frame queued, because only the worker
+        queues a ``pyrungScanFrame`` internal event.  Requests stay queued in their own order.
         """
         due = ("internal_event", "state_frame")
         with self._queue.mutex:
-            pending = [item for item in self._queue.queue if item.get("kind") in due]
-            if not pending:
+            if not any(
+                item.get("kind") == "internal_event" and item.get("event") == "pyrungScanFrame"
+                for item in self._queue.queue
+            ):
                 return
+            pending = [item for item in self._queue.queue if item.get("kind") in due]
             rest = [item for item in self._queue.queue if item.get("kind") not in due]
             self._queue.queue.clear()
             self._queue.queue.extend(rest)
