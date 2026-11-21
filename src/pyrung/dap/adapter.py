@@ -308,8 +308,17 @@ class DAPAdapter:
         if check_state:
             with self._state_lock:
                 before = self._state_fingerprint_locked()
+        flushed = False
         try:
             body, events = handler(request.get("arguments") or {})
+            if check_state:
+                with self._state_lock:
+                    flushed = self._state_fingerprint_locked() != before
+                if flushed:
+                    # A request that paused the worker finds the worker's last frame queued.
+                    # Sending it here keeps the events in the order they happened, and keeps
+                    # that frame from coming after this request's frame.
+                    self._send_queued_events()
             self._send_response(request, success=True, body=body)
             for event_name, event_body in events:
                 self._send_event(event_name, event_body)
@@ -324,6 +333,10 @@ class DAPAdapter:
         with self._state_lock:
             changed = self._state_fingerprint_locked() != before
         if changed:
+            if not flushed:
+                # The handler failed, or another thread changed the state after it returned.
+                # A worker frame still queued would describe the state from before the request.
+                self._send_queued_events()
             self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
     def _send_response(
@@ -349,6 +362,32 @@ class DAPAdapter:
 
     def _enqueue_internal_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         self._queue.put({"kind": "internal_event", "event": event, "body": body})
+
+    def _send_queued_events(self) -> None:
+        """Send the queued internal events and state frames now, in the order they were queued.
+
+        Does nothing unless the continue worker has queued a frame with ``running`` False.  Only
+        a worker that is stopping queues one, and its frame would otherwise come after the
+        request's frame.  Requests stay queued in their own order.
+        """
+        due = ("internal_event", "state_frame")
+        with self._queue.mutex:
+            if not any(
+                item.get("kind") == "internal_event"
+                and item.get("event") == "pyrungScanFrame"
+                and not (item.get("body") or {}).get("running")
+                for item in self._queue.queue
+            ):
+                return
+            pending = [item for item in self._queue.queue if item.get("kind") in due]
+            rest = [item for item in self._queue.queue if item.get("kind") not in due]
+            self._queue.queue.clear()
+            self._queue.queue.extend(rest)
+        for item in pending:
+            if item["kind"] == "internal_event":
+                self._send_event(item["event"], item.get("body"))
+            else:
+                self._send_state_frame()
 
     def _state_fingerprint_locked(self) -> tuple[Any, ...] | None:
         return simulation.state_fingerprint_locked(self)

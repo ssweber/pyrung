@@ -270,6 +270,8 @@ Each frame carries `trace` (whose `forces` always holds the full force map), `ch
 | `pendingPatches` | Patches not yet in the committed state (queued, or taken by a scan still being stepped) |
 | `source` | Who caused the frame: `{origin, command}`, origin one of `dap`, `live`, `worker`, `modbus`, `autoreload` |
 
+After a request, the last `pyrungScanFrame` describes the state that the request left.
+
 Frames sent outside Continue carry an empty `changes` list and, when paused, the same trace as the latest `pyrungTrace`.
 
 ### Reload report
