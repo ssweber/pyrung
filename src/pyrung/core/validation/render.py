@@ -158,7 +158,6 @@ def operand_name(value: Any) -> str:
         return repr(value)
     if isinstance(value, (int, float)):
         return str(value)
-    # copy() and fill() still build with a list of tags, so a finding can name one.
     if isinstance(value, list):
         return f"[{', '.join(operand_name(item) for item in value)}]"
     if isinstance(value, tuple):

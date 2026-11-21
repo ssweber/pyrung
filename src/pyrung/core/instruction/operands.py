@@ -41,7 +41,7 @@ reader that takes the operands of every instruction calls :func:`as_authored` on
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, ClassVar, assert_never
 
 from pyrung.core.condition import Condition
@@ -63,10 +63,18 @@ _NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL
 
 @dataclass(frozen=True, eq=False)
 class TagArg:
-    """One tag.  *immediate* is True when the author wrapped it in ``immediate()``."""
+    """One tag.  *immediate* is True when the author wrapped it in ``immediate()``.
+
+    *wrapper* is the ``ImmediateRef`` that the author passed.  :func:`held` returns it.  A
+    reader that keys on ``id()`` then sees one object for as long as the instruction lives.
+    """
 
     tag: Tag
     immediate: bool = False
+    wrapper: ImmediateRef | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _check_wrapper(self, self.tag)
 
 
 @dataclass(frozen=True, eq=False)
@@ -103,11 +111,15 @@ class ExprArg:
 class RangeArg:
     """A range with fixed ends, such as ``DS.select(1, 10)``.
 
-    *immediate* is True when the author wrapped it in ``immediate()``.
+    *immediate* and *wrapper* work as they do on :class:`TagArg`.
     """
 
     span: BlockRange
     immediate: bool = False
+    wrapper: ImmediateRef | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _check_wrapper(self, self.span)
 
 
 @dataclass(frozen=True, eq=False)
@@ -115,6 +127,14 @@ class PointerRangeArg:
     """A range whose ends the scan reads, such as ``DS.select(Lo, Hi)``."""
 
     span: IndirectBlockRange
+
+
+def _check_wrapper(arg: TagArg | RangeArg, held_object: Tag | BlockRange) -> None:
+    """Build the ``ImmediateRef`` of an immediate *arg* that was made without one."""
+    if arg.wrapper is not None and not arg.immediate:
+        raise ValueError("A wrapper needs immediate=True.")
+    if arg.immediate and arg.wrapper is None:
+        object.__setattr__(arg, "wrapper", ImmediateRef(held_object))
 
 
 Value = TagArg | PointerArg | ConstArg | ExprArg
@@ -128,16 +148,17 @@ Span = RangeArg | PointerRangeArg
 def held(arg: Value | Span) -> Any:
     """Return the object that *arg* holds, as the author passed it.
 
-    A tag or a range in ``immediate()`` comes back wrapped again.  The readers that the
-    other instructions share, such as ``operand_name()`` and the program walkers, still
-    take the authored object.  They call this function on a parsed operand before they
-    read it.
+    A tag or a range in ``immediate()`` comes back in the ``ImmediateRef`` that the
+    author passed.  Each call on one operand returns the same object.  The readers that
+    the other instructions share, such as ``operand_name()`` and the program walkers,
+    still take the authored object.  They call this function on a parsed operand before
+    they read it.
     """
     match arg:
-        case TagArg(tag=tag, immediate=immediate):
-            return ImmediateRef(tag) if immediate else tag
-        case RangeArg(span=span, immediate=immediate):
-            return ImmediateRef(span) if immediate else span
+        case TagArg(tag=tag, wrapper=wrapper):
+            return tag if wrapper is None else wrapper
+        case RangeArg(span=span, wrapper=wrapper):
+            return span if wrapper is None else wrapper
         case PointerArg(ref=ref):
             return ref
         case PointerRangeArg(span=span):
@@ -151,12 +172,7 @@ def held(arg: Value | Span) -> Any:
 
 
 def inner(arg: Value | Span) -> Any:
-    """Return the object that *arg* holds, without its ``immediate()``.
-
-    A reader that keys a cache or a seen set on ``id()`` takes this object, because the
-    instruction keeps it alive.  The ``ImmediateRef`` that :func:`held` builds dies after
-    the call.
-    """
+    """Return the object that *arg* holds, without its ``immediate()``."""
     match arg:
         case TagArg(tag=tag):
             return tag
@@ -177,7 +193,7 @@ PARSED = (TagArg, PointerArg, ConstArg, ExprArg, RangeArg, PointerRangeArg)
 
 
 def as_authored(value: Any) -> Any:
-    """Return *value*, or the object that it holds as the author passed it if it is parsed.
+    """Return the authored object for a parsed operand, and any other value unchanged.
 
     A reader that takes the operands of every instruction calls this function on each
     one.  It then reads a Copy's operand as it reads any other instruction's.
@@ -187,11 +203,11 @@ def as_authored(value: Any) -> Any:
 
 def parse_value(value: Any) -> Value | Span:
     """Return the result for *value*, which a declaration has accepted."""
-    bare, wrapped = unwrap(value)
+    bare, wrapper = _split(value)
     if isinstance(bare, Tag):
-        return TagArg(bare, wrapped)
+        return TagArg(bare, wrapper is not None, wrapper)
     if isinstance(bare, BlockRange):
-        return RangeArg(bare, wrapped)
+        return RangeArg(bare, wrapper is not None, wrapper)
     # immediate() wraps only a tag or a range with fixed ends.
     if isinstance(bare, (IndirectRef, IndirectExprRef)):
         return PointerArg(bare)
@@ -200,6 +216,13 @@ def parse_value(value: Any) -> Value | Span:
     if _is_expression(bare):
         return ExprArg(bare)
     return ConstArg(bare)
+
+
+def _split(value: Any) -> tuple[Any, ImmediateRef | None]:
+    """Return the operand inside ``immediate()``, and the ``ImmediateRef`` or None."""
+    if isinstance(value, ImmediateRef):
+        return value.value, value
+    return value, None
 
 
 def unwrap(value: Any) -> tuple[Any, bool]:
@@ -322,9 +345,9 @@ class TagOperand(Operand):
         *call* is the call that the author wrote, and *arg* names the argument.
         """
         self._refuse(call, arg, value)
-        bare, wrapped = unwrap(value)
+        bare, wrapper = _split(value)
         if isinstance(bare, Tag):
-            return TagArg(bare, wrapped)
+            return TagArg(bare, wrapper is not None, wrapper)
         return PointerArg(bare)
 
 
@@ -383,9 +406,9 @@ class RangeOperand(Operand):
         *call* is the call that the author wrote, and *arg* names the argument.
         """
         self._refuse(call, arg, value)
-        bare, wrapped = unwrap(value)
+        bare, wrapper = _split(value)
         if isinstance(bare, BlockRange):
-            return RangeArg(bare, wrapped)
+            return RangeArg(bare, wrapper is not None, wrapper)
         return PointerRangeArg(bare)
 
 

@@ -329,7 +329,9 @@ def test_a_declared_list_operand_shows_each_item() -> None:
     from pyrung.core.instruction import CopyInstruction
     from pyrung.core.validation.render import argument_span, declared_call
 
-    # copy() refuses a list, so a stand-in class with the name of a Copy holds one.
+    # No builder accepts a list operand. copy(), fill(), out() and pack_bits() each refuse
+    # one. A stand-in class with the name of a Copy holds one, to test the list branch of
+    # declared_call().
     def hold(self, source, dest) -> None:
         vars(self).update(source=source, dest=dest, convert=None, oneshot=False)
 

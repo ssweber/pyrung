@@ -230,7 +230,8 @@ def _copy_fanout(instr: Any) -> _Fanout:
         case PointerArg(ref=dest):
             cached = _cached(instr)
             if cached is None:
-                # A pointer write is a write the copy may not make to each element it reaches.
+                # A copy through a pointer may write any element that the pointer reaches.
+                # Each of those elements gets a possible write.
                 count, _always = _fanout_count(instr, dest.block.type)
                 partial = _pointer_fanout(dest, count) if count is None or count > 1 else ()
                 cached = (instr.dest, instr.source, instr.convert, partial)
