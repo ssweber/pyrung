@@ -53,6 +53,9 @@ class Program:
         # how()'s static facts, cached with the graph that they were built from.
         self._cached_prover_context: Any = None
         self._site_table: SiteTable | None = None
+        # The scopes that a rung has ended (``Instruction.ENDS_SCOPE``): None for main, or a
+        # subroutine's name.
+        self._ended_scopes: set[str | None] = set()
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -109,7 +112,14 @@ class Program:
         self._invalidate_graph_cache()
 
     def _add_rung(self, rung: RungLogic) -> None:
-        """Add a rung to the program or current subroutine."""
+        """Add a rung to the program or current subroutine.
+
+        If an earlier rung of the same scope ends that scope (``Instruction.ENDS_SCOPE``),
+        the rung is left out, because no scan reaches it.
+        """
+        scope = self._current_subroutine
+        if scope in self._ended_scopes:
+            return
         target = (
             self.subroutines[self._current_subroutine]
             if self._current_subroutine is not None
@@ -126,6 +136,8 @@ class Program:
                 "It continues the rung above it, in the same execution scope."
             )
         target.append(rung)
+        if any(instruction.ENDS_SCOPE for instruction in rung._instructions):
+            self._ended_scopes.add(scope)
         self._invalidate_graph_cache()
 
     def _start_subroutine(self, name: str) -> None:
@@ -133,6 +145,7 @@ class Program:
         _validate_subroutine_name(name)
         self._current_subroutine = name
         self.subroutines[name] = []
+        self._ended_scopes.discard(name)
         self._invalidate_graph_cache()
 
     def _end_subroutine(self) -> None:

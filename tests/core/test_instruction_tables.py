@@ -28,6 +28,7 @@ from pyrung.circuitpy.validation import _evaluate_timer_resolution
 from pyrung.click.ladder.instructions import _InstructionMixin
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
+from pyrung.click.undecoded import UndecodedInstruction
 from pyrung.click.validation.families import FAMILIES
 from pyrung.core import Int
 from pyrung.core.analysis.causal.why import _INSTRUCTION_LABELS
@@ -116,6 +117,7 @@ KIND: dict[type, str] = {
     ReturnInstruction: "control",
     NopInstruction: "click_only",
     RawInstruction: "click_only",
+    UndecodedInstruction: "click_only",
 }
 
 

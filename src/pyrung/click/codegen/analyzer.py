@@ -52,6 +52,7 @@ from pyrung.click.codegen.models import (
     _SourceOutput,
 )
 from pyrung.click.codegen.shaping import NOP
+from pyrung.click.codegen.utils import _parse_af_args
 
 # ---------------------------------------------------------------------------
 # Rung Analysis
@@ -768,15 +769,28 @@ def _analyze_rungs(
     *,
     validate: bool = False,
     source_name: str | None = None,
+    file_name: str | None = None,
+    subroutine: bool = False,
 ) -> list[_AnalyzedRung]:
     """Analyze topology of each rung.
 
     When *validate* is True, a source contact that reaches no output raises
     ``ValueError`` instead of only warning (see ``_analyze_single_rung``).
     When *source_name* is provided, analysis errors identify that source and
-    the 1-indexed raw rung number.
+    the 1-indexed raw rung number. *file_name* names the CSV file in the errors about
+    laddercodec's undecoded marker and an unpaired ``next()``. *subroutine* is True for
+    a subroutine's rungs, where a marker must say ``stop=return``.
     """
     analyzed: list[_AnalyzedRung] = []
+
+    def where(rung_index: int) -> str:
+        """Return the start of an error about raw rung *rung_index*, counted from 0."""
+        source = " ".join(part for part in (source_name, file_name and f"({file_name})") if part)
+        return f"{source}, rung {rung_index + 1}: " if source else f"Rung {rung_index + 1}: "
+
+    # The first marker of the scope, as a raw rung index. An unpaired next() after it may
+    # have lost its for() to the marker.
+    first_marker: int | None = None
 
     def analyze_one(rung_index: int, *, role: RungRole = RungRole.NORMAL) -> _AnalyzedRung:
         try:
@@ -821,10 +835,49 @@ def _analyze_rungs(
                 if body_af.startswith("for("):
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
                     depth += 1
+                elif body_af.startswith("undecoded("):
+                    # Inside a loop the marker stops its scope only on a scan that runs the
+                    # loop. pyrung runs a marker only where every scan reaches it.
+                    raise ValueError(
+                        f"{where(i)}laddercodec could not decode this rung, and pyrung cannot "
+                        "run its undecoded marker inside a For loop. Rewrite the rung in "
+                        "CLICK, then read the program again."
+                    )
                 else:
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
+        elif af0 == "next()":
+            if first_marker is not None:
+                raise ValueError(
+                    f"{where(i)}this next() has no for() above it. laddercodec could not "
+                    f"decode rung {first_marker + 1}, and that rung may have held the for(). "
+                    "Rewrite that rung in CLICK, then read the program again."
+                )
+            raise ValueError(
+                f"{where(i)}this next() has no for() above it. Add the for() rung in CLICK, "
+                "or remove the next(), then read the program again."
+            )
         else:
+            if af0.startswith("undecoded("):
+                if first_marker is None:
+                    first_marker = i
+                # laddercodec's decode() always makes stop=end, so a subroutine's CSV can hold
+                # a marker that pyrung's undecoded() would refuse in a subroutine.
+                stop = _undecoded_stop(af0)
+                if subroutine and stop not in (None, "return"):
+                    raise ValueError(
+                        f"{where(i)}the undecoded marker says stop={stop}, and a subroutine "
+                        'can only return. Make the marker with stop="return", then read the '
+                        'program again. decode_program() and write_csv(..., stop="return") do this. '
+                        "write_csv() keeps the stop of a marker that it is given."
+                    )
+                if not subroutine and stop not in (None, "end"):
+                    raise ValueError(
+                        f"{where(i)}the undecoded marker says stop={stop}, and the main "
+                        'program can only end. Make the marker with stop="end", then read the '
+                        "program again. decode_program() and write_csv() do this. "
+                        "write_csv() keeps the stop of a marker that it is given."
+                    )
             whole = analyze_one(i)
             source_outputs = whole.source_outputs
             pieces = _split_wires(whole) or [whole]
@@ -835,6 +888,12 @@ def _analyze_rungs(
             i += 1
 
     return analyzed
+
+
+def _undecoded_stop(token: str) -> str | None:
+    """Return the ``stop=`` value of laddercodec's ``undecoded(...)`` AF token, or None."""
+    _, kwargs = _parse_af_args(token[len("undecoded(") : -1])
+    return dict(kwargs).get("stop")
 
 
 # The pin labels that each instruction takes, in the fixed order CLICK draws them.

@@ -1016,7 +1016,8 @@ def _scan_af_token(
         collection.has_subroutine = True
 
     # raw() args are class name + field specs, not operands — skip scanning.
-    if func_name == "raw":
+    # undecoded() args are laddercodec's reason and position, not operands either.
+    if func_name in {"raw", "undecoded"}:
         return
 
     # Strip quoted strings before scanning for operands
@@ -1280,7 +1281,7 @@ def _ref_af_token(
 
                 refs.subroutine_func_names.add(slugify(sub_name))
 
-    if func_name == "raw":
+    if func_name in {"raw", "undecoded"}:
         return
 
     # For timer/counter instructions, strip the done_bit + accumulator args

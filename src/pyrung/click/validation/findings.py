@@ -179,6 +179,7 @@ _REFUSED_WHEN_ALLOWED = frozenset(
         CLK_MATH_RANGE_NOT_CONTIGUOUS,
         CLK_MATH_RANGE_MIXED_BANKS,
         CLK_COPY_WIDE_CONSTANT,
+        "undecoded-rung",
     }
 )
 

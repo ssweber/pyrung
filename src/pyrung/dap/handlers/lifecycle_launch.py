@@ -306,6 +306,20 @@ def load_program(
     return snapshot
 
 
+def undecoded_text(runner: PLC) -> str:
+    """Return a line for each undecoded() rung of *runner*'s program, or ``""``.
+
+    laddercodec puts an undecoded marker in place of a CLICK rung that it cannot decode. The
+    scan stops at the marker, so the launch and each reload say where it is and why.
+    """
+    program = runner._program
+    if program is None:
+        return ""
+    from pyrung.click.undecoded import undecoded_notice
+
+    return undecoded_notice(program)
+
+
 def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     parsed = adapter._parse_request_args(_LaunchRequestArgs, args)
     from pyrung.dap.handlers.simulation import parse_speed
@@ -368,6 +382,11 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         text = skipped_addresses_text(snapshot.skipped, snapshot.file_name)
         adapter._enqueue_internal_event("output", {"category": "console", "output": f"{text}\n"})
         body["skippedAddresses"] = list(snapshot.skipped)
+    undecoded = undecoded_text(adapter._runner)
+    if undecoded:
+        adapter._enqueue_internal_event(
+            "output", {"category": "console", "output": f"{undecoded}\n"}
+        )
     return body, [("stopped", adapter._stopped_body("entry"))]
 
 

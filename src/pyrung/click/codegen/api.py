@@ -149,6 +149,7 @@ def _prepare_codegen(
 
     if isinstance(source, _LadderBundle):
         raw_rungs = _parse_rows(source.main_rows)
+        main_file = None
         call_names = _find_call_names(raw_rungs)
         subroutines = _parse_subroutines_from_bundle(source, call_names, validate=validate)
     elif isinstance(source, (str, Path)):
@@ -163,6 +164,7 @@ def _prepare_codegen(
             dir_path = csv_path.parent
 
         raw_rungs = _parse_csv(main_path)
+        main_file = main_path.name
         call_names = _find_call_names(raw_rungs)
         subroutines = (
             _parse_subroutines(dir_path, call_names, validate=validate) if call_names else []
@@ -172,7 +174,9 @@ def _prepare_codegen(
             f"source must be a path (str/Path) or LadderBundle, got {type(source).__name__}"
         )
 
-    analyzed = _analyze_rungs(raw_rungs, validate=validate, source_name="Main program")
+    analyzed = _analyze_rungs(
+        raw_rungs, validate=validate, source_name="Main program", file_name=main_file
+    )
 
     all_analyzed = list(analyzed)
     for sub in subroutines:
@@ -277,6 +281,7 @@ def _parse_subroutines_from_bundle(
             raw,
             validate=validate,
             source_name=f'Subroutine "{name}"',
+            subroutine=True,
         )
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
     return subs

@@ -781,6 +781,16 @@ class _InstructionMixin:
         if instruction_type == "RawInstruction":
             return f"raw({instruction.class_name},{instruction.fields})"
 
+        if instruction_type == "UndecodedInstruction":
+            # laddercodec's encode() refuses the marker too, so no export writes it.
+            from pyrung.click.undecoded import FIX_TEXT
+
+            self._raise_issue(
+                path=path,
+                message=f"{instruction.reason()} {FIX_TEXT}",
+                source=instruction,
+            )
+
         self._raise_issue(
             path=path,
             message=f"Unsupported instruction type: {instruction_type}.",

@@ -400,6 +400,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("receive")
     if "raw" in collection.used_instructions:
         click_imports.append("raw")
+    if "undecoded" in collection.used_instructions:
+        click_imports.append("undecoded")
 
     lines.append(f"from pyrung.click import {', '.join(click_imports)}")
 
@@ -1299,6 +1301,44 @@ def _unknown_af(token: str) -> str:
     )
 
 
+def _render_undecoded(token: str, args_str: str) -> str:
+    """Render laddercodec's ``undecoded("<error>",rung=N,...,stop=end)`` as a pyrung call.
+
+    laddercodec checks the fields, so the importer refuses a token that laddercodec refuses.
+    """
+    from laddercodec import Undecoded
+
+    args, kwargs = _parse_af_args(args_str)
+    fields = dict(kwargs)
+    known = {"rung", "row", "column", "stop"}
+    if len(args) != 1 or not args[0].startswith('"') or set(fields) - known:
+        raise ValueError(
+            f"The AF column holds {token!r}. laddercodec writes an undecoded marker as "
+            'undecoded("<error>",rung=N,row=R,column=C,stop=end), with row and column optional.'
+        )
+
+    def whole(key: str) -> int | None:
+        text = fields.get(key)
+        if text is None:
+            return None
+        if not (text.isascii() and text.isdigit()):
+            raise ValueError(f"The AF column holds {token!r}. Its {key}= must be a whole number.")
+        return int(text)
+
+    rung = whole("rung")
+    stop = fields.get("stop")
+    if rung is None or stop is None:
+        raise ValueError(f"The AF column holds {token!r}. It needs rung= and stop=.")
+    marker = Undecoded(_csv_string_value(args[0]), rung, whole("row"), whole("column"), stop)  # ty: ignore[invalid-argument-type]
+    parts = [_string_literal(marker.error), f"rung={marker.rung}"]
+    if marker.row is not None:
+        parts.append(f"row={marker.row}")
+    if marker.column is not None:
+        parts.append(f"column={marker.column}")
+    parts.append(f"stop={_string_literal(marker.stop)}")
+    return f"undecoded({', '.join(parts)})"
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -1349,6 +1389,9 @@ def _render_af_token(
         class_name = parts[0].strip()
         fields = parts[1].strip() if len(parts) > 1 else ""
         return f"raw({_string_literal(class_name)}, {fields!r})"
+
+    if func_name == "undecoded":
+        return _render_undecoded(token, args_str)
 
     if not args_str:
         return f"{py_func}()"

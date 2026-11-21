@@ -23,14 +23,12 @@ Specs that later work needs are kept beside this file:
 ## After 0.18.0
 
 The plan and Sam set this order (2026-11-20).
-1. Make `ladder_to_pyrung()` read laddercodec's undecoded marker as a stop that says why. ClickNick's roadmap item 9
-   waits on it. This roadmap's item is "The undecoded marker", under "laddercodec and pyclickplc".
-2. Parse operands once, in the builder. The item is below.
-3. Export through laddercodec (plan step 5), under "laddercodec and pyclickplc". It comes after parse-once, because
+1. Parse operands once, in the builder. The item is below.
+2. Export through laddercodec (plan step 5), under "laddercodec and pyclickplc". It comes after parse-once, because
    parse-once changes the operand objects that the export hands to laddercodec.
-4. The CLICK-match fixes from the 2026-11-10 readings, in section 2.
-5. Console commands for every change, in section 4.
-6. float32 Real stores, the per-PLC definitions table, the history API and `calc()` into a pointer destination, in
+3. The CLICK-match fixes from the 2026-11-10 readings, in section 2.
+4. Console commands for every change, in section 4.
+5. float32 Real stores, the per-PLC definitions table, the history API and `calc()` into a pointer destination, in
    section 5.
 
 Then `how()`, after the recording core (section 3). The items are in "how(): after the recording core". The extra
@@ -213,9 +211,9 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   matched pyrung to them and added part follow4_reads (groups `plc_stores` and `td_count_on`).
   - Run part follow4_reads on a CLICK to confirm its cases.
   - What CLICK sums for `SUM ( Y015 : Y021 )` across the gap. pyrung exports `y.select(15, 21).sum()` that way, because the aggregate check lets bit banks pass.
-  - Run part modbus_raw once on a CLICK, to record its probes of X, T, CT, the coils between slots and the registers
-    after XD8 and YD8 in `readings.toml`. clicknick read the same requests by hand (`jobs/plc-answers/NOTES.md`), and
-    bob/plc-modbus made both Modbus servers match them.
+  - Part modbus_raw: the 2026-11-18 run answered FC15 across the X gap and the reads after XD8 and YD8. Still open
+    are the Y gaps in slots 2 to 8 and `fc15_y_gap`. They write outputs, so they need `PYRUNG_CONFORMANCE_OUTPUTS=1`
+    and Sam's go.
   - `flag_boxes/ton_ctu_by_pointer` (part follow_flags) can't tell whether a TON or a CTU clears an SC44 raised
     through pointer -1. It needs another way to raise and hold SC44. clicknick has nothing on file, and its runner
     cannot read a runtime flag (clicknick, 2026-11-18). So a pyrung session writes a new conformance case first
@@ -421,15 +419,25 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
   2026-11-17). This replaces "the refusal wins". The pyrung sections of
   laddercodec's `csv-format.md` move here.
-- **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
-  `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
-  finding. laddercodec 0.5.0 has the marker. pyrung runs it first after 0.18.0 (plan,
-  "In laddercodec", and Sam, 2026-11-20). [nothing]
-  - `ladder_to_pyrung()` raises `ValueError` on an `undecoded(...)` cell today.
-  - ClickNick's roadmap item 9 waits on it. The Simulator runs up to the marker, and Check Program lists it.
-- **laddercodec's hint for a non-printable `fill()` into TXT.** For `fill('é', txt.select(1, 2))`, pyrung prints
-  laddercodec's hint, which says to write the character as its `$hh` code. But `fill('$E9', txt.select(1, 2))` is
-  refused with `constant-out-of-range`. It is reported to laddercodec (2026-11-20).
+- **An undecoded marker inside a For loop.** `ladder_to_pyrung()` imports laddercodec's marker as `undecoded()`.
+  `Program` leaves out every rung after it in the same main program or subroutine, so the scan stops there. A marker
+  between `for()` and `next()` is refused at import, because leaving rungs out can't stop only on the scans that run
+  the loop. laddercodec can write one there, since it replaces any rung in place. [nothing]
+  - Supporting it needs a stop at scan time: a new "end the scan" kind for main, handled everywhere a subroutine
+    return is handled today. Those places are the executor's two run paths, the debugger, causal projection, the
+    kernel and code.py, the PDG reach, the return guards, the prover slice and the jit.
+  - Do it only if a user's project hits it.
+- **What a program loses after an undecoded marker.** The rungs after the marker are in the generated source but
+  not in `Program`. A breakpoint on one does not bind. `check()`, coverage and the DataView don't see them, so a
+  tag used only there drops out of ClickNick's address editor. A subroutine called only there is never called, and
+  `check()` says nothing about it. A `call()` to an undefined subroutine there no longer raises when the program is
+  built. The importer still refuses a missing subroutine file, so only hand-edited code gets there. This is by
+  design. Revisit it if ClickNick's views need those rungs. [nothing]
+- **A non-ASCII `fill()` into TXT doesn't export.** pyrung refuses `fill('é', txt.select(1, 2))` and prints
+  laddercodec's hint, which says to write the character as its `$hh` code. No pyrung form takes that hint.
+  `fill('$E9', ...)` is a three-character string, which raises at the scan. [nothing]
+  - The fix is for the export to write the character as bare `$hh`, and for pyrung to word its own hint.
+  - `copy('é', TXT1)` exports quoted. It is unchecked against CLICK.
 - **A TXT initial value with edge spaces.** clicknick imported nickname files into CLICK and read the result
   (`clicknick-wt/buildbot/jobs/csv-import/RESULTS.md:102-106`). CLICK keeps a quoted value as written, so `" a "`
   stays ` a `. CLICK trims the whitespace (space, tab, VT and FF) at both ends of a bare value, so ` a` becomes `a`,

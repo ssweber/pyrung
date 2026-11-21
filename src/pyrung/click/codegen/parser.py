@@ -134,6 +134,8 @@ def _parse_subroutines(
             raw,
             validate=validate,
             source_name=f'Subroutine "{name}"',
+            file_name=sub_path.name,
+            subroutine=True,
         )
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
 

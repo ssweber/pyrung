@@ -131,6 +131,26 @@ Codegen always emits the CLICK-first style (slot aliases, no standalone tag cons
 
 Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nickname comments (`# SpeedCmd..SpeedFbk`) when the endpoints have nicknames, because a CLICK range is bound to its addresses. For remappable ranges, add `:named_array` markers to the nickname CSV, which gives you `RecipeProfile.instance_select(1, 2)` instead of raw addresses.
 
+### A rung that laddercodec could not decode
+
+laddercodec writes a marker rung in place of a rung that it cannot decode. Codegen reads the marker as `undecoded()`:
+
+```python
+from pyrung.click import undecoded
+
+comment("UNDECODED: rung 4, row 0: unknown instruction (40 bytes)")
+with rung():
+    undecoded("unknown instruction (40 bytes)", rung=4, row=0, column=31, stop="end")
+```
+
+`rung`, `row` and `column` count from 0, as laddercodec counts them. CLICK numbers its rungs from 1, so `rung=4` is CLICK rung 5.
+
+The scan stops at `undecoded()`. In the main program the scan ends there (`stop="end"`). In a subroutine the subroutine returns there (`stop="return"`). The debugger console names each marker and why it is there. `mapping.validate(logic)` reports each marker as `undecoded-rung`.
+
+pyrung leaves out the rungs after `undecoded()`. A breakpoint on one of them does not bind.
+
+The export to CLICK and the CircuitPython code refuse `undecoded()`. Write the rung's logic in its place, or remove the rung. Codegen refuses a marker inside a For loop.
+
 ## Multi-file project codegen
 
 `ladder_to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator. Tags and the TagMap live in `tags.py`. `main.py` ties everything together.

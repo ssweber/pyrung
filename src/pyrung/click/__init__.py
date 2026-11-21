@@ -257,6 +257,12 @@ from pyrung.click.tag_map import (
     parse_tag_meta,
     upgrade_comment,
 )
+from pyrung.click.undecoded import (
+    UndecodedInstruction,
+    undecoded,
+    undecoded_notice,
+    undecoded_rungs,
+)
 from pyrung.click.validation import (
     ClickFinding,
     ClickValidationReport,
@@ -313,6 +319,10 @@ __all__ = [
     "nop",
     "RawInstruction",
     "raw",
+    "UndecodedInstruction",
+    "undecoded",
+    "undecoded_notice",
+    "undecoded_rungs",
     "CodegenIdentityError",
     "WorkspaceKind",
     "ladder_to_pyrung",

@@ -58,6 +58,11 @@ class Instruction(ABC):
     _edge_frame: tuple[tuple[str, str], ...] | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
+    # True for an instruction that stops its scope each time the scan reaches it, in a rung
+    # with no conditions. The main program ends the scan there, and a subroutine returns.
+    # ``Program`` leaves out the rungs that follow it in the same scope, because they never
+    # run. So every runner, the kernel and each analysis read the same rungs.
+    ENDS_SCOPE: bool = False
     _reads: tuple[str, ...] = ()
     _writes: tuple[str, ...] = ()
     _conditions: tuple[str, ...] = ()

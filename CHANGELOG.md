@@ -13,6 +13,10 @@
 
 ## Unreleased
 
+### What's new
+
+- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode (it raised `ValueError`). The rung becomes `undecoded()`, which ends the scan there and says why. The export to CLICK refuses it.
+
 ### Fixes
 
 - A project opened through a junction, a symlink or a subst drive now finds its TagMap, and a reload runs the new program

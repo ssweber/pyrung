@@ -45,6 +45,7 @@ from pyrung.dap.handlers.lifecycle_launch import (
     commit_click_project,
     module_in_folder,
     stage_click_project,
+    undecoded_text,
 )
 from pyrung.dap.harness_console import StagedHarness, commit_harness, stage_harness
 from pyrung.dap.links import BenchDrop, BenchLink, active_overrides, bench_active, in_program
@@ -858,6 +859,9 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     if warnings:
         parts.append("Warnings:")
         parts.extend(warnings)
+    undecoded = undecoded_text(reloaded)
+    if undecoded:
+        parts.append(undecoded)
     if staged.banner:
         parts.append(staged.banner)
 
