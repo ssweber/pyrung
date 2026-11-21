@@ -159,6 +159,7 @@ _INSTRUCTION_NAMES = {
     "for",
     "next",
     "raw",
+    "undecoded",
     "send",
     "receive",
 }

@@ -20,6 +20,7 @@ from pyrung.circuitpy.codegen.context import (
 )
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
+from pyrung.click.undecoded import UndecodedInstruction
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -444,11 +445,12 @@ def _compile_instruction(
     if isinstance(instr, ModbusReceiveInstruction):
         return _compile_modbus_receive_instruction(instr, enabled_expr, ctx, indent)
     if (
-        isinstance(instr, NopInstruction | RawInstruction)
+        isinstance(instr, NopInstruction | RawInstruction | UndecodedInstruction)
         and ctx.kernel_runtime
         and not ctx.proof_metadata
     ):
-        # pyrung runs both as no-ops, so the runner's kernel skips them.
+        # pyrung runs all three as no-ops, so the runner's kernel skips them. An
+        # undecoded() is the last rung of its scope, so skipping it stops the scope too.
         # A code.py and the static facts' kernel still refuse them.
         return []
 

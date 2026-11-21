@@ -821,6 +821,15 @@ def _analyze_rungs(
                 if body_af.startswith("for("):
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
                     depth += 1
+                elif body_af.startswith("undecoded("):
+                    # Inside a loop the marker stops its scope only on a scan that runs the
+                    # loop. pyrung runs a marker only where every scan reaches it.
+                    where = f"{source_name}, rung {i + 1}: " if source_name else ""
+                    raise ValueError(
+                        f"{where}laddercodec could not decode this rung, and pyrung cannot "
+                        "run its undecoded marker inside a For loop. Rewrite the rung in "
+                        "CLICK, then read the program again."
+                    )
                 else:
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1

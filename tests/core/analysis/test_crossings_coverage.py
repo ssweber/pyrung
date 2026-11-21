@@ -30,6 +30,7 @@ import pyrung
 from pyrung import Char, Int
 from pyrung.click.nop import NopInstruction
 from pyrung.click.raw import RawInstruction
+from pyrung.click.undecoded import UndecodedInstruction
 from pyrung.core.analysis import crossings
 from pyrung.core.analysis.crossings import registered_classes, reverse
 from pyrung.core.copy_converters import to_ascii, to_value
@@ -129,6 +130,7 @@ EXEMPT = frozenset(
         ModbusSendInstruction,
         NopInstruction,
         RawInstruction,
+        UndecodedInstruction,
     }
 )
 

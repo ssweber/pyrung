@@ -13,6 +13,10 @@
 
 ## Unreleased
 
+### What's new
+
+- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode as `undecoded()`, a stop that says why (it raised `ValueError`). The scan stops at the marker, and the export to CLICK refuses it.
+
 ### Fixes
 
 - Linking an address that no rung uses now says so. The refusal reads `cannot link Y001: no rung uses Y001, so the

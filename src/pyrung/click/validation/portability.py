@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from laddercodec import Code
+
 from pyrung.core.expression import (
     BinaryExpr,
     Expression,
@@ -590,6 +592,21 @@ def _evaluate_instruction_portability(
                     "Replace it with CLICK instructions such as copy(), math(), timers, "
                     "counters, send() or receive()."
                 ),
+            )
+        )
+
+    if instruction_type == "UndecodedInstruction":
+        from pyrung.click.undecoded import FIX_TEXT
+
+        location_text = _format_location(base_location)
+        code = Code.UNDECODED_RUNG.value
+        findings.append(
+            ClickFinding(
+                code=code,
+                severity=_route_severity(code, mode),
+                message=f"{instruction.reason(location_text)} {instruction.effect()}",
+                location=location_text,
+                suggestion=FIX_TEXT,
             )
         )
     return findings
