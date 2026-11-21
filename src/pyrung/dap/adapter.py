@@ -334,8 +334,8 @@ class DAPAdapter:
             changed = self._state_fingerprint_locked() != before
         if changed:
             if not flushed:
-                # The handler failed, or its events changed the state.  Any worker frame still
-                # queued would describe the state from before the request.
+                # The handler failed, or another thread changed the state after it returned.
+                # A worker frame still queued would describe the state from before the request.
                 self._send_queued_events()
             self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
@@ -366,13 +366,16 @@ class DAPAdapter:
     def _send_queued_events(self) -> None:
         """Send the queued internal events and state frames now, in the order they were queued.
 
-        Does nothing unless the continue worker has a frame queued, because only the worker
-        queues a ``pyrungScanFrame`` internal event.  Requests stay queued in their own order.
+        Does nothing unless the continue worker has queued a frame with ``running`` False.  Only
+        a worker that is stopping queues one, and its frame would otherwise come after the
+        request's frame.  Requests stay queued in their own order.
         """
         due = ("internal_event", "state_frame")
         with self._queue.mutex:
             if not any(
-                item.get("kind") == "internal_event" and item.get("event") == "pyrungScanFrame"
+                item.get("kind") == "internal_event"
+                and item.get("event") == "pyrungScanFrame"
+                and not (item.get("body") or {}).get("running")
                 for item in self._queue.queue
             ):
                 return
