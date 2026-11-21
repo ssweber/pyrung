@@ -308,6 +308,7 @@ class DAPAdapter:
         if check_state:
             with self._state_lock:
                 before = self._state_fingerprint_locked()
+                was_executing = self._executor_running_locked()
         try:
             body, events = handler(request.get("arguments") or {})
             self._send_response(request, success=True, body=body)
@@ -324,6 +325,10 @@ class DAPAdapter:
         with self._state_lock:
             changed = self._state_fingerprint_locked() != before
         if changed:
+            if was_executing:
+                # The worker paused for this request and queued its last frame.  Sent after
+                # this request's frame, that frame would describe the state from before it.
+                self._send_queued_events()
             self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
     def _send_response(
@@ -349,6 +354,25 @@ class DAPAdapter:
 
     def _enqueue_internal_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         self._queue.put({"kind": "internal_event", "event": event, "body": body})
+
+    def _send_queued_events(self) -> None:
+        """Send the queued internal events and state frames now, in the order they were queued.
+
+        Requests stay queued in their own order.
+        """
+        due = ("internal_event", "state_frame")
+        with self._queue.mutex:
+            pending = [item for item in self._queue.queue if item.get("kind") in due]
+            if not pending:
+                return
+            rest = [item for item in self._queue.queue if item.get("kind") not in due]
+            self._queue.queue.clear()
+            self._queue.queue.extend(rest)
+        for item in pending:
+            if item["kind"] == "internal_event":
+                self._send_event(item["event"], item.get("body"))
+            else:
+                self._send_state_frame()
 
     def _state_fingerprint_locked(self) -> tuple[Any, ...] | None:
         return simulation.state_fingerprint_locked(self)

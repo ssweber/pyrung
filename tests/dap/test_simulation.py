@@ -413,6 +413,44 @@ def test_set_mode_pauses_running_executor(tmp_path: Path):
     _shutdown(adapter, out_stream)
 
 
+def _state_frames(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _events(messages, "pyrungScanFrame")
+
+
+def test_stop_from_free_running_run_ends_on_a_stop_frame(tmp_path: Path):
+    adapter, out_stream = _launch(tmp_path)
+    _request(adapter, out_stream, "continue")
+    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
+
+    # handle_request returns after the worker has paused and queued its last frame,
+    # so this order is the same on every run.
+    seen = _request(adapter, out_stream, "pyrungSetMode", {"mode": "stop"})
+    seen += _flush(adapter, out_stream)
+
+    frames = _state_frames(seen)
+    assert frames, seen
+    assert frames[-1]["mode"] == "stop"
+    assert frames[-1]["running"] is False
+    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungSetMode"}
+    _shutdown(adapter, out_stream)
+
+
+def test_step_from_free_running_run_ends_on_the_step_frame(tmp_path: Path):
+    adapter, out_stream = _launch(tmp_path)
+    _request(adapter, out_stream, "continue")
+    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
+
+    seen = _request(adapter, out_stream, "pyrungStepScan")
+    seen += _flush(adapter, out_stream)
+
+    frames = _state_frames(seen)
+    assert frames[-1]["running"] is False
+    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungStepScan"}
+    # The worker's own last frame is still sent, ahead of the request's frame.
+    assert any((f["source"] or {}).get("origin") == "worker" for f in frames[:-1])
+    _shutdown(adapter, out_stream)
+
+
 def test_set_mode_rejects_bad_mode(tmp_path: Path):
     adapter, out_stream = _launch(tmp_path)
     messages = _request(adapter, out_stream, "pyrungSetMode", {"mode": "program"})
