@@ -43,6 +43,7 @@ from pyrung.dap.console import ConsoleResult, register
 from pyrung.dap.handlers.lifecycle_launch import (
     ClickBinding,
     commit_click_project,
+    module_in_folder,
     stage_click_project,
 )
 from pyrung.dap.harness_console import StagedHarness, commit_harness, stage_harness
@@ -650,13 +651,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     if not path.is_file():
         raise adapter.DAPAdapterError(f"Program file not found: {path}")
 
-    program_dir = os.path.normcase(os.path.abspath(str(path.parent))) + os.sep
-    stale = [
-        name
-        for name, mod in sys.modules.items()
-        if isinstance(mod_file := getattr(mod, "__file__", None), str)
-        and os.path.normcase(os.path.abspath(mod_file)).startswith(program_dir)
-    ]
+    in_program_dir = module_in_folder(path.parent)
+    stale = [name for name, mod in list(sys.modules.items()) if in_program_dir(mod)]
     for name in stale:
         del sys.modules[name]
     importlib.invalidate_caches()
