@@ -239,8 +239,9 @@ def continue_worker(adapter: Any) -> None:
                 outputs=buffer.outputs,
                 source=WORKER_SOURCE,
             )
-
-        adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
+            # Queued under the lock, so a request that runs after this frame's state
+            # cannot send its own frame first.
+            adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
         last_emit_time = now
 
         buffer.monitors = []

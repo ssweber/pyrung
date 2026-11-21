@@ -435,6 +435,61 @@ def test_stop_from_free_running_run_ends_on_a_stop_frame(tmp_path: Path):
     _shutdown(adapter, out_stream)
 
 
+def test_stop_after_a_pause_that_is_still_pending_ends_on_a_stop_frame(tmp_path: Path):
+    adapter, out_stream = _launch(tmp_path)
+    _request(adapter, out_stream, "continue")
+    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
+
+    # The pause is set but the worker has not been joined when the stop request starts.
+    adapter._pause_event.set()
+    seen = _request(adapter, out_stream, "pyrungSetMode", {"mode": "stop"})
+    seen += _flush(adapter, out_stream)
+
+    frames = _state_frames(seen)
+    assert frames[-1]["mode"] == "stop"
+    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungSetMode"}
+    _shutdown(adapter, out_stream)
+
+
+def test_stop_after_the_worker_exited_ends_on_a_stop_frame(tmp_path: Path):
+    adapter, out_stream = _launch(tmp_path)
+    _request(adapter, out_stream, "continue")
+    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
+
+    # The worker has exited and its last frame is still queued when the stop request starts.
+    _request(adapter, out_stream, "pause")
+    thread = adapter._continue_thread
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+    seen = _request(adapter, out_stream, "pyrungSetMode", {"mode": "stop"})
+    seen += _flush(adapter, out_stream)
+
+    frames = _state_frames(seen)
+    assert frames[-1]["mode"] == "stop"
+    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungSetMode"}
+    _shutdown(adapter, out_stream)
+
+
+def test_step_after_the_worker_exited_ends_on_the_step_frame(tmp_path: Path):
+    adapter, out_stream = _launch(tmp_path)
+    _request(adapter, out_stream, "continue")
+    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
+
+    _request(adapter, out_stream, "pause")
+    thread = adapter._continue_thread
+    assert thread is not None
+    thread.join(timeout=5.0)
+    seen = _request(adapter, out_stream, "pyrungStepScan")
+    seen += _flush(adapter, out_stream)
+
+    frames = _state_frames(seen)
+    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungStepScan"}
+    stops = [m["body"]["reason"] for m in seen if m.get("event") == "stopped"]
+    assert stops == ["pause", "step"]
+    _shutdown(adapter, out_stream)
+
+
 def test_step_from_free_running_run_ends_on_the_step_frame(tmp_path: Path):
     adapter, out_stream = _launch(tmp_path)
     _request(adapter, out_stream, "continue")
