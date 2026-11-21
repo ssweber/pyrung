@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import runpy
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -57,6 +57,32 @@ def on_threads(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {"threads": [{"id": adapter.THREAD_ID, "name": "PLC Scan"}]}, []
 
 
+def module_in_folder(folder: Path | str) -> Callable[[Any], bool]:
+    """Return a test for "this module's file is inside *folder*", with links resolved.
+
+    A folder reached through a junction, a symlink or a subst drive has a different name
+    from the real path in a module's ``__file__``, so both sides go through ``realpath``.
+    The test skips a module with no usable ``__file__``.
+    """
+    root = os.path.normcase(os.path.realpath(str(folder))) + os.sep
+    real_dirs: dict[str, str] = {}
+
+    def inside(mod: Any) -> bool:
+        mod_file = getattr(mod, "__file__", None)
+        if not isinstance(mod_file, str):
+            return False
+        try:
+            directory, base = os.path.split(os.path.abspath(mod_file))
+            real = real_dirs.get(directory)
+            if real is None:
+                real = real_dirs[directory] = os.path.realpath(directory)
+            return os.path.normcase(os.path.join(real, base)).startswith(root)
+        except (OSError, ValueError):
+            return False
+
+    return inside
+
+
 def _find_project_tags_module(project_dir: Path) -> ModuleType | None:
     """Return the launched project's module exporting a ``mapping`` TagMap, if any.
 
@@ -67,15 +93,12 @@ def _find_project_tags_module(project_dir: Path) -> ModuleType | None:
 
     from pyrung.click.tag_map import TagMap
 
-    root = os.path.normcase(os.path.abspath(str(project_dir))) + os.sep
+    in_project = module_in_folder(project_dir)
     fallback: ModuleType | None = None
     for name, mod in list(sys.modules.items()):
         if not isinstance(getattr(mod, "mapping", None), TagMap):
             continue
-        mod_file = getattr(mod, "__file__", None)
-        if not isinstance(mod_file, str):
-            continue
-        if not os.path.normcase(os.path.abspath(mod_file)).startswith(root):
+        if not in_project(mod):
             continue
         # Other project modules re-import ``mapping``; prefer where it is defined.
         if name.rpartition(".")[2] == "tags":
