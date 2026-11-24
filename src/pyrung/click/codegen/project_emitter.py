@@ -1007,6 +1007,26 @@ Run `uv run pytest`. The generated smoke test checks that the whole program
 loads and completes a scan. Add focused tests under `tests/` for behavior you
 change, especially interlocks, state transitions, alarms, and failure cases.
 
+Plain `PLC(logic)` starts every register at 0. A setpoint or timeout the
+machine keeps in a DS register is then 0 too, and the test runs a different
+machine without saying so. Start from a PLC data file instead. Before you
+write such a test, ask the engineer whether they have read the PLC's data and
+where the file is. If not, ask them to save one in Click with PLC > Read Data
+from PLC > All > Save. Copy it into `tests/data/`, which survives a CLICK save.
+
+    from pathlib import Path
+
+    from pyrung import PLC
+    from plc.main import logic
+    from plc.tags import blocks, mapping
+
+    DATA = Path(__file__).parent / "data"
+
+    state = mapping.load_snapshot(DATA / "machinedata.csv", blocks=blocks)
+    plc = PLC(logic, dt=0.1, initial_state=state)
+
+Don't patch setpoints in by hand. Any value you miss stays at 0.
+
 `src/plc/main.py` and subroutine files are reconstructed from CLICK, so arbitrary
 Python-only constants in them do not survive a save. For discrete states, keep
 the durable labels in tag `choices=` metadata and use the explicit value form in
