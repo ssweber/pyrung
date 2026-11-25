@@ -239,8 +239,9 @@ def continue_worker(adapter: Any) -> None:
                 outputs=buffer.outputs,
                 source=WORKER_SOURCE,
             )
-
-        adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
+            # Queue the frame while the lock is held. A request that changes the state after
+            # this scan then finds a stopping worker's last frame in the queue and sends it first.
+            adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
         last_emit_time = now
 
         buffer.monitors = []
