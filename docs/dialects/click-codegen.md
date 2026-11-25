@@ -138,12 +138,14 @@ laddercodec writes a marker rung in place of a rung that it cannot decode. Codeg
 ```python
 from pyrung.click import undecoded
 
-comment("UNDECODED: rung 4, row 0: unknown instruction (40 bytes)")
+comment("UNDECODED: CLICK rung 5, row 1: unknown instruction (40 bytes)")
 with rung():
     undecoded("unknown instruction (40 bytes)", rung=4, row=0, column=31, stop="end")
 ```
 
-`rung`, `row` and `column` count from 0, as laddercodec counts them. CLICK numbers its rungs from 1, so `rung=4` is CLICK rung 5.
+`rung`, `row` and `column` count from 0, as laddercodec counts them. CLICK counts the comment's numbers from 1, so the comment says rung 5 for `rung=4`.
+
+When laddercodec stops reading partway through a file, one marker stands for that rung and every rung after it (`to_the_end=True`).
 
 The scan stops at `undecoded()`. In the main program the scan ends there (`stop="end"`). In a subroutine the subroutine returns there (`stop="return"`). The debugger console names each marker and why it is there. `mapping.validate(logic)` reports each marker as `undecoded-rung`.
 

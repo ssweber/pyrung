@@ -152,6 +152,9 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   fold-check session failure behind "N passed" (train14, 2026-11-08: an undeclared mismatch from a
   strict xfail). A strict xfail whose run fold-check compares wraps that run in
   `fold_check.deliberate()` when fold-check is installed.
+- The orchestrator runs `mergeq.py next` with `UV_PYTHON=3.14` set. A gate's fresh venv otherwise picks the
+  newest Python on the machine. On 2026-11-25 that was CPython 3.15.2, which has no pyyaml wheel, so the docs stage
+  failed while building pyyaml from source.
 - One heavy job machine-wide (the queue's lock); up to ~5 builders iterating on targeted tests in
   parallel. `test` and `fold` take 6 of the 8 cores (`PYTEST_WORKERS`, peak 2.9 GB). Pilot-heavy suites
   (`tumbler`, `prove`, `pilot`) stay in one process: user, 2026-11-03, pilot is intensive.

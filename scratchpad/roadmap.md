@@ -265,6 +265,10 @@ the VS Code extension release together. [nothing, with a joint release]
     requests, Reload and StepScan.
 - **Stay as requests (reads).** Query, Graph, FindLabel, ListMonitors, Seek, ForkAt, TagChanges, Causal, ModbusInfo
   and ListForces. Monitors change the debugger's view, not the PLC, so AddMonitor and RemoveMonitor stay too.
+- **Who decides links.** The plan change in ssweber.github.io #101 (relayed by the planner, 2026-11-25) puts links
+  into this step. A link says that a feedback tag follows an output tag (`link X002 Y001` makes X002 follow Y001), as
+  a program or the console's `link` command declares. Before anyone builds them, the pyrung session and the ClickNick
+  session research the design together. Sam approves the design.
 - Console verbs can already return structured data (`ConsoleResult.body`, as `reload` does).
 - Today panel force and patch never reach `capture_hook`, so recordings miss them. That is the gap this step closes.
 - **For Sam: does an address that no rung uses exist?** In a generated project, `force X002 true` and `patch X003
@@ -409,7 +413,7 @@ Sam agreed to these on 2026-11-15. The gate fixes are step 0 above.
 
 Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
-- **laddercodec as a dependency.** Validation runs on laddercodec 0.5.0. The rest follows the plan's order (Sam,
+- **laddercodec as a dependency.** Validation runs on laddercodec 0.5.1. The rest follows the plan's order (Sam,
   2026-11-16). [nothing]
   - Export through laddercodec (plan step 5), third under "After 0.18.0". laddercodec 0.5.0 has `csv_rows()`, a
     public `CSV_HEADER`, and `write_bundle()` and `read_bundle()` for `main.csv` plus `subroutines/<name>.csv`. When
@@ -419,6 +423,21 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
   2026-11-17). This replaces "the refusal wins". The pyrung sections of
   laddercodec's `csv-format.md` move here.
+- **The comment length rule moves to laddercodec.** [waiting on laddercodec]
+  - Sam approved laddercodec's `comment-too-long` finding. laddercodec's `check()` will report a rung comment over
+    1400 encoded bytes. The finding names the rung and says how many bytes to cut. A character outside ASCII takes 4
+    to 16 of those bytes.
+  - When the finding is on laddercodec's main, the pyrung session deletes pyrung's own 1400-character check in
+    `comment()` (`_MAX_COMMENT_LENGTH` in src/pyrung/core/program/context/_rung.py) and relies on the finding. Then
+    only laddercodec holds the rule.
+- **The pin past pyclickplc 0.11.3.** pyclickplc's main (bc9e03c, #80) makes `validate_nickname` and
+  `validate_comment` reject a character that cp1252 lacks. [nothing]
+  - With it, `TagMap.from_nickname_file()` raises `ValueError` for a block nickname with such a character. For any
+    other tag name with one, `TagMap.warnings` gets an entry.
+  - The CHANGELOG of the pyrung release that takes the pin must say so.
+- **After 0.18.1, add a `.python-version` file that holds 3.14.** pyclickplc added one. A fresh venv otherwise picks
+  CPython 3.15, where the docs build fails because pyyaml has no wheel. Then the `UV_PYTHON` lines in
+  .claude/bob/profile.md can go. [nothing]
 - **An undecoded marker inside a For loop.** `ladder_to_pyrung()` imports laddercodec's marker as `undecoded()`.
   `Program` leaves out every rung after it in the same main program or subroutine, so the scan stops there. A marker
   between `for()` and `next()` is refused at import, because leaving rungs out can't stop only on the scans that run
