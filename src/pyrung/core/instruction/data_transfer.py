@@ -44,6 +44,7 @@ from .operands import (
     TagArg,
     Value,
     check_rules,
+    describe,
 )
 from .resolvers import (
     _sequential_tags,
@@ -182,6 +183,43 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
             f"{what} of the text {value!r} into a number register ({dest_type.name}) cannot "
             f"store a number. {advice}"
         ) from None
+
+
+# The target types that the CLICK export accepts for each converter of a single Copy.
+# The export accepts to_binary into a Dint or a Real only from a Real or a Dint, and it
+# checks that pair itself.  So the builder refuses only a target that no source makes valid.
+_CONVERTER_TARGETS: dict[str, tuple[TagType, ...]] = {
+    "text": (TagType.CHAR,),
+    "binary": (TagType.CHAR, TagType.DINT, TagType.REAL),
+    "value": (TagType.INT, TagType.DINT, TagType.WORD),
+    "ascii": (TagType.INT, TagType.DINT, TagType.WORD),
+}
+
+
+def _refuse_converter_into(convert: Any, dest: Any) -> None:
+    """Raise ``ValueError`` for a converter that cannot store into the type of *dest*.
+
+    The CLICK export refuses such a Copy whatever its source.  With most sources, a scan
+    stores nothing and sets the out-of-range flag.
+    """
+    if not isinstance(convert, CopyConverter):
+        return
+    allowed = _CONVERTER_TARGETS.get(convert.mode)
+    target_type = copy_source_kind(dest)
+    if allowed is None or not isinstance(target_type, TagType) or target_type in allowed:
+        return
+    shown = "to_text()" if convert.mode == "text" else f"to_{convert.mode}"
+    names = [tag_type.name.capitalize() for tag_type in allowed]
+    article = "an" if names[0][0] in "AEIOU" else "a"
+    if len(names) == 1:
+        kinds, advice = f"{article} {names[0]} tag", f"copy into {article} {names[0]} tag"
+    else:
+        kinds = f"{article} {', '.join(names[:-1])} or {names[-1]} tag"
+        advice = "copy into a tag of one of those types"
+    raise ValueError(
+        f"copy() got convert={shown} with {describe(dest)} as the target. {shown} stores "
+        f"only into {kinds}. Leave convert out, or {advice}."
+    )
 
 
 def _copy_dest(dest: Any) -> Any:
@@ -344,6 +382,7 @@ class CopyInstruction(OneShotMixin, Instruction):
         self.source: Value = _one_value(VALUE.parse("copy()", "source", source))
         self.dest: Dest = _COPY_DEST.parse("copy()", "target", dest)
         check_rules(self._operands, self._operand_rules, "copy()", {"source": source, "dest": dest})
+        _refuse_converter_into(convert, dest)
         self.authored_convert = convert
         self.convert = convert if convert is not None else _plain_text_converter(source, dest)
 

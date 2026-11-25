@@ -596,7 +596,7 @@ class TestConverterBankCompatibility:
         report = validate_click_program(prog, tag_map, mode="warn")
         assert Code.COPY_CONVERTER_BANK in _codes(report)
 
-    def test_to_text_rejects_numeric_dest(self):
+    def test_to_text_into_a_numeric_dest_is_refused_at_build(self):
         source = Int("Source")
         dest = Int("Dest")
 
@@ -604,10 +604,8 @@ class TestConverterBankCompatibility:
             with rung():
                 copy(source, dest, convert=to_text())
 
-        prog = _build_program(logic)
-        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
-        report = validate_click_program(prog, tag_map, mode="warn")
-        assert Code.COPY_CONVERTER_BANK in _codes(report)
+        with pytest.raises(ValueError, match=r"convert=to_text\(\) with the Int tag Dest"):
+            _build_program(logic)
 
     def test_to_binary_valid(self):
         source = Int("Source")
@@ -661,7 +659,7 @@ class TestConverterBankCompatibility:
         report = validate_click_program(prog, tag_map, mode="warn")
         assert Code.COPY_CONVERTER_BANK in _codes(report)
 
-    def test_to_value_rejects_txt_dest(self):
+    def test_to_value_into_a_txt_dest_is_refused_at_build(self):
         source = Char("Source")
         dest = Char("Dest")
 
@@ -669,10 +667,8 @@ class TestConverterBankCompatibility:
             with rung():
                 copy(source, dest, convert=to_value)
 
-        prog = _build_program(logic)
-        tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
-        report = validate_click_program(prog, tag_map, mode="warn")
-        assert Code.COPY_CONVERTER_BANK in _codes(report)
+        with pytest.raises(ValueError, match="convert=to_value with the Char tag Dest"):
+            _build_program(logic)
 
     def test_to_ascii_valid(self):
         source = Char("Source")

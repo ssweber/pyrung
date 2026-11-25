@@ -72,29 +72,17 @@ KERNEL_FORMS: dict[str, tuple[Callable[[], Any], dict[str, Any]]] = {
     "Char plus Char": (lambda: math(txt[1] + txt[2], df[3]), {"DF3": 72.0}),
     "Char times 2": (lambda: math(txt[1] * 2, df[3]), {"DF3": 77.0}),
     "Char sum of a sum": (lambda: math((txt[1] + txt[2]) + txt[1], df[3]), {"DF3": 727.0}),
-    "to_text() into a Bool": (
-        lambda: copy(ds[1], c[3], convert=to_text()),
-        {"C3": False, "fault.out_of_range": True},
+    "to_text() from below DS into a TXT": (
+        lambda: copy(ds[ds[102]], txt[3], convert=to_text()),
+        {"TXT3": "\x00", "fault.address_error": True},
     ),
-    "to_text() into a Real": (
-        lambda: copy(ds[1], df[3], convert=to_text()),
-        {"DF3": 0.0, "fault.out_of_range": True},
+    "to_text() from past DS into a TXT": (
+        lambda: copy(ds[ds[103]], txt[3], convert=to_text()),
+        {"TXT3": "\x00"},
     ),
-    "to_binary of '7' into an Int": (
-        lambda: copy(55, ds[3], convert=to_binary),
-        {"DS3": 0, "fault.out_of_range": True},
-    ),
-    "to_binary into a Bool pointer": (
-        lambda: copy(ds[1], c[ds[101]], convert=to_binary),
-        {"C2": False, "fault.out_of_range": True},
-    ),
-    "to_text() from below DS into an Int": (
-        lambda: copy(ds[ds[102]], ds[3], convert=to_text()),
-        {"DS3": 0, "fault.out_of_range": True},
-    ),
-    "to_text() from past DS into an Int": (
-        lambda: copy(ds[ds[103]], ds[3], convert=to_text()),
-        {"DS3": 0},
+    "to_binary into a TXT pointer": (
+        lambda: copy(ds[1], txt[ds[101]], convert=to_binary),
+        {"TXT2": "\x04"},
     ),
     "to_text() from below DS to past TXT": (
         lambda: copy(ds[ds[102]], txt[ds[103]], convert=to_text()),

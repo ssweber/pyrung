@@ -11,6 +11,13 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Behaviour changes
+
+- `copy()` now refuses a converter that cannot store into its target, such as `to_value` into a TXT (the export refused it).
+  Leave `convert` out, or copy into a register type that the converter writes.
+
 ## v0.18.1 (2026-11-25)
 
 Upgrade if you import CLICK projects or use the debugger. `ladder_to_pyrung()` no longer fails on a rung that laddercodec cannot decode. A client that reads the refusal text of the console's `link` command must read the new text. Read Behaviour changes first.

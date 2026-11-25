@@ -68,7 +68,7 @@ copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCI
 
 A `copy()` or `blockcopy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag or a number constant into a TXT with no `convert` is `to_text()`. So `copy(-5, Txt[1])` writes "-" and "5".
 
-The CLICK export writes the converter that pyrung runs, because CLICK has no plain Copy between TXT and a number. A `copy()` of a TXT into a `DF` exports plain, because CLICK offers no conversion there.
+The CLICK export writes the converter that pyrung runs, because CLICK has no plain Copy between TXT and a number. A `copy()` of a TXT into a `DF` takes no `convert`, because CLICK offers no conversion there.
 
 ### Numeric → Text
 
@@ -116,6 +116,8 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 | `to_ascii` | Text → Numeric | Copy ASCII Code Value (Option 4b) | yes | yes | no |
 | `to_text()` | Numeric → Text | Copy Option 4a / 4c | yes | no | no |
 | `to_binary` | Numeric → Text | Copy Binary (Option 4a) | yes | no | no |
+
+`copy()` refuses a converter that cannot store into its target, such as `to_value` into a `Char`. `to_value` and `to_ascii` write an `Int`, `Dint` or `Word`. `to_text()` and `to_binary` write a `Char`.
 
 `to_value`, `to_ascii`, and `to_binary` accept no arguments. Pass them bare, with no parentheses. `to_binary()` also works. `to_text()` accepts keyword arguments for formatting options.
 

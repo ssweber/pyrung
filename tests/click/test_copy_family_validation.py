@@ -586,10 +586,10 @@ def test_the_label_leaves_out_the_name_under_the_caret():
 
 
 def test_a_converter_refusal_labels_the_caret_and_leads_the_hint_with_the_explanation():
-    (finding,) = _errors(lambda: copy(ds[1], txt[1], convert=to_value))
+    (finding,) = _errors(lambda: copy(ds[1], ds[2], convert=to_value))
     assert finding.code == Code.COPY_CONVERTER_BANK
     (frame,) = finding.display.frames
-    assert (frame.lines, frame.caret) == (("copy(DS1, TXT1, convert=to_value)",), (0, 24, 8))
+    assert (frame.lines, frame.caret) == (("copy(DS1, DS2, convert=to_value)",), (0, 23, 8))
     assert frame.caret_label
     assert finding.display.problem == ""
     assert finding.suggestion in finding.display.hint
@@ -766,7 +766,7 @@ def test_a_blockcopy_into_one_user_tag_names_it_as_copy_does(dest, label, text):
 
 def test_a_problem_line_names_the_tags():
     count = Int("Count")
-    prog = _program(lambda: copy(count, txt[1], convert=to_value))
+    prog = _program(lambda: copy(count, ds[2], convert=to_value))
     mapping = TagMap([count.map_to(ds[1])], include_system=False)
     (finding,) = validate_click_program(prog, mapping, mode="strict").errors
     assert "Count (DS1)" in finding.display.frames[0].caret_label
