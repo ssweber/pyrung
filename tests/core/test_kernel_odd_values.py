@@ -80,6 +80,14 @@ KERNEL_FORMS: dict[str, tuple[Callable[[], Any], dict[str, Any]]] = {
         lambda: copy(ds[ds[103]], txt[3], convert=to_text()),
         {"TXT3": "\x00"},
     ),
+    "to_binary of '7' into a Dint": (
+        lambda: copy(55, dd[3], convert=to_binary),
+        {"DD3": 0, "fault.out_of_range": True},
+    ),
+    "to_binary into a Dint pointer": (
+        lambda: copy(ds[1], dd[ds[101]], convert=to_binary),
+        {"DD2": 0, "fault.out_of_range": True},
+    ),
     "to_binary into a TXT pointer": (
         lambda: copy(ds[1], txt[ds[101]], convert=to_binary),
         {"TXT2": "\x04"},

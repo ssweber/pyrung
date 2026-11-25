@@ -186,8 +186,9 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
 
 
 # The target types that the CLICK export accepts for each converter of a single Copy.
-# The export accepts to_binary into a Dint or a Real only from a Real or a Dint, and it
-# checks that pair itself.  So the builder refuses only a target that no source makes valid.
+# The export accepts to_binary into a Dint or a Real from some sources and refuses it from
+# others, and it checks the source itself.  So the builder refuses only a target that no
+# source makes valid.
 _CONVERTER_TARGETS: dict[str, tuple[TagType, ...]] = {
     "text": (TagType.CHAR,),
     "binary": (TagType.CHAR, TagType.DINT, TagType.REAL),
@@ -196,11 +197,12 @@ _CONVERTER_TARGETS: dict[str, tuple[TagType, ...]] = {
 }
 
 
-def _refuse_converter_into(convert: Any, dest: Any) -> None:
+def _refuse_converter_into(convert: Any, dest: Any, authored: Any) -> None:
     """Raise ``ValueError`` for a converter that cannot store into the type of *dest*.
 
-    The CLICK export refuses such a Copy whatever its source.  With most sources, a scan
-    stores nothing and sets the out-of-range flag.
+    The CLICK export refuses such a Copy whatever its source.  Without the refusal, most
+    such forms would store nothing and set the out-of-range flag.  The message names
+    *authored*, the target as the user wrote it, so a TXT range is named whole.
     """
     if not isinstance(convert, CopyConverter):
         return
@@ -217,7 +219,7 @@ def _refuse_converter_into(convert: Any, dest: Any) -> None:
         kinds = f"{article} {', '.join(names[:-1])} or {names[-1]} tag"
         advice = "copy into a tag of one of those types"
     raise ValueError(
-        f"copy() got convert={shown} with {describe(dest)} as the target. {shown} stores "
+        f"copy() got convert={shown} with {describe(authored)} as the target. {shown} stores "
         f"only into {kinds}. Leave convert out, or {advice}."
     )
 
@@ -375,6 +377,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             raise TypeError("copy() needs a source: a tag, a pointer or a constant.")
         if _is_range(source):
             raise TypeError("copy() reads one value. Use blockcopy() to copy a range.")
+        authored_dest = dest
         dest = _copy_dest(dest)
         check_real_literal(source, dest, "copy() source")
         if convert is None:
@@ -382,7 +385,7 @@ class CopyInstruction(OneShotMixin, Instruction):
         self.source: Value = _one_value(VALUE.parse("copy()", "source", source))
         self.dest: Dest = _COPY_DEST.parse("copy()", "target", dest)
         check_rules(self._operands, self._operand_rules, "copy()", {"source": source, "dest": dest})
-        _refuse_converter_into(convert, dest)
+        _refuse_converter_into(convert, dest, authored_dest)
         self.authored_convert = convert
         self.convert = convert if convert is not None else _plain_text_converter(source, dest)
 

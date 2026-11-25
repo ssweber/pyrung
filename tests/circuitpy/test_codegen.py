@@ -1838,6 +1838,19 @@ class TestBoardPeripheralsAndRunStop:
             assert repr(value) == repr(stored)
             assert flag is False
 
+    @pytest.mark.parametrize("dest_tag", [Dint, Real], ids=["dint", "real"])
+    def test_to_binary_of_a_constant_into_a_number_flags_and_writes_nothing_on_every_backend(
+        self, monkeypatch, dest_tag
+    ):
+        """55 makes the text "7", which the target could hold."""
+        dest = dest_tag("Dest", default=9)
+        with Program(strict=False) as prog:
+            with rung():
+                copy(55, dest, convert=to_binary)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
+        assert results == {name: (9, True) for name in results}
+
     @pytest.mark.parametrize(
         "build,lo,hi,at,flagged",
         [
@@ -3396,6 +3409,50 @@ class TestCopyConverterCodegen:
         from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
 
         assert eval(_load_cast_expr("saved", "CHAR"), {"saved": saved}) == expected
+
+    def test_scalar_copy_binary_into_a_number_faults_and_skips_write(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        source_value = Int("SourceValue", default=123)
+        target = Dint("Target", default=9)
+        fault_seen = Bool("FaultSeen")
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with rung(enable):
+                copy(source_value, target, convert=to_binary)
+            with rung(system.fault.out_of_range):
+                out(fault_seen)
+
+        ctx = _context_for_program(prog, hw)
+        target_symbol = ctx.symbol_for_tag(target)
+        fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
+        assert namespace[target_symbol] == 9
+        assert namespace[fault_seen_symbol] is True
 
 
 class TestGeneratedSourceSmoke:

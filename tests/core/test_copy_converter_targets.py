@@ -84,8 +84,13 @@ def test_a_pointer_target_is_refused_by_its_block_type() -> None:
         _build(ds[1], txt[ds[100]], to_ascii)
 
 
-# These forms built before the refusal, and check() and the how() prior then raised a
-# TypeError on them.  The runtime stored nothing, or a number into the TXT.
+def test_a_txt_range_target_is_named_as_written() -> None:
+    with pytest.raises(ValueError, match=r"with the range TXT2\.\.TXT3 of Char tags as the target"):
+        _build(txt[1], txt.select(2, 3), to_value)
+
+
+# Each of these forms makes a TXT hold a number.  check() and the how() prior raise
+# TypeError on such a TXT, so copy() must refuse the form.
 _SWEEP_SOURCES: dict[str, Callable[[], Any]] = {
     "5": lambda: 5,
     "12": lambda: 12,
@@ -107,5 +112,5 @@ _SWEEP_TARGETS: dict[str, Callable[[], Any]] = {
 def test_a_text_to_number_converter_into_a_txt_is_refused_before_check(
     source: str, converter: str, target: str
 ) -> None:
-    with pytest.raises(ValueError, match=rf"^copy\(\) got convert={converter} with the Char "):
+    with pytest.raises(ValueError, match=rf"^copy\(\) got convert={converter} with the "):
         _build(_SWEEP_SOURCES[source](), _SWEEP_TARGETS[target](), CONVERTERS[converter])

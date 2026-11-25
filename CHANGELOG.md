@@ -15,8 +15,8 @@
 
 ### Behaviour changes
 
-- `copy()` now refuses a converter that cannot store into its target, such as `to_value` into a TXT (the export refused it).
-  Leave `convert` out, or copy into a register type that the converter writes.
+- `copy()` now raises `ValueError` when you build a program with a converter that cannot store into its target, such as `to_value` into a TXT (it built).
+  Leave `convert` out, or copy into a tag type that the converter writes.
 
 ## v0.18.1 (2026-11-25)
 
