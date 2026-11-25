@@ -13,7 +13,7 @@
 
 ## v0.18.1 (2026-11-25)
 
-Upgrade if you import CLICK projects, or if you link tags in the debugger console. `ladder_to_pyrung()` no longer fails on a rung that laddercodec cannot decode. A client that reads the refusal text of the console's `link` command must read the new text. Read Behaviour changes first.
+Upgrade if you import CLICK projects or use the debugger. `ladder_to_pyrung()` no longer fails on a rung that laddercodec cannot decode. A client that reads the refusal text of the console's `link` command must read the new text. Read Behaviour changes first.
 
 ### What's new
 
