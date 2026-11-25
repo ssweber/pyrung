@@ -2093,12 +2093,17 @@ class TestBoardPeripheralsAndRunStop:
         [
             pytest.param(5, "5", id="5"),
             pytest.param(0, "0", id="0"),
+            pytest.param(True, "1", id="True"),
+            pytest.param(False, "0", id="False"),
         ],
     )
     def test_fill_of_a_digit_into_txt_writes_its_character_on_every_backend(
         self, monkeypatch, value, digit
     ):
-        """A CLICK was read filling 5 into TXT1..TXT3 as the character "5", with no flag."""
+        """A CLICK was read filling 5 into TXT1..TXT3 as the character "5", with no flag.
+
+        The export writes True and False as 1 and 0.
+        """
         prog, watch = self._fill_into_text(value)
         results = _on_every_backend(prog, monkeypatch, watch, scans=2)
         assert results == {name: (*[ord(digit)] * 3, ord("Z"), False) for name in results}

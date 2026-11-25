@@ -166,6 +166,11 @@ def _is_number_constant(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _is_bool_source(source: Any) -> bool:
+    """Return True for a Bool tag, a pointer into a Bool block or a Bool constant."""
+    return isinstance(source, bool) or copy_source_kind(source) is TagType.BOOL
+
+
 def _unwrapped(value: Any) -> Any:
     from pyrung.core.tag import ImmediateRef
 
@@ -450,6 +455,17 @@ class CopyInstruction(OneShotMixin, Instruction):
             raise TypeError("copy() reads one value. Use blockcopy() to copy a range.")
         authored_dest = dest
         dest = _copy_dest(dest)
+        if copy_source_kind(dest) is TagType.CHAR and _is_bool_source(source):
+            # CLICK's editor refuses a C, X, Y, T, CT or SC there, and a Copy of 1 needs a converter.
+            advice = (
+                'Copy the text "1" or "0" instead.'
+                if isinstance(source, bool)
+                else 'Copy the text "1" in a rung that has the Bool as its condition.'
+            )
+            raise ValueError(
+                f"copy() got {describe(source)} as the source and {describe(authored_dest)} as "
+                f"the target. copy() writes no Bool into a Char tag. {advice}"
+            )
         check_real_literal(source, dest, "copy() source")
         if convert is None:
             _refuse_text_that_stores_no_number("copy()", source, copy_source_kind(dest))
@@ -817,8 +833,9 @@ class FillInstruction(OneShotMixin, Instruction):
 
     An integer constant into a TXT range writes its text, as a plain ``copy()`` into one TXT
     does.  ``convert`` holds that ``to_text()`` converter, and is ``None`` for any other
-    Fill.  The builder refuses a number register, an expression or a Real constant there.  Text of more
-    than one character sets the out-of-range flag and writes nothing.
+    Fill.  The builder stores True and False there as 1 and 0.  It refuses a Bool tag, a
+    number register, an expression or a Real constant there.  Text of more than one
+    character sets the out-of-range flag and writes nothing.
     """
 
     _reads = ("value",)
@@ -843,6 +860,16 @@ class FillInstruction(OneShotMixin, Instruction):
         if _is_range(value):
             raise TypeError("fill() writes one value. Use blockcopy() to copy a range.")
         dest_type = _range_type(dest)
+        if dest_type is TagType.CHAR and isinstance(value, bool):
+            # The export writes True as 1, and a CLICK fills the digit "1".
+            value = int(value)
+        if dest_type is TagType.CHAR and copy_source_kind(value) is TagType.BOOL:
+            # CLICK's editor refuses a C, X, Y, T, CT or SC there.
+            raise ValueError(
+                f"fill() got {describe(value)} as the value and {describe(dest)} as the "
+                "target. fill() writes no Bool tag into Char tags. Fill True or False in a "
+                "rung that has the Bool as its condition."
+            )
         if copy_source_kind(value) is TagType.CHAR and dest_type in _NUMBER_TYPES:
             raise TypeError(
                 "fill() cannot write a TXT into a number register. Copy the TXT into a "

@@ -277,7 +277,7 @@ class TestFunctionalDepAdvice:
 class TestFillOfANumberIntoText:
     """A Fill of a number into a TXT range writes text, so the facts never mix it with text."""
 
-    @pytest.mark.parametrize("value", [5, 12, -5, 0])
+    @pytest.mark.parametrize("value", [5, 12, -5, 0, True, False])
     def test_check_and_the_how_prior_accept_it(self, value) -> None:
         chars = Block("Txt", TagType.CHAR, 1, 5)
         start, lit = Bool("Start"), Bool("Lit")

@@ -58,6 +58,8 @@ An integer constant filled into a TXT range writes its text, the same as a plain
 
 `fill()` refuses a number register or an expression as the value for a TXT range, as CLICK's editor does. Copy the value into one TXT with `copy()` instead.
 
+`fill(True, ...)` and `fill(False, ...)` write "1" and "0" into a TXT range. `copy()` and `fill()` refuse a Bool tag into TXT, as CLICK's editor does. `copy()` also refuses True or False into a TXT. Copy the text "1" or "0" instead.
+
 `fill()` also refuses a Real constant, such as `fill(1.5, Txt.select(1, 3))`. A CLICK accepts it, but it writes the real's text ("1.5000000") at each address of the range in turn. Each write overlaps the one before, and the last one runs past the end of the range. Copy the constant into one TXT with `copy()` instead.
 
 ## Type conversion (copy converters)

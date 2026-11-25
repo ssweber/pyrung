@@ -5,7 +5,9 @@ refuses a to_binary into a Dint or a Real from a source that CLICK's Copy dialog
 offering no Copy Binary for.  It refuses every other source that CLICK's Copy dialog offers
 the converter no option for.  fill() refuses a number register into Char tags, which
 CLICK's Fill dialog was read refusing with OBJ-024.  fill() also refuses a Real constant
-into Char tags, which a CLICK was read writing past the end of the range.
+into Char tags, which a CLICK was read writing past the end of the range.  copy() and fill()
+refuse a Bool tag into Char tags, which CLICK's editor refuses.  copy() also refuses a Bool
+constant there.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Char, Int, Program, copy, fill, rung
+from pyrung import Bool, Char, Int, Program, copy, fill, rung
 from pyrung.click import ClickBlocks
 from pyrung.core import to_ascii, to_binary, to_text, to_value
 
@@ -225,11 +227,73 @@ def test_fill_of_a_number_register_or_a_real_constant_into_char_tags_is_refused(
     )
 
 
-@pytest.mark.parametrize("value", [5, 12, "A", txt[10]], ids=["5", "12", "'A'", "TXT10"])
+@pytest.mark.parametrize(
+    "value", [5, 12, "A", txt[10], True, False], ids=["5", "12", "'A'", "TXT10", "True", "False"]
+)
 def test_fill_of_a_constant_or_a_char_into_char_tags_builds(value) -> None:
     with Program(strict=False):
         with rung(x[1]):
             fill(value, txt.select(1, 3))
+
+
+#: Each Bool source, and how a refusal names it.
+_BOOL_SOURCES: dict[str, tuple[Callable[[], Any], str]] = {
+    "C1": (lambda: c[1], "the Bool tag C1"),
+    "X1": (lambda: x[1], "the Bool tag X001"),
+    "Y1": (lambda: y[1], "the Bool tag Y001"),
+    "T1": (lambda: t[1], "the Bool tag T1"),
+    "CT1": (lambda: ct[1], "the Bool tag CT1"),
+    "SC1": (lambda: sc[1], "the Bool tag SC1"),
+    "C[DS1]": (lambda: c[ds[1]], "the Bool pointer C[DS1]"),
+    "Bool tag": (lambda: Bool("Flag"), "the Bool tag Flag"),
+}
+_CHAR_TARGETS: dict[str, tuple[Callable[[], Any], str]] = {
+    "TXT1": (lambda: txt[1], "the Char tag TXT1"),
+    "TXT[DS2]": (lambda: txt[ds[2]], "the Char pointer TXT[DS2]"),
+}
+
+
+@pytest.mark.parametrize("converter", [None, *CONVERTERS])
+@pytest.mark.parametrize("target", _CHAR_TARGETS)
+@pytest.mark.parametrize("source", _BOOL_SOURCES)
+def test_a_copy_of_a_bool_tag_into_a_char_is_refused(
+    source: str, target: str, converter: str | None
+) -> None:
+    build_source, shown = _BOOL_SOURCES[source]
+    build_target, named = _CHAR_TARGETS[target]
+    with pytest.raises(ValueError) as refused:
+        _build(build_source(), build_target(), None if converter is None else CONVERTERS[converter])
+    assert str(refused.value) == (
+        f"copy() got {shown} as the source and {named} as the target. copy() writes no Bool "
+        'into a Char tag. Copy the text "1" in a rung that has the Bool as its condition.'
+    )
+
+
+@pytest.mark.parametrize("converter", [None, *CONVERTERS])
+@pytest.mark.parametrize("value", [True, False])
+def test_a_copy_of_a_bool_constant_into_a_char_is_refused(
+    value: bool, converter: str | None
+) -> None:
+    with pytest.raises(ValueError) as refused:
+        _build(value, txt[1], None if converter is None else CONVERTERS[converter])
+    assert str(refused.value) == (
+        f"copy() got the constant {value} as the source and the Char tag TXT1 as the target. "
+        'copy() writes no Bool into a Char tag. Copy the text "1" or "0" instead.'
+    )
+
+
+@pytest.mark.parametrize("source", _BOOL_SOURCES)
+def test_a_fill_of_a_bool_tag_into_char_tags_is_refused(source: str) -> None:
+    build_source, shown = _BOOL_SOURCES[source]
+    with pytest.raises(ValueError) as refused:
+        with Program(strict=False):
+            with rung(x[1]):
+                fill(build_source(), txt.select(1, 3))
+    assert str(refused.value) == (
+        f"fill() got {shown} as the value and the range TXT1..TXT3 of Char tags as the "
+        "target. fill() writes no Bool tag into Char tags. Fill True or False in a rung that "
+        "has the Bool as its condition."
+    )
 
 
 _ADVICE = "Leave convert out, or use a converter that matches the source and target."

@@ -7,6 +7,8 @@ whether it raises a ``FieldError`` with the code ``copy-converter-bank``.  Then 
 same ``copy()`` in pyrung and notes whether it raises a converter refusal.  The two answers
 must agree, except for the pairs that ``ONLY_LADDERCODEC_REFUSES`` and
 ``ONLY_PYRUNG_REFUSES`` list.
+
+A second test checks a Bool source into TXT the same way, for Copy and for Fill.
 """
 
 from __future__ import annotations
@@ -14,9 +16,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from laddercodec import Code, Copy, FieldError
+from laddercodec import Code, Copy, FieldError, Fill
 
-from pyrung import Program, copy, rung
+from pyrung import Program, copy, fill, rung
 from pyrung.click import ClickBlocks
 from pyrung.core import to_ascii, to_binary, to_text, to_value
 
@@ -114,3 +116,60 @@ def test_copy_refuses_the_converter_pairs_that_laddercodec_refuses() -> None:
                     only_pyrung.add(pair)
     assert only_pyrung == ONLY_PYRUNG_REFUSES
     assert only_laddercodec == ONLY_LADDERCODEC_REFUSES
+
+
+#: Each Bool source as laddercodec's text and as pyrung's operand.  pyrung's export writes
+#: True and False as 1 and 0.
+_BOOL_SOURCES: list[Operand] = [
+    ("C1", lambda: c[1]),
+    ("X1", lambda: x[1]),
+    ("Y1", lambda: y[1]),
+    ("T1", lambda: t[1]),
+    ("CT1", lambda: ct[1]),
+    ("SC1", lambda: sc[1]),
+    ("1", lambda: True),
+    ("0", lambda: False),
+]
+
+
+def _refuses(build: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
+    try:
+        build(*args, **kwargs)
+    except ValueError:
+        return True
+    return False
+
+
+def _pyrung_copy(source: Any, target: Any, convert: Any) -> None:
+    with Program(strict=False):
+        with rung(x[2]):
+            copy(source, target, convert=convert)
+
+
+def _pyrung_fill(value: Any) -> None:
+    with Program(strict=False):
+        with rung(x[2]):
+            fill(value, txt.select(2, 4))
+
+
+def test_copy_and_fill_refuse_a_bool_source_into_txt_as_laddercodec_does() -> None:
+    """A Bool tag is refused into TXT with any converter, and so is a Copy of a constant.
+
+    laddercodec accepts a Fill of 1 into TXT, and pyrung builds the ``fill(True, ...)`` that
+    exports as that Fill.  copy() also refuses a Bool constant with ``to_text()`` or
+    ``to_binary``, which laddercodec accepts as a Copy of 1.
+    """
+    differ: list[tuple[str, str, str]] = []
+    for source_text, source in _BOOL_SOURCES:
+        constant = source_text in ("1", "0")
+        for target_text, target in _operands(("TXT",), 2):
+            for name in ("none", *CONVERTERS):
+                convert = None if name == "none" else name
+                theirs = _refuses(Copy, source_text, target_text, convert=convert)
+                ours = _refuses(_pyrung_copy, source(), target(), CONVERTERS.get(name))
+                if ours != (theirs or (constant and convert is not None)):
+                    differ.append((source_text, target_text, name))
+        theirs = _refuses(Fill, source_text, "TXT2", "TXT4")
+        if _refuses(_pyrung_fill, source()) != theirs:
+            differ.append((source_text, "TXT2..TXT4", "fill"))
+    assert differ == []

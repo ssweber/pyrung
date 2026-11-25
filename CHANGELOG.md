@@ -23,10 +23,13 @@
   Copy the value into one TXT with `copy()`, or fill a constant.
 - `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). CLICK accepts it.
   Copy the constant into one TXT with `copy()`.
+- A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT.
+  Copy the text "1" or "0" in a rung that has the Bool as its condition.
 
 ### Fixes
 
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
+- `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 
 ## v0.18.1 (2026-11-25)
