@@ -1310,7 +1310,7 @@ def _render_undecoded(token: str, args_str: str) -> str:
 
     args, kwargs = _parse_af_args(args_str)
     fields = dict(kwargs)
-    known = {"rung", "row", "column", "stop", "lone_next"}
+    known = {"rung", "row", "column", "stop", "lone_next", "to_the_end"}
     if len(args) != 1 or not args[0].startswith('"') or set(fields) - known:
         raise ValueError(
             f"The AF column holds {token!r}. laddercodec writes an undecoded marker as "
@@ -1334,6 +1334,11 @@ def _render_undecoded(token: str, args_str: str) -> str:
         raise ValueError(
             f"The AF column holds {token!r}. Its lone_next= must be a list of whole numbers."
         )
+    to_the_end = fields.get("to_the_end")
+    if to_the_end is not None and to_the_end != "1":
+        raise ValueError(
+            f"The AF column holds {token!r}. laddercodec writes to_the_end=1 or leaves it out."
+        )
     marker = Undecoded(_csv_string_value(args[0]), rung, whole("row"), whole("column"), stop)  # ty: ignore[invalid-argument-type]
     parts = [_string_literal(marker.error), f"rung={marker.rung}"]
     if marker.row is not None:
@@ -1343,6 +1348,8 @@ def _render_undecoded(token: str, args_str: str) -> str:
     parts.append(f"stop={_string_literal(marker.stop)}")
     if lone_next is not None:
         parts.append(f"lone_next={lone_next.replace(',', ', ')}")
+    if to_the_end is not None:
+        parts.append("to_the_end=True")
     return f"undecoded({', '.join(parts)})"
 
 
