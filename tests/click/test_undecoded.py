@@ -237,7 +237,8 @@ def test_the_import_takes_two_lone_nexts_after_one_marker(tmp_path: Path) -> Non
     assert "lone_next=[3, 5]" in code
     assert (
         "CLICK rungs 4 and 6 each have a next() with no for() above it. "
-        "Rungs that laddercodec could not decode, from CLICK rung 2 on, may have held their for() rungs."
+        "Each for() may have been in CLICK rung 2 or in a later rung that laddercodec could not "
+        "decode."
     ) in undecoded_notice(logic)
 
 
@@ -295,8 +296,8 @@ def test_the_import_names_only_the_first_of_two_markers(tmp_path: Path) -> None:
     assert len(logic.rungs) == 2
     assert (
         "CLICK rungs 4 and 7 each have a next() with no for() above it. "
-        "Rungs that laddercodec could not decode, from CLICK rung 2 on, may have held their "
-        "for() rungs."
+        "Each for() may have been in CLICK rung 2 or in a later rung that laddercodec could not "
+        "decode."
     ) in undecoded_notice(logic)
 
 
@@ -310,9 +311,9 @@ def test_the_project_import_takes_a_lone_next(tmp_path: Path) -> None:
     assert _PLACEHOLDER_COMMENT in text
 
 
-@pytest.mark.parametrize("bad", [["3"], [-1], [1.5], [True], 3, "3"])
+@pytest.mark.parametrize("bad", [["3"], [-1], [1.5], [True], 3, "3", {3: 1}])
 def test_undecoded_rejects_a_lone_next_that_is_not_rung_numbers(bad) -> None:
-    with pytest.raises(ValueError, match="lone_next=.* must be a list of rung numbers"):
+    with pytest.raises(ValueError, match="needs lone_next as a list of rung numbers"):
         with Program(strict=False):
             with rung():
                 undecoded(_MAIN_ERROR, rung=0, stop="end", lone_next=bad)
@@ -557,3 +558,10 @@ def test_the_debugger_says_where_the_scan_stops_at_launch_and_reload(
     response = next(message for message in messages if message.get("type") == "response")
     assert response["success"] is True
     assert notice in response["body"]["result"]
+
+
+def test_undecoded_keeps_the_values_of_a_generator_lone_next() -> None:
+    with Program(strict=False) as logic:
+        with rung():
+            undecoded(_MAIN_ERROR, rung=1, stop="end", lone_next=(n for n in [3, 5]))
+    assert logic.rungs[0]._instructions[0].lone_next == (3, 5)

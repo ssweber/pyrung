@@ -20,7 +20,7 @@ CLICK cannot take the marker, so the export to CLICK and the CircuitPython code 
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from laddercodec import Undecoded, UndecodedStop
@@ -119,8 +119,8 @@ class UndecodedInstruction(Instruction):
             else:
                 text += (
                     f" CLICK rungs {listed} each have a next() with no for() above it."
-                    f" Rungs that laddercodec could not decode, from CLICK rung {self.rung + 1} on,"
-                    " may have held their for() rungs."
+                    f" Each for() may have been in CLICK rung {self.rung + 1} or in a later rung"
+                    " that laddercodec could not decode."
                 )
         return text
 
@@ -190,24 +190,29 @@ def undecoded(
         raise RuntimeError(
             f"undecoded(stop={marker.stop!r}) cannot be in {where}. Pass stop={expected!r} there."
         )
-    if isinstance(lone_next, (str, bytes)) or not all(
-        isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in _as_tuple(lone_next)
-    ):
+    numbers = _rung_numbers(lone_next)
+    if numbers is None:
         raise ValueError(
-            f"undecoded(lone_next={lone_next!r}) must be a list of rung numbers, each an int "
-            "from 0 up. Pass lone_next=[3] for a next() at CLICK rung 4."
+            "undecoded() needs lone_next as a list of rung numbers counted from 0, such as "
+            f"lone_next=[3] for a next() at CLICK rung 4. It got {lone_next!r}."
         )
     source_file, source_line = _capture_source(depth=2)
-    instruction = UndecodedInstruction(marker, lone_next)
+    instruction = UndecodedInstruction(marker, numbers)
     instruction.source_file, instruction.source_line = source_file, source_line
     logic.add_instruction(instruction)
 
 
-def _as_tuple(value: Any) -> tuple:
+def _rung_numbers(value: Any) -> tuple[int, ...] | None:
+    """Return *value* as a tuple of non-negative ints, or None if it is not one."""
+    if isinstance(value, (str, bytes, Mapping)):
+        return None
     try:
-        return tuple(value)
+        numbers = tuple(value)
     except TypeError:
-        return (None,)
+        return None
+    if all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in numbers):
+        return numbers
+    return None
 
 
 def undecoded_rungs(program: Program) -> Iterator[tuple[str | None, int, UndecodedInstruction]]:
