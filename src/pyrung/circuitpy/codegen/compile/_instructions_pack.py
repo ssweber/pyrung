@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from typing import assert_never
+
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
-    _range_type_name,
-    _static_range_length,
     _store_coerce_expr,
-    _value_type_name,
 )
 from pyrung.circuitpy.codegen.context import (
     CodegenContext,
@@ -19,6 +18,16 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
+from pyrung.core.instruction.operands import (
+    Dest,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+)
+from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.tag import Tag
 
 from ._emit import emit_truth
 from ._primitives import (
@@ -30,8 +39,37 @@ from ._primitives import (
     _compile_value,
     _pack_store_expr,
     _pointer_check_lines,
-    _refuse,
 )
+
+
+def _register(dest: Dest) -> tuple[Tag | IndirectRef | IndirectExprRef, str]:
+    """Return the tag or the pointer that *dest* holds, and the name of its type.
+
+    The generated code reads and writes an ``immediate()`` tag as it does the plain tag.
+    """
+    match dest:
+        case TagArg(tag=tag):
+            return tag, tag.type.name
+        case PointerArg(ref=ref):
+            return ref, ref.block.type.name
+        case _:
+            assert_never(dest)
+
+
+def _span(span: Span) -> tuple[BlockRange | IndirectBlockRange, int | None]:
+    """Return the range that *span* holds, and its length if its ends are fixed.
+
+    The generated code reads and writes an ``immediate()`` range as it does the plain range.
+    ``__init__`` refuses a range with fixed ends of the wrong length.  The generated code
+    checks only the length of a range with pointers.
+    """
+    match span:
+        case RangeArg(span=fixed):
+            return fixed, len(fixed)
+        case PointerRangeArg(span=pointed):
+            return pointed, None
+        case _:
+            assert_never(span)
 
 
 def _compile_pack_bits_instruction(
@@ -40,24 +78,14 @@ def _compile_pack_bits_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    dest_type = _value_type_name(instr.dest)
-    if dest_type not in {"INT", "WORD", "DINT", "REAL"}:
-        _refuse(ctx, TypeError, "pack_bits destination must be INT, WORD, DINT, or REAL")
-    if _range_type_name(instr.bit_block) != "BOOL":
-        _refuse(ctx, TypeError, "pack_bits source range must contain BOOL tags")
+    dest, dest_type = _register(instr.dest)
+    bit_block, static_len = _span(instr.bit_block)
     width = 16 if dest_type in {"INT", "WORD"} else 32
     stem = ctx.next_name("packbits")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
-        instr.bit_block, ctx, stem=f"{stem}_src", include_addresses=False
+        bit_block, ctx, stem=f"{stem}_src", include_addresses=False
     )
-    static_len = _static_range_length(instr.bit_block)
-    if static_len is not None and static_len > width:
-        _refuse(
-            ctx,
-            ValueError,
-            f"pack_bits destination width is {width} bits but block has {static_len} tags",
-        )
-    enabled_body = [*_pointer_check_lines(instr.dest, ctx, past_end_drops=True), *src_setup]
+    enabled_body = [*_pointer_check_lines(dest, ctx, past_end_drops=True), *src_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -72,7 +100,7 @@ def _compile_pack_bits_instruction(
             f"    if {emit_truth(f'{src_symbol}[_src_idx]')}:",
             "        _packed |= (1 << _bit_index)",
             f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
-            *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+            *_compile_assignment_lines(dest, "_packed_value", ctx, indent=0),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -84,19 +112,13 @@ def _compile_pack_words_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    dest_type = _value_type_name(instr.dest)
-    if dest_type not in {"DINT", "REAL"}:
-        _refuse(ctx, TypeError, "pack_words destination must be DINT or REAL")
-    if _range_type_name(instr.word_block) not in {"INT", "WORD"}:
-        _refuse(ctx, TypeError, "pack_words source range must contain INT/WORD tags")
+    dest, dest_type = _register(instr.dest)
+    word_block, static_len = _span(instr.word_block)
     stem = ctx.next_name("packwords")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
-        instr.word_block, ctx, stem=f"{stem}_src", include_addresses=False
+        word_block, ctx, stem=f"{stem}_src", include_addresses=False
     )
-    static_len = _static_range_length(instr.word_block)
-    if static_len is not None and static_len != 2:
-        _refuse(ctx, ValueError, f"pack_words requires exactly 2 source tags; got {static_len}")
-    enabled_body = [*_pointer_check_lines(instr.dest, ctx, past_end_drops=True), *src_setup]
+    enabled_body = [*_pointer_check_lines(dest, ctx, past_end_drops=True), *src_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -110,7 +132,7 @@ def _compile_pack_words_instruction(
             f"_hi_value = int({src_symbol}[{src_indices}[1]])",
             "_packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))",
             f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
-            *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+            *_compile_assignment_lines(dest, "_packed_value", ctx, indent=0),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -132,24 +154,20 @@ def _compile_pack_text_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    source_type = _range_type_name(instr.source_range)
-    if source_type != "CHAR":
-        _refuse(ctx, TypeError, "pack_text source range must contain CHAR tags")
-    dest_type = _value_type_name(instr.dest)
-    if dest_type not in {"INT", "DINT", "WORD", "REAL"}:
-        _refuse(ctx, TypeError, "pack_text destination must be INT, DINT, WORD, or REAL")
+    source_range, _ = _span(instr.source_range)
+    dest, dest_type = _register(instr.dest)
     ctx.mark_helper("_parse_pack_text_value")
     ctx.mark_helper("_store_real")
     stem = ctx.next_name("packtext")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
-        instr.source_range, ctx, stem=f"{stem}_src", include_addresses=False
+        source_range, ctx, stem=f"{stem}_src", include_addresses=False
     )
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     parse_body = [
         "try:",
         f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
         f"    _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
-        *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
+        *_indent_body(_compile_assignment_lines(dest, "_packed_value", ctx, indent=0), 4),
         *_clamp_fault(dest_type, fault_body, 4),
         "except (TypeError, ValueError, OverflowError):",
         *_indent_body(fault_body, 4),
@@ -182,31 +200,21 @@ def _compile_unpack_bits_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    source_type = _value_type_name(instr.source)
-    if source_type not in {"INT", "WORD", "DINT", "REAL"}:
-        _refuse(ctx, TypeError, "unpack_to_bits source must be INT, WORD, DINT, or REAL")
-    if _range_type_name(instr.bit_block) != "BOOL":
-        _refuse(ctx, TypeError, "unpack_to_bits destination range must contain BOOL tags")
+    source, source_type = _register(instr.source)
+    bit_block, static_len = _span(instr.bit_block)
     width = 16 if source_type in {"INT", "WORD"} else 32
     stem = ctx.next_name("unpackbits")
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
-        instr.bit_block, ctx, stem=f"{stem}_dst", include_addresses=False
+        bit_block, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     if source_type == "REAL":
         ctx.mark_helper("_float_to_int_bits")
-        bits_expr = f"_float_to_int_bits({_compile_value(instr.source, ctx)})"
+        bits_expr = f"_float_to_int_bits({_compile_value(source, ctx)})"
     elif source_type in {"INT", "WORD"}:
-        bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFF)"
+        bits_expr = f"(int({_compile_value(source, ctx)}) & 0xFFFF)"
     else:
-        bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFFFFFF)"
-    static_len = _static_range_length(instr.bit_block)
-    if static_len is not None and static_len > width:
-        _refuse(
-            ctx,
-            ValueError,
-            f"unpack_to_bits source width is {width} bits but block has {static_len} tags",
-        )
-    enabled_body = [*_pointer_check_lines(instr.source, ctx, past_end_drops=False), *dst_setup]
+        bits_expr = f"(int({_compile_value(source, ctx)}) & 0xFFFFFFFF)"
+    enabled_body = [*_pointer_check_lines(source, ctx, past_end_drops=False), *dst_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -219,7 +227,7 @@ def _compile_unpack_bits_instruction(
             f"_bits = {bits_expr}",
             f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
             f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
-            *_compile_range_flush(instr.bit_block, dst_symbol, ctx),
+            *_compile_range_flush(bit_block, dst_symbol, ctx),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -231,21 +239,18 @@ def _compile_unpack_words_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    source_type = _value_type_name(instr.source)
-    if source_type not in {"DINT", "REAL"}:
-        _refuse(ctx, TypeError, "unpack_to_words source must be DINT or REAL")
-    dst_type = _range_type_name(instr.word_block)
-    if dst_type not in {"INT", "WORD"}:
-        _refuse(ctx, TypeError, "unpack_to_words destination range must contain INT/WORD tags")
+    source, source_type = _register(instr.source)
+    word_block, static_len = _span(instr.word_block)
+    dst_type = word_block.block.type.name
     stem = ctx.next_name("unpackwords")
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
-        instr.word_block, ctx, stem=f"{stem}_dst", include_addresses=False
+        word_block, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     if source_type == "REAL":
         ctx.mark_helper("_float_to_int_bits")
-        bits_expr = f"_float_to_int_bits({_compile_value(instr.source, ctx)})"
+        bits_expr = f"_float_to_int_bits({_compile_value(source, ctx)})"
     else:
-        bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFFFFFF)"
+        bits_expr = f"(int({_compile_value(source, ctx)}) & 0xFFFFFFFF)"
     lo_expr = "_lo_word"
     hi_expr = "_hi_word"
     if dst_type == "INT":
@@ -255,14 +260,7 @@ def _compile_unpack_words_instruction(
     else:
         lo_store = f"({lo_expr} & 0xFFFF)"
         hi_store = f"({hi_expr} & 0xFFFF)"
-    static_len = _static_range_length(instr.word_block)
-    if static_len is not None and static_len != 2:
-        _refuse(
-            ctx,
-            ValueError,
-            f"unpack_to_words requires exactly 2 destination tags; got {static_len}",
-        )
-    enabled_body = [*_pointer_check_lines(instr.source, ctx, past_end_drops=False), *dst_setup]
+    enabled_body = [*_pointer_check_lines(source, ctx, past_end_drops=False), *dst_setup]
     if static_len is None:
         enabled_body.extend(
             [
@@ -277,7 +275,7 @@ def _compile_unpack_words_instruction(
             "_hi_word = ((_bits >> 16) & 0xFFFF)",
             f"{dst_symbol}[{dst_indices}[0]] = {lo_store}",
             f"{dst_symbol}[{dst_indices}[1]] = {hi_store}",
-            *_compile_range_flush(instr.word_block, dst_symbol, ctx),
+            *_compile_range_flush(word_block, dst_symbol, ctx),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)

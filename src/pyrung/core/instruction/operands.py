@@ -31,11 +31,13 @@ A kind also refuses these operands, which can write a result:
 A kind does not check the length of a range with pointers, because the pointers are
 read at scan time.  The scan checks it.
 
-``copy()``, ``fill()`` and ``blockcopy()`` parse their operands instead.  Their builder
-calls ``parse()`` on each declaration, which returns one of the results below or raises
-the refusal.  The instruction then holds only results.  ``execute()``, the code
-generator and the CLICK export match on them and never test the raw value again.  A
-reader that takes the operands of every instruction calls :func:`as_authored` on each.
+``copy()``, ``fill()``, ``blockcopy()``, ``pack_bits()``, ``pack_words()``,
+``pack_text()``, ``unpack_to_bits()`` and ``unpack_to_words()`` parse their operands
+instead.  Their builder calls ``parse()`` on each declaration, which returns one of
+the results below or raises the refusal.  The instruction then holds only results.
+``execute()``, the code generator and the CLICK export match on them and never test
+the raw value again.  A reader that takes the operands of every instruction calls
+:func:`as_authored` on each.
 """
 
 from __future__ import annotations

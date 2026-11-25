@@ -91,7 +91,7 @@ def test_a_copy_shows_only_the_converter_that_its_author_wrote() -> None:
 
 
 def test_pack_and_unpack_render_both_operands() -> None:
-    from pyrung import Block, Int, TagType
+    from pyrung import Block, Dint, TagType
     from pyrung.core.instruction import (
         PackBitsInstruction,
         PackTextInstruction,
@@ -102,7 +102,8 @@ def test_pack_and_unpack_render_both_operands() -> None:
     bits = Block("Bits", TagType.BOOL, 1, 16)
     words = Block("Words", TagType.INT, 1, 2)
     text = Block("Text", TagType.CHAR, 1, 3)
-    packed = Int("Packed")
+    # unpack_to_words() takes only a Dint or a Real.
+    packed = Dint("Packed")
 
     assert argument_span(PackBitsInstruction(bits.select(1, 16), packed), "dest") == (
         "pack_bits(Bits1..Bits16, Packed)",
