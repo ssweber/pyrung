@@ -279,18 +279,22 @@ def _refuse_converter_from(
 
     The target already suits the converter.  ``to_value`` and ``to_ascii`` read a TXT.
     ``to_text()`` and ``to_binary`` write a number into TXT, so a text source has nothing for
-    them to convert.  CLICK's dialog also hides Copy Binary from a DF into a TXT.
+    them to convert.  CLICK's dialog also hides Copy Binary from a DF into a TXT, and
+    laddercodec refuses a Real constant there too.
     """
     kind = copy_source_kind(source)
     text = kind is TagType.CHAR or (isinstance(source, ConstArg) and isinstance(source.value, str))
+    real = kind is TagType.REAL or (
+        isinstance(source, ConstArg) and isinstance(source.value, float)
+    )
     if convert.mode in ("value", "ascii"):
         if text:
             return
         reads = "only a Char tag or a text constant"
     elif convert.mode in ("text", "binary") and text:
         reads = "a number, not text"
-    elif convert.mode == "binary" and kind is TagType.REAL and target_type is TagType.CHAR:
-        reads = "no Real tag when it writes into Char tags"
+    elif convert.mode == "binary" and real and target_type is TagType.CHAR:
+        reads = "no Real tag or Real constant when it writes into Char tags"
     else:
         return
     raise ValueError(

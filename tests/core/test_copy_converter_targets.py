@@ -337,14 +337,21 @@ _ADVICE = "Leave convert out, or use a converter that matches the source and tar
             lambda: txt[2],
             "to_binary",
             "the Real tag DF1",
-            "no Real tag when it writes into Char tags",
+            "no Real tag or Real constant when it writes into Char tags",
         ),
         (
             lambda: df[ds[1]],
             lambda: txt[2],
             "to_binary",
             "the Real pointer DF[DS1]",
-            "no Real tag when it writes into Char tags",
+            "no Real tag or Real constant when it writes into Char tags",
+        ),
+        (
+            lambda: 1.5,
+            lambda: txt[ds[2]],
+            "to_binary",
+            "the constant 1.5",
+            "no Real tag or Real constant when it writes into Char tags",
         ),
     ],
 )
@@ -367,7 +374,7 @@ def test_a_converter_from_a_source_that_clicks_dialog_offers_no_option_for_is_re
         (lambda: txt[ds[1]], lambda: dd[2], "to_ascii"),
         (lambda: ds[1], lambda: txt[2], "to_text()"),
         (lambda: dd[1], lambda: txt[2], "to_binary"),
-        (lambda: 1.5, lambda: txt[2], "to_binary"),
+        (lambda: 55, lambda: txt[2], "to_binary"),
     ],
 )
 def test_a_converter_from_a_source_that_clicks_dialog_offers_builds(

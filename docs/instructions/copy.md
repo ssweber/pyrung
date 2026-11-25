@@ -146,7 +146,7 @@ On the P1AM-200, a NaN copied from a `Real` into a `Dint` stores -1 (0xFFFFFFFF)
 
 - `to_value` or `to_ascii` from anything but a TXT or a text constant;
 - `to_text()` or `to_binary` from a TXT or a text constant;
-- `to_binary` from a `Real` register into a TXT. CLICK's dialog hides Copy Binary there. Use `to_text()`.
+- `to_binary` from a `Real` register or a Real constant into a TXT. CLICK's dialog hides Copy Binary from a DF there. Use `to_text()`.
 
 `to_value`, `to_ascii`, and `to_binary` accept no arguments. Pass them bare, with no parentheses. `to_binary()` also works. `to_text()` accepts keyword arguments for formatting options.
 

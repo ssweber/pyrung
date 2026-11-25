@@ -94,9 +94,10 @@ ONLY_LADDERCODEC_REFUSES: frozenset[tuple[str, str, str]] = frozenset()
 
 #: The pairs that pyrung refuses and the installed laddercodec (0.5.1) accepts.  Empty this at
 #: the next laddercodec pin.  CLICK 4.00's Copy dialog hides Copy Binary from a DF into a TXT.
+#: laddercodec main (#182) refuses Copy Binary into a TXT from every Real source.
 ONLY_PYRUNG_REFUSES = frozenset(
     (source, target, "to_binary")
-    for source in ("DF1", "DF[DS1]")
+    for source in ("DF1", "DF[DS1]", "1.5", "-0.5")
     for target in ("TXT2", "TXT[DS2]")
 )
 
