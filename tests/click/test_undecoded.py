@@ -386,11 +386,11 @@ def test_the_notice_and_the_finding_say_the_marker_stands_for_every_rung_after_i
     logic = _load(ladder_to_pyrung(_to_the_end_project(tmp_path)))["logic"]
     assert undecoded_notice(logic).splitlines() == [
         f"laddercodec stopped reading at CLICK rung 2 of the main program: {_MAIN_ERROR}. "
-        "undecoded() stands in for that rung and every rung after it at main rung 2 in pyrung. "
+        "undecoded() stands in at main rung 2 in pyrung for that rung and every rung after it. "
         "Each scan ends at this rung, so no rung after it in main runs.",
         f"laddercodec stopped reading at CLICK rung 2 of its subroutine: {_SUB_ERROR}. "
-        "undecoded() stands in for that rung and every rung after it at subroutine 'Sub' rung 2 "
-        "in pyrung. The subroutine returns at this rung, so no rung after it runs.",
+        "undecoded() stands in at subroutine 'Sub' rung 2 in pyrung for that rung and every rung "
+        "after it. The subroutine returns at this rung, so no rung after it runs.",
     ]
     report = TagMap({}, include_system=False).validate(logic, mode="warn")
     findings = [f for f in (*report.errors, *report.warnings) if f.code == "undecoded-rung"]

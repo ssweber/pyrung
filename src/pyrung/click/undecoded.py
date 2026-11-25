@@ -5,7 +5,9 @@ laddercodec puts a marker rung in place of a rung that it cannot decode or write
 
     from pyrung.click import undecoded
 
-    comment("UNDECODED: CLICK rung 5, row 1: no CSV token holds this unknown instruction (40 bytes)")
+    comment(
+        "UNDECODED: CLICK rung 5, row 1: no CSV token holds this unknown instruction (40 bytes)"
+    )
     with rung():
         undecoded(
             "no CSV token holds this unknown instruction (40 bytes)",
@@ -100,8 +102,9 @@ class UndecodedInstruction(Instruction):
         marker's place in pyrung, when it is given. The two numbers can differ, because the
         importer splits a CLICK rung that holds several wires into several pyrung rungs.
         With ``to_the_end``, the first sentence says laddercodec stopped reading at that rung
-        and the second says the marker stands for every rung after it. When ``lone_next`` is set, two more sentences name the ``next()`` rungs and say that
-        a rung that laddercodec could not decode may have held their ``for()``.
+        and the second says the marker stands for every rung after it. When ``lone_next`` is
+        set, two more sentences name the ``next()`` rungs and say that a rung that laddercodec
+        could not decode may have held their ``for()``.
         """
         error = self.error.rstrip()
         if not error.endswith((".", "!", "?")):
@@ -111,7 +114,7 @@ class UndecodedInstruction(Instruction):
         if self.to_the_end:
             text = (
                 f"laddercodec stopped reading at CLICK rung {self.rung + 1} of {scope}: {error} "
-                f"undecoded() stands in for that rung and every rung after it{where}."
+                f"undecoded() stands in{where} for that rung and every rung after it."
             )
         else:
             text = (

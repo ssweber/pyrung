@@ -265,6 +265,9 @@ the VS Code extension release together. [nothing, with a joint release]
     requests, Reload and StepScan.
 - **Stay as requests (reads).** Query, Graph, FindLabel, ListMonitors, Seek, ForkAt, TagChanges, Causal, ModbusInfo
   and ListForces. Monitors change the debugger's view, not the PLC, so AddMonitor and RemoveMonitor stay too.
+- **Who decides links.** The plan change in ssweber.github.io #101 (relayed by the planner, 2026-11-25) puts links in
+  pyrung into this step. Before anyone builds them, the pyrung session and the ClickNick session research the design
+  together. Sam approves the design.
 - Console verbs can already return structured data (`ConsoleResult.body`, as `reload` does).
 - Today panel force and patch never reach `capture_hook`, so recordings miss them. That is the gap this step closes.
 - **For Sam: does an address that no rung uses exist?** In a generated project, `force X002 true` and `patch X003
