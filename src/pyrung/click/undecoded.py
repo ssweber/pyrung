@@ -5,7 +5,7 @@ laddercodec puts a marker rung in place of a rung that it cannot decode or write
 
     from pyrung.click import undecoded
 
-    comment("UNDECODED: rung 4, row 0: no CSV token holds this unknown instruction (40 bytes)")
+    comment("UNDECODED: CLICK rung 5, row 1: no CSV token holds this unknown instruction (40 bytes)")
     with rung():
         undecoded(
             "no CSV token holds this unknown instruction (40 bytes)",
@@ -41,7 +41,9 @@ class UndecodedInstruction(Instruction):
 
     ``marker`` is laddercodec's :class:`~laddercodec.Undecoded`. It says where decoding failed
     and why. ``lone_next`` lists the rung numbers, counted from 0, of the ``next()`` rungs after
-    the marker that have no ``for()`` above them. The marker writes nothing. It is the last
+    the marker that have no ``for()`` above them. ``to_the_end`` is True when laddercodec
+    stopped reading at that rung, so the marker stands for it and every rung after it. The
+    marker writes nothing. It is the last
     rung of its scope, so a no-op ``execute`` is enough to stop the scope.
     """
 
@@ -50,11 +52,14 @@ class UndecodedInstruction(Instruction):
     _reads = ()
     _writes = ()
     _conditions = ()
-    _structural_fields = ("error", "rung", "row", "column", "stop", "lone_next")
+    _structural_fields = ("error", "rung", "row", "column", "stop", "lone_next", "to_the_end")
 
-    def __init__(self, marker: Undecoded, lone_next: Sequence[int] = ()) -> None:
+    def __init__(
+        self, marker: Undecoded, lone_next: Sequence[int] = (), to_the_end: bool = False
+    ) -> None:
         self.marker = marker
         self.lone_next = tuple(lone_next)
+        self.to_the_end = to_the_end
 
     @property
     def error(self) -> str:
@@ -94,7 +99,8 @@ class UndecodedInstruction(Instruction):
         The first names the rung as CLICK numbers it, from 1. The second names *at*, the
         marker's place in pyrung, when it is given. The two numbers can differ, because the
         importer splits a CLICK rung that holds several wires into several pyrung rungs.
-        When ``lone_next`` is set, two more sentences name the ``next()`` rungs and say that
+        With ``to_the_end``, the first sentence says laddercodec stopped reading at that rung
+        and the second says the marker stands for every rung after it. When ``lone_next`` is set, two more sentences name the ``next()`` rungs and say that
         a rung that laddercodec could not decode may have held their ``for()``.
         """
         error = self.error.rstrip()
@@ -102,10 +108,16 @@ class UndecodedInstruction(Instruction):
             error += "."
         scope = "the main program" if self.stop == "end" else "its subroutine"
         where = f" at {at} in pyrung" if at else ""
-        text = (
-            f"laddercodec could not decode CLICK rung {self.rung + 1} of {scope}: {error} "
-            f"undecoded() stands in for that rung{where}."
-        )
+        if self.to_the_end:
+            text = (
+                f"laddercodec stopped reading at CLICK rung {self.rung + 1} of {scope}: {error} "
+                f"undecoded() stands in for that rung and every rung after it{where}."
+            )
+        else:
+            text = (
+                f"laddercodec could not decode CLICK rung {self.rung + 1} of {scope}: {error} "
+                f"undecoded() stands in for that rung{where}."
+            )
         if self.lone_next:
             numbers = [str(index + 1) for index in self.lone_next]
             listed = (
@@ -143,6 +155,7 @@ def undecoded(
     column: int | None = None,
     stop: UndecodedStop,
     lone_next: Sequence[int] = (),
+    to_the_end: bool = False,
 ) -> None:
     """Stop the scope here, in place of a CLICK rung that laddercodec could not decode.
 
@@ -151,14 +164,16 @@ def undecoded(
     *row* and *column* say where, each counted from 0. Pass ``stop="end"`` in the main
     program and ``stop="return"`` in a subroutine. *lone_next* lists the CLICK rungs, from 0,
     of ``next()`` rungs after the marker that have no ``for()`` above them. The importer sets
-    it, and the notice names those rungs.
+    it, and the notice names those rungs. Pass ``to_the_end=True`` when laddercodec stopped
+    reading at that rung, so the marker stands for it and every rung after it.
 
     The call must be the only thing in a rung with no conditions, outside a forloop. The
     rungs after it in the same scope are left out of the program, because no scan reaches
     them.
 
     Raises:
-        ValueError: If laddercodec refuses a field, such as a blank *error*.
+        ValueError: If laddercodec refuses a field, such as a blank *error*, or if
+            *to_the_end* is not a bool.
         RuntimeError: If the call is not alone in a rung of its own with no conditions,
             or if *stop* does not match the scope.
     """
@@ -196,8 +211,10 @@ def undecoded(
             "undecoded() needs lone_next as a list of rung numbers counted from 0, such as "
             f"lone_next=[3] for a next() at CLICK rung 4. It got {lone_next!r}."
         )
+    if not isinstance(to_the_end, bool):
+        raise ValueError(f"undecoded() needs to_the_end as True or False. It got {to_the_end!r}.")
     source_file, source_line = _capture_source(depth=2)
-    instruction = UndecodedInstruction(marker, numbers)
+    instruction = UndecodedInstruction(marker, numbers, to_the_end)
     instruction.source_file, instruction.source_line = source_file, source_line
     logic.add_instruction(instruction)
 

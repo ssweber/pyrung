@@ -339,6 +339,126 @@ def test_the_import_refuses_a_next_with_no_for(tmp_path: Path) -> None:
         ladder_to_pyrung(source)
 
 
+# ---- A marker that stands for every rung to the end -------------------------------------------
+
+
+def _to_the_end_project(tmp_path: Path, *, row: int | None = 0) -> Path:
+    """Write the project of ``_write_project``, with ``to_the_end=1`` on both markers.
+
+    The token text is written by hand, because the installed laddercodec has no such field.
+    """
+    source = _write_project(tmp_path)
+    if row is None:
+        for name in ("main.csv", "subroutines/sub.csv"):
+            path = source / name
+            text = path.read_text(encoding="utf-8")
+            path.write_text(re.sub(r",row=\d+,column=31", "", text), encoding="utf-8")
+    for name, stop in (("main.csv", "end"), ("subroutines/sub.csv", "return")):
+        path = source / name
+        text = path.read_text(encoding="utf-8")
+        assert f"stop={stop})" in text
+        path.write_text(text.replace(f"stop={stop})", f"stop={stop},to_the_end=1)"), "utf-8")
+    return source
+
+
+@pytest.mark.parametrize("row", [0, None])
+def test_the_import_takes_to_the_end_in_main_and_in_a_subroutine(tmp_path: Path, row) -> None:
+    code = ladder_to_pyrung(_to_the_end_project(tmp_path, row=row))
+    main_where = ", row=0, column=31" if row is not None else ""
+    sub_where = ", row=2, column=31" if row is not None else ""
+    assert f'undecoded("{_MAIN_ERROR}", rung=1{main_where}, stop="end", to_the_end=True)' in code
+    assert f'undecoded("{_SUB_ERROR}", rung=1{sub_where}, stop="return", to_the_end=True)' in code
+    logic = _load(code)["logic"]
+    main_marker = logic.rungs[1]._instructions[0]
+    sub_marker = logic.subroutines["Sub"][1]._instructions[0]
+    assert (main_marker.to_the_end, sub_marker.to_the_end) == (True, True)
+
+
+def test_a_marker_without_to_the_end_says_so(imported) -> None:
+    code, namespace = imported
+    assert "to_the_end" not in code
+    assert namespace["logic"].rungs[1]._instructions[0].to_the_end is False
+
+
+def test_the_notice_and_the_finding_say_the_marker_stands_for_every_rung_after_it(
+    tmp_path: Path,
+) -> None:
+    logic = _load(ladder_to_pyrung(_to_the_end_project(tmp_path)))["logic"]
+    assert undecoded_notice(logic).splitlines() == [
+        f"laddercodec stopped reading at CLICK rung 2 of the main program: {_MAIN_ERROR}. "
+        "undecoded() stands in for that rung and every rung after it at main rung 2 in pyrung. "
+        "Each scan ends at this rung, so no rung after it in main runs.",
+        f"laddercodec stopped reading at CLICK rung 2 of its subroutine: {_SUB_ERROR}. "
+        "undecoded() stands in for that rung and every rung after it at subroutine 'Sub' rung 2 "
+        "in pyrung. The subroutine returns at this rung, so no rung after it runs.",
+    ]
+    report = TagMap({}, include_system=False).validate(logic, mode="warn")
+    findings = [f for f in (*report.errors, *report.warnings) if f.code == "undecoded-rung"]
+    assert len(findings) == 2
+    assert all("and every rung after it" in f.message for f in findings)
+    assert "laddercodec stopped reading at CLICK rung 2 of the main program" in (
+        findings[0].message
+    )
+
+
+@pytest.mark.parametrize("bad", ["0", "2", "true", "True", ""])
+def test_the_import_refuses_a_bad_to_the_end(tmp_path: Path, bad: str) -> None:
+    source = _write_project(tmp_path)
+    path = source / "main.csv"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("stop=end)", f"stop=end,to_the_end={bad})"), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"laddercodec writes to_the_end=1 or leaves it out"):
+        ladder_to_pyrung(source)
+
+
+def test_a_marker_from_laddercodec_0_5_0_imports_as_before(imported) -> None:
+    code, namespace = imported
+    assert f'undecoded("{_MAIN_ERROR}", rung=1, row=0, column=31, stop="end")' in code
+    assert undecoded_notice(namespace["logic"]).splitlines()[0] == (
+        f"laddercodec could not decode CLICK rung 2 of the main program: {_MAIN_ERROR}. "
+        "undecoded() stands in for that rung at main rung 2 in pyrung. Each scan ends at this "
+        "rung, so no rung after it in main runs."
+    )
+
+
+def test_undecoded_rejects_a_to_the_end_that_is_not_a_bool() -> None:
+    with pytest.raises(ValueError, match="needs to_the_end as True or False"):
+        with Program(strict=False), rung():
+            undecoded(_MAIN_ERROR, rung=0, stop="end", to_the_end=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_scan_stops_at_a_to_the_end_marker(tmp_path: Path, engine) -> None:
+    logic = _load(ladder_to_pyrung(_to_the_end_project(tmp_path)))["logic"]
+    runner = engine(logic, dt=0.010)
+    runner.patch(_ALL_ON)
+    runner.step()
+    runner.run_for(0.2)
+    tags = runner.current_state.tags
+    assert tags["Y001"] is True
+    assert not any(tags.get(name, False) for name in ("Y002", "Y003", "Y004"))
+
+
+@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
+def test_a_subroutine_returns_at_a_to_the_end_marker(engine) -> None:
+    a, b, go = Bool("A"), Bool("B"), Bool("Go")
+    with Program(strict=False) as logic:
+        with rung(go):
+            call("Sub")
+        with subroutine("Sub"):
+            with rung():
+                out(a)
+            with rung():
+                undecoded(_SUB_ERROR, rung=1, stop="return", to_the_end=True)
+            with rung():
+                out(b)
+    runner = engine(logic, dt=0.010)
+    runner.patch({"Go": True})
+    runner.step()
+    tags = runner.current_state.tags
+    assert (tags["A"], tags.get("B", False)) == (True, False)
+
+
 # ---- The stop -----------------------------------------------------------------------------
 
 
