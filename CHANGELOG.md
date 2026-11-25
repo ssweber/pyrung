@@ -15,7 +15,7 @@
 
 ### What's new
 
-- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode (it raised `ValueError`). The rung becomes `undecoded()`, which ends the scan there and says why. The export to CLICK refuses it.
+- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode (it raised `ValueError`). The rung becomes `undecoded()`, which ends the scan there and says why. The export to CLICK refuses it. If that rung held a `for()`, its `next()` imports too.
 - A generated project's `AGENTS.pyrung.md` now tells an agent to start tests from a PLC data file in `tests/data/`, so setpoints are not left at 0.
 
 ### Fixes

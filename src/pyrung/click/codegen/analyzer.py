@@ -789,8 +789,11 @@ def _analyze_rungs(
         return f"{source}, rung {rung_index + 1}: " if source else f"Rung {rung_index + 1}: "
 
     # The first marker of the scope, as a raw rung index. An unpaired next() after it may
-    # have lost its for() to the marker.
+    # have lost its for() to the marker. marker_at is that marker's place in *analyzed*, and
+    # lone_nexts holds the raw rung indexes of those next() rungs.
     first_marker: int | None = None
+    marker_at = 0
+    lone_nexts: list[int] = []
 
     def analyze_one(rung_index: int, *, role: RungRole = RungRole.NORMAL) -> _AnalyzedRung:
         try:
@@ -847,20 +850,35 @@ def _analyze_rungs(
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         elif af0 == "next()":
-            if first_marker is not None:
+            if first_marker is None:
                 raise ValueError(
-                    f"{where(i)}this next() has no for() above it. laddercodec could not "
-                    f"decode rung {first_marker + 1}, and that rung may have held the for(). "
-                    "Rewrite that rung in CLICK, then read the program again."
+                    f"{where(i)}this next() has no for() above it. Either the program has no "
+                    "for() rung, or laddercodec could not read the rung that held it. Add the "
+                    "for() rung in CLICK, or remove the next(), then read the program again."
                 )
-            raise ValueError(
-                f"{where(i)}this next() has no for() above it. Add the for() rung in CLICK, "
-                "or remove the next(), then read the program again."
+            # The marker may have replaced the for(). Program leaves out every rung after the
+            # marker, so a placeholder that builds is enough.
+            lone_nexts.append(i)
+            comment = (
+                f"CLICK rung {i + 1} is a next() with no for() above it. Remove this empty rung "
+                "when you write the loop in place of undecoded()."
             )
+            own_comment = analyze_one(i, role=RungRole.FORLOOP_NEXT).comment
+            if own_comment:
+                comment += "\n" + own_comment
+            analyzed.append(
+                _AnalyzedRung(
+                    comment=comment,
+                    condition_tree=None,
+                    instructions=[_InstructionInfo(NOP, None, [])],
+                )
+            )
+            i += 1
         else:
             if af0.startswith("undecoded("):
                 if first_marker is None:
                     first_marker = i
+                    marker_at = len(analyzed)
                 # laddercodec's decode() always makes stop=end, so a subroutine's CSV can hold
                 # a marker that pyrung's undecoded() would refuse in a subroutine.
                 stop = _undecoded_stop(af0)
@@ -887,6 +905,22 @@ def _analyze_rungs(
             analyzed.extend(pieces)
             i += 1
 
+    if lone_nexts:
+        # Add lone_next= to the marker's AF token, so the emitter writes it into undecoded().
+        # emitted_logic_mismatch() compares this token with the one in source_outputs, so
+        # change both.
+        numbers = ",".join(str(index) for index in lone_nexts)
+
+        def with_lone_next(token: str) -> str:
+            return f"{token[:-1]},lone_next=[{numbers}])"
+
+        marker_rung = analyzed[marker_at]
+        marker_rung.instructions[0].af_token = with_lone_next(marker_rung.instructions[0].af_token)
+        if marker_rung.source_outputs:
+            marker_rung.source_outputs = tuple(
+                replace(out, af_token=with_lone_next(out.af_token))
+                for out in marker_rung.source_outputs
+            )
     return analyzed
 
 
