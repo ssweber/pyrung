@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import wraps
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
-from pyrung.core.memory_block import IndirectExprRef, IndirectRef, PastBankError
+from pyrung.core.memory_block import PastBankError
 from pyrung.core.tag import Tag, TagType
 
 from .base import Instruction, OneShotMixin
@@ -18,19 +18,14 @@ from .conversions import (
     _store_copy_value_to_tag_type,
     _truncate_to_tag_type,
 )
-from .operands import RANGE, TAG, FitsRegister
+from .data_transfer import _dest_tag, _read, _span_tags
+from .operands import RANGE, TAG, Dest, FitsRegister, PointerArg, Span, TagArg, check_rules
 from .resolvers import (
     _set_fault_address_error,
     _set_fault_out_of_range,
-    resolve_block_range_tags_ctx,
     resolve_source_type_tag_ctx,
-    resolve_tag_ctx,
-    resolve_tag_or_value_ctx,
 )
-from .utils import (
-    assert_tag_type,
-    guard_oneshot_execution,
-)
+from .utils import guard_oneshot_execution
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -43,6 +38,7 @@ _REGISTER = TAG.of(TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL)
 _WIDE_REGISTER = TAG.of(TagType.DINT, TagType.REAL)
 _BITS = RANGE.of(TagType.BOOL, example="c.select(1, 16)")
 _TWO_WORDS = RANGE.of(TagType.INT, TagType.WORD, count=2, example="ds.select(1, 2)")
+_CHARS = RANGE.of(TagType.CHAR, example="txt.select(1, 4)")
 
 
 def _skip_on_bad_pointer(func: Callable[..., None]) -> Callable[..., None]:
@@ -64,14 +60,34 @@ def _skip_on_bad_pointer(func: Callable[..., None]) -> Callable[..., None]:
     return wrapper
 
 
-def _unpack_source_tag(source: Tag | IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
-    if isinstance(source, (IndirectRef, IndirectExprRef)):
-        return resolve_source_type_tag_ctx(source, ctx)
-    return resolve_tag_ctx(source, ctx)
+def _unpack_source_tag(source: Dest, ctx: ScanContext) -> Tag:
+    """Return a tag with the type of the register that *source* reads on this scan."""
+    match source:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return resolve_source_type_tag_ctx(ref, ctx)
+        case _:
+            assert_never(source)
+
+
+def _dest_type_tag(dest: Dest) -> Tag:
+    """Return a tag with the type of the register that *dest* writes, without reading a pointer."""
+    match dest:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return ref.block._get_tag(ref.block.start)
+        case _:
+            assert_never(dest)
 
 
 class PackBitsInstruction(OneShotMixin, Instruction):
-    """Pack BOOL tags from a BlockRange into a destination register."""
+    """Pack BOOL tags from a BlockRange into a destination register.
+
+    ``__init__`` parses both operands. ``bit_block`` is a ``Span`` and ``dest`` is a ``Dest``
+    (:mod:`pyrung.core.instruction.operands`).
+    """
 
     _reads = ("bit_block",)
     _writes = ("dest",)
@@ -85,24 +101,25 @@ class PackBitsInstruction(OneShotMixin, Instruction):
 
     def __init__(self, bit_block: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
-        self.bit_block = bit_block
-        self.dest = dest
+        self.bit_block: Span = _BITS.parse("pack_bits()", "bit_block", bit_block)
+        self.dest: Dest = _REGISTER.parse("pack_bits()", "dest", dest)
+        check_rules(
+            self._operands,
+            self._operand_rules,
+            "pack_bits()",
+            {"bit_block": bit_block, "dest": dest},
+        )
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        from pyrung.core.tag import TagType
-
-        dest_tag = resolve_tag_ctx(self.dest, ctx)
-        # The build refuses the other types too.  This check keeps the scan raising on them
-        # when a test builds the program with the build check turned off.
-        assert_tag_type(
-            dest_tag,
-            (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
-            label="pack_bits destination",
-        )
-
-        bit_tags = resolve_block_range_tags_ctx(self.bit_block, ctx)
+        dest_tag = _dest_tag(self.dest, ctx)
+        bit_tags = _span_tags(self.bit_block, ctx)
+        # ``__init__`` refuses a range with fixed ends that is too long.  The length of a
+        # range with pointers is known only when the scan runs, so the scan checks it.
         width = 16 if dest_tag.type in {TagType.INT, TagType.WORD} else 32
         if len(bit_tags) > width:
             raise ValueError(
@@ -111,12 +128,6 @@ class PackBitsInstruction(OneShotMixin, Instruction):
 
         packed = 0
         for bit_index, bit_tag in enumerate(bit_tags):
-            assert_tag_type(
-                bit_tag,
-                (TagType.BOOL,),
-                label="pack_bits source tags",
-                include_tag_name=True,
-            )
             bit_value = ctx.get_tag(bit_tag.name, bit_tag.default)
             if bool(bit_value):
                 packed |= 1 << bit_index
@@ -129,7 +140,11 @@ class PackBitsInstruction(OneShotMixin, Instruction):
 
 
 class PackWordsInstruction(OneShotMixin, Instruction):
-    """Pack two 16-bit tags into a 32-bit destination register."""
+    """Pack two 16-bit tags into a 32-bit destination register.
+
+    ``__init__`` parses both operands. ``word_block`` is a ``Span`` and ``dest`` is a ``Dest``
+    (:mod:`pyrung.core.instruction.operands`).
+    """
 
     _reads = ("word_block",)
     _writes = ("dest",)
@@ -142,34 +157,21 @@ class PackWordsInstruction(OneShotMixin, Instruction):
 
     def __init__(self, word_block: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
-        self.word_block = word_block
-        self.dest = dest
+        self.word_block: Span = _TWO_WORDS.parse("pack_words()", "word_block", word_block)
+        self.dest: Dest = _WIDE_REGISTER.parse("pack_words()", "dest", dest)
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        from pyrung.core.tag import TagType
-
-        dest_tag = resolve_tag_ctx(self.dest, ctx)
-        # The build refuses the other types too.  This check keeps the scan raising on them
-        # when a test builds the program with the build check turned off.
-        assert_tag_type(dest_tag, (TagType.DINT, TagType.REAL), label="pack_words destination")
-
-        word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
+        dest_tag = _dest_tag(self.dest, ctx)
+        word_tags = _span_tags(self.word_block, ctx)
+        # ``__init__`` refuses a range with fixed ends of another length.  The length of a
+        # range with pointers is known only when the scan runs, so the scan checks it.
         if len(word_tags) != 2:
             raise ValueError(f"pack_words requires exactly 2 source tags; got {len(word_tags)}")
-        assert_tag_type(
-            word_tags[0],
-            (TagType.INT, TagType.WORD),
-            label="pack_words source tags",
-            include_tag_name=True,
-        )
-        assert_tag_type(
-            word_tags[1],
-            (TagType.INT, TagType.WORD),
-            label="pack_words source tags",
-            include_tag_name=True,
-        )
 
         lo_value = ctx.get_tag(word_tags[0].name, word_tags[0].default)
         hi_value = ctx.get_tag(word_tags[1].name, word_tags[1].default)
@@ -183,7 +185,11 @@ class PackWordsInstruction(OneShotMixin, Instruction):
 
 
 class PackTextInstruction(OneShotMixin, Instruction):
-    """Pack Copy text mode: parse CHAR range into a numeric destination."""
+    """Pack Copy text mode: parse CHAR range into a numeric destination.
+
+    ``__init__`` parses both operands. ``source_range`` is a ``Span`` and ``dest`` is a ``Dest``
+    (:mod:`pyrung.core.instruction.operands`).
+    """
 
     _reads = ("source_range",)
     _writes = ("dest",)
@@ -193,46 +199,25 @@ class PackTextInstruction(OneShotMixin, Instruction):
     _fault_follows = _COPY_FAULTS
     _conditions = ()
     _structural_fields = ("allow_whitespace",)
-    _operands = {
-        "source_range": RANGE.of(TagType.CHAR, example="txt.select(1, 4)"),
-        "dest": _REGISTER,
-    }
+    _operands = {"source_range": _CHARS, "dest": _REGISTER}
 
     def __init__(
         self, source_range: Any, dest: Any, *, allow_whitespace: bool = False, oneshot: bool = False
     ):
         OneShotMixin.__init__(self, oneshot)
-        self.source_range = source_range
-        self.dest = dest
+        self.source_range: Span = _CHARS.parse("pack_text()", "source_range", source_range)
+        self.dest: Dest = _REGISTER.parse("pack_text()", "dest", dest)
         self.allow_whitespace = bool(allow_whitespace)
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        from pyrung.core.tag import TagType
-
         # Take only the type here.  A pointer in the destination counts once the text parses.
-        dest_type = (
-            self.dest.block._get_tag(self.dest.block.start)
-            if isinstance(self.dest, (IndirectRef, IndirectExprRef))
-            else resolve_tag_ctx(self.dest, ctx)
-        )
-        # The build refuses the other types too.  This check keeps the scan raising on them
-        # when a test builds the program with the build check turned off.
-        assert_tag_type(
-            dest_type,
-            (TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL),
-            label="pack_text destination",
-        )
-
-        src_tags = resolve_block_range_tags_ctx(self.source_range, ctx)
-        for src in src_tags:
-            assert_tag_type(
-                src,
-                (TagType.CHAR,),
-                label="pack_text source range must contain only CHAR tags",
-                include_tag_name=True,
-            )
+        dest_type = _dest_type_tag(self.dest)
+        src_tags = _span_tags(self.source_range, ctx)
 
         try:
             text = "".join(
@@ -248,7 +233,7 @@ class PackTextInstruction(OneShotMixin, Instruction):
             _set_fault_out_of_range(ctx)
             return
 
-        dest_tag = resolve_tag_ctx(self.dest, ctx)
+        dest_tag = _dest_tag(self.dest, ctx)
         stored = _store_copy_value_to_tag_type(parsed, dest_tag)
         ctx.set_tag(dest_tag.name, stored)
         if dest_tag.type in {TagType.INT, TagType.DINT} and stored != parsed:
@@ -257,7 +242,11 @@ class PackTextInstruction(OneShotMixin, Instruction):
 
 
 class UnpackToBitsInstruction(OneShotMixin, Instruction):
-    """Unpack a register value into individual BOOL tags in a BlockRange."""
+    """Unpack a register value into individual BOOL tags in a BlockRange.
+
+    ``__init__`` parses both operands. ``source`` is a ``Dest`` and ``bit_block`` is a ``Span``
+    (:mod:`pyrung.core.instruction.operands`).  ``dest`` returns ``bit_block``.
+    """
 
     _reads = ("source",)
     _writes = ("bit_block",)
@@ -271,39 +260,36 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
 
     def __init__(self, source: Any, bit_block: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
-        self.source = source
-        self.bit_block = bit_block
+        self.source: Dest = _REGISTER.parse("unpack_to_bits()", "source", source)
+        self.bit_block: Span = _BITS.parse("unpack_to_bits()", "bit_block", bit_block)
+        check_rules(
+            self._operands,
+            self._operand_rules,
+            "unpack_to_bits()",
+            {"source": source, "bit_block": bit_block},
+        )
 
     @property
-    def dest(self) -> Any:
+    def dest(self) -> Span:
         return self.bit_block
 
-    @dest.setter
-    def dest(self, value: Any) -> None:
-        self.bit_block = value
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        from pyrung.core.tag import TagType
-
         source_tag = _unpack_source_tag(self.source, ctx)
-        # The build refuses the other types too.  This check keeps the scan raising on them
-        # when a test builds the program with the build check turned off.
-        assert_tag_type(
-            source_tag,
-            (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
-            label="unpack_to_bits source",
-        )
-
-        bit_tags = resolve_block_range_tags_ctx(self.bit_block, ctx)
+        bit_tags = _span_tags(self.bit_block, ctx)
+        # ``__init__`` refuses a range with fixed ends that is too long.  The length of a
+        # range with pointers is known only when the scan runs, so the scan checks it.
         width = 16 if source_tag.type in {TagType.INT, TagType.WORD} else 32
         if len(bit_tags) > width:
             raise ValueError(
                 f"unpack_to_bits source width is {width} bits but block has {len(bit_tags)} tags"
             )
 
-        source_value = resolve_tag_or_value_ctx(self.source, ctx)
+        source_value = _read(self.source, ctx)
         if source_tag.type == TagType.REAL:
             bits = _float_to_int_bits(source_value)
         elif source_tag.type in {TagType.INT, TagType.WORD}:
@@ -313,18 +299,16 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
 
         updates = {}
         for bit_index, bit_tag in enumerate(bit_tags):
-            assert_tag_type(
-                bit_tag,
-                (TagType.BOOL,),
-                label="unpack_to_bits destination tags",
-                include_tag_name=True,
-            )
             updates[bit_tag.name] = bool((bits >> bit_index) & 1)
         ctx.set_tags(updates)
 
 
 class UnpackToWordsInstruction(OneShotMixin, Instruction):
-    """Unpack a 32-bit register value into two 16-bit destination tags."""
+    """Unpack a 32-bit register value into two 16-bit destination tags.
+
+    ``__init__`` parses both operands. ``source`` is a ``Dest`` and ``word_block`` is a ``Span``
+    (:mod:`pyrung.core.instruction.operands`).  ``dest`` returns ``word_block``.
+    """
 
     _reads = ("source",)
     _writes = ("word_block",)
@@ -337,50 +321,29 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
 
     def __init__(self, source: Any, word_block: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
-        self.source = source
-        self.word_block = word_block
+        self.source: Dest = _WIDE_REGISTER.parse("unpack_to_words()", "source", source)
+        self.word_block: Span = _TWO_WORDS.parse("unpack_to_words()", "word_block", word_block)
 
     @property
-    def dest(self) -> Any:
+    def dest(self) -> Span:
         return self.word_block
 
-    @dest.setter
-    def dest(self, value: Any) -> None:
-        self.word_block = value
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        from pyrung.core.tag import TagType
-
         source_tag = _unpack_source_tag(self.source, ctx)
-        # The build refuses the other types too.  This check keeps the scan raising on them
-        # when a test builds the program with the build check turned off.
-        assert_tag_type(
-            source_tag,
-            (TagType.DINT, TagType.REAL),
-            label="unpack_to_words source",
-        )
-
-        word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
+        word_tags = _span_tags(self.word_block, ctx)
+        # ``__init__`` refuses a range with fixed ends of another length.  The length of a
+        # range with pointers is known only when the scan runs, so the scan checks it.
         if len(word_tags) != 2:
             raise ValueError(
                 f"unpack_to_words requires exactly 2 destination tags; got {len(word_tags)}"
             )
-        assert_tag_type(
-            word_tags[0],
-            (TagType.INT, TagType.WORD),
-            label="unpack_to_words destination tags",
-            include_tag_name=True,
-        )
-        assert_tag_type(
-            word_tags[1],
-            (TagType.INT, TagType.WORD),
-            label="unpack_to_words destination tags",
-            include_tag_name=True,
-        )
 
-        source_value = resolve_tag_or_value_ctx(self.source, ctx)
+        source_value = _read(self.source, ctx)
         bits = (
             _float_to_int_bits(source_value)
             if source_tag.type == TagType.REAL

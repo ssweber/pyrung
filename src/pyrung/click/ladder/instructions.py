@@ -513,22 +513,26 @@ class _InstructionMixin:
             return self._fn(
                 "pack_bits",
                 self._render_run(
-                    instruction.bit_block,
+                    held(instruction.bit_block),
                     path=f"{path}.bit_block",
                     instruction=instruction,
                 ),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                self._render_operand(
+                    held(instruction.dest), path=f"{path}.dest", source=instruction
+                ),
                 **oneshot_kw,
             )
         if instruction_type == "PackWordsInstruction":
             return self._fn(
                 "pack_words",
                 self._render_run(
-                    instruction.word_block,
+                    held(instruction.word_block),
                     path=f"{path}.word_block",
                     instruction=instruction,
                 ),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                self._render_operand(
+                    held(instruction.dest), path=f"{path}.dest", source=instruction
+                ),
                 **oneshot_kw,
             )
         if instruction_type == "PackTextInstruction":
@@ -539,19 +543,23 @@ class _InstructionMixin:
             return self._fn(
                 "pack_text",
                 self._render_run(
-                    instruction.source_range,
+                    held(instruction.source_range),
                     path=f"{path}.source_range",
                     instruction=instruction,
                 ),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                self._render_operand(
+                    held(instruction.dest), path=f"{path}.dest", source=instruction
+                ),
                 **pt_kw,
             )
         if instruction_type == "UnpackToBitsInstruction":
             return self._fn(
                 "unpack_to_bits",
-                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
+                self._render_operand(
+                    held(instruction.source), path=f"{path}.source", source=instruction
+                ),
                 self._render_run(
-                    instruction.bit_block,
+                    held(instruction.bit_block),
                     path=f"{path}.bit_block",
                     instruction=instruction,
                 ),
@@ -560,9 +568,11 @@ class _InstructionMixin:
         if instruction_type == "UnpackToWordsInstruction":
             return self._fn(
                 "unpack_to_words",
-                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
+                self._render_operand(
+                    held(instruction.source), path=f"{path}.source", source=instruction
+                ),
                 self._render_run(
-                    instruction.word_block,
+                    held(instruction.word_block),
                     path=f"{path}.word_block",
                     instruction=instruction,
                 ),

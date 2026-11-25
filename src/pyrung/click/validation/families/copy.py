@@ -252,8 +252,10 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     if kind in _PACK_KINDS:
         # A pack call takes its source first.
         source_attribute = next(iter(_CLASSES[kind]))
-        start, end = split_range(render(getattr(instruction, source_attribute), source_attribute))
-        dest = render(instruction.dest, "dest")
+        start, end = split_range(
+            render(held(getattr(instruction, source_attribute)), source_attribute)
+        )
+        dest = render(held(instruction.dest), "dest")
         return refusals_of(
             lambda: Pack(
                 source_start=start,
@@ -267,8 +269,8 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     if kind in _UNPACK_KINDS:
         # An unpack call takes its destination second.
         _source, dest_attribute = _CLASSES[kind]
-        start, end = split_range(render(getattr(instruction, dest_attribute), dest_attribute))
-        source = render(instruction.source, "source")
+        start, end = split_range(render(held(getattr(instruction, dest_attribute)), dest_attribute))
+        source = render(held(instruction.source), "source")
         return refusals_of(
             lambda: Unpack(
                 source=source,

@@ -32,7 +32,6 @@ from pyrung.core import (
     to_text,
     to_value,
 )
-from pyrung.core.instruction import Instruction
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 from pyrung.core.program import (
     Program,
@@ -297,28 +296,21 @@ def test_pack_text_stage3_compatible_banks():
     assert not {Code.PACK_KIND_MISMATCH, Code.COPY_BANK_INCOMPATIBLE} & set(_codes(report))
 
 
-def test_pack_text_stage3_incompatible_source_bank(monkeypatch: pytest.MonkeyPatch):
+def test_pack_text_refuses_a_source_range_that_is_not_char():
     dest = Int("Dest")
 
     def logic():
         with rung():
             pack_text(ds.select(1, 2), dest)
 
-    # pyrung refuses a source range that is not Char when the program is built.  With
-    # that check turned off, CLICK validation still names the source.
-    with pytest.raises(TypeError, match=r"^pack_text\(\) got the range DS1\.\.DS2"):
+    # CLICK gives pack-kind-mismatch.  pyrung refuses the range when the program is built.
+    # CLICK validation never sees it.
+    with pytest.raises(TypeError) as refusal:
         _build_program(logic)
-    monkeypatch.setattr(Instruction, "check_values", classmethod(lambda *_: None))
-    prog = _build_program(logic)
-    tag_map = TagMap([dest.map_to(ds[2])], include_system=False)
-
-    report = validate_click_program(prog, tag_map, mode="warn")
-    findings = [
-        finding
-        for finding in (*report.errors, *report.warnings, *report.hints)
-        if finding.code == Code.PACK_KIND_MISMATCH
-    ]
-    assert len(findings) == 1
+    assert str(refusal.value) == (
+        "pack_text() got the range DS1..DS2 of Int tags as source_range. "
+        "Pass a range of Char tags from .select(), such as txt.select(1, 4)."
+    )
 
 
 def test_wrapped_copy_source_keeps_copy_context_rules():

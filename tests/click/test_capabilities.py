@@ -16,7 +16,6 @@ from pyrung.click.capabilities import (
 )
 from pyrung.click.validation import validate_click_program
 from pyrung.core import to_value
-from pyrung.core.instruction import Instruction
 from pyrung.core.program import (
     Program,
     blockcopy,
@@ -59,21 +58,6 @@ _ds, _dd, _dh, _df, _yd, _txt = (
     _BLOCKS.yd,
     _BLOCKS.txt,
 )
-
-
-# pyrung refuses these forms when the program is built.  The test builds each one again
-# with that check turned off, so CLICK validation still sees it.
-REFUSED_WHEN_BUILT = {
-    "pack_bits 17 C->DS",
-    "pack_bits 32 C->DH",
-    "pack_bits 33 C->DD",
-    "pack_words DD->DF",
-    "unpack_bits DD->DS",
-    "unpack_bits DS->32 C",
-    "unpack_bits DH->32 C",
-    "unpack_bits DD->33 C",
-    "unpack_words DS->DH",
-}
 
 
 def _build(write) -> Program:
@@ -125,14 +109,8 @@ def _build(write) -> Program:
             "copy-bank-incompatible",
         ),
         ("pack_bits T->DH", lambda: pack_bits(_t.select(1, 16), _dh[1]), None),
-        # rule-decisions N4: CLICK packs at most 16 bits into DS or DH (OBJ-027), and at most
-        # 32 into DD or DF (OBJ-041).
-        ("pack_bits 17 C->DS", lambda: pack_bits(_c.select(1, 17), _ds[1]), "pack-too-many"),
-        ("pack_bits 32 C->DH", lambda: pack_bits(_c.select(1, 32), _dh[1]), "pack-too-many"),
         ("pack_bits 32 C->DD", lambda: pack_bits(_c.select(1, 32), _dd[1]), None),
-        ("pack_bits 33 C->DD", lambda: pack_bits(_c.select(1, 33), _dd[1]), "pack-too-many"),
         ("pack_words DS->DD", lambda: pack_words(_ds.select(1, 2), _dd[1]), None),
-        ("pack_words DD->DF", lambda: pack_words(_dd.select(1, 2), _df[1]), "bank-not-allowed"),
         # rule-decisions B5: CLICK unpacks DH into Y, and no DS, DD or DF (OBJ-024).
         (
             "unpack_bits DD->Y",
@@ -140,40 +118,102 @@ def _build(write) -> Program:
             "copy-bank-incompatible",
         ),
         ("unpack_bits DH->Y", lambda: unpack_to_bits(_dh[1], _y.select(1, 16)), None),
-        (
-            "unpack_bits DD->DS",
-            lambda: unpack_to_bits(_dd[1], _ds.select(1, 2)),
-            "pack-kind-mismatch",
-        ),
-        # rule-decisions N4: CLICK unpacks DS or DH into no more than 16 bits (OBJ-032), and DD
-        # into no more than 32 (OBJ-039).
-        ("unpack_bits DS->32 C", lambda: unpack_to_bits(_ds[1], _c.select(1, 32)), "pack-too-many"),
-        ("unpack_bits DH->32 C", lambda: unpack_to_bits(_dh[1], _c.select(1, 32)), "pack-too-many"),
         ("unpack_bits DD->32 C", lambda: unpack_to_bits(_dd[1], _c.select(1, 32)), None),
-        ("unpack_bits DD->33 C", lambda: unpack_to_bits(_dd[1], _c.select(1, 33)), "pack-too-many"),
         ("unpack_words DF->DH", lambda: unpack_to_words(_df[1], _dh.select(1, 2)), None),
-        (
-            "unpack_words DS->DH",
-            lambda: unpack_to_words(_ds[1], _dh.select(1, 2)),
-            "copy-bank-incompatible",
-        ),
         # rule-decisions N6: CLICK fills every range from YD0..YD1 to YD1..YD8.
         ("fill YD0..YD1", lambda: fill(5, _yd.select(0, 1)), None),
         ("fill YD1..YD8", lambda: fill(5, _yd.select(1, 8)), None),
     ],
     ids=lambda value: value if isinstance(value, str) else "",
 )
-def test_copy_compatibility(
-    case: str, write, expected: str | None, monkeypatch: pytest.MonkeyPatch
-):
-    if case in REFUSED_WHEN_BUILT:
-        with pytest.raises((TypeError, ValueError), match=r"got "):
-            _build(write)
-        monkeypatch.setattr(Instruction, "check_values", classmethod(lambda *_: None))
+def test_copy_compatibility(case: str, write, expected: str | None):
     prog = _build(write)
     report = validate_click_program(prog, TagMap(), mode="strict")
     codes = [f.code for f in report.errors]
     assert codes == ([] if expected is None else [expected])
+
+
+# CLICK refuses each of these forms, with the code in the comment.  pyrung refuses them
+# when the program is built.  CLICK validation never sees them.
+@pytest.mark.parametrize(
+    ("case", "write", "error", "message"),
+    [
+        # rule-decisions N4: CLICK packs at most 16 bits into DS or DH (OBJ-027), and at most
+        # 32 into DD or DF (OBJ-041).  CLICK gives pack-too-many.
+        (
+            "pack_bits 17 C->DS",
+            lambda: pack_bits(_c.select(1, 17), _ds[1]),
+            ValueError,
+            "pack_bits() got 17 bits as bit_block, and DS1 holds 16 bits. "
+            "Pass at most 16 bits, or a Dint or Real tag as dest.",
+        ),
+        (
+            "pack_bits 32 C->DH",
+            lambda: pack_bits(_c.select(1, 32), _dh[1]),
+            ValueError,
+            "pack_bits() got 32 bits as bit_block, and DH1 holds 16 bits. "
+            "Pass at most 16 bits, or a Dint or Real tag as dest.",
+        ),
+        (
+            "pack_bits 33 C->DD",
+            lambda: pack_bits(_c.select(1, 33), _dd[1]),
+            ValueError,
+            "pack_bits() got 33 bits as bit_block, and DD1 holds 32 bits. Pass at most 32 bits.",
+        ),
+        # CLICK gives bank-not-allowed.
+        (
+            "pack_words DD->DF",
+            lambda: pack_words(_dd.select(1, 2), _df[1]),
+            TypeError,
+            "pack_words() got the range DD1..DD2 of 2 Dint tags as word_block. "
+            "Pass a range of 2 Int or Word tags from .select(), such as ds.select(1, 2).",
+        ),
+        # CLICK gives pack-kind-mismatch.
+        (
+            "unpack_bits DD->DS",
+            lambda: unpack_to_bits(_dd[1], _ds.select(1, 2)),
+            TypeError,
+            "unpack_to_bits() got the range DS1..DS2 of Int tags as bit_block. "
+            "Pass a range of Bool tags from .select(), such as c.select(1, 16).",
+        ),
+        # rule-decisions N4: CLICK unpacks DS or DH into no more than 16 bits (OBJ-032), and DD
+        # into no more than 32 (OBJ-039).  CLICK gives pack-too-many.
+        (
+            "unpack_bits DS->32 C",
+            lambda: unpack_to_bits(_ds[1], _c.select(1, 32)),
+            ValueError,
+            "unpack_to_bits() got 32 bits as bit_block, and DS1 holds 16 bits. "
+            "Pass at most 16 bits, or a Dint or Real tag as source.",
+        ),
+        (
+            "unpack_bits DH->32 C",
+            lambda: unpack_to_bits(_dh[1], _c.select(1, 32)),
+            ValueError,
+            "unpack_to_bits() got 32 bits as bit_block, and DH1 holds 16 bits. "
+            "Pass at most 16 bits, or a Dint or Real tag as source.",
+        ),
+        (
+            "unpack_bits DD->33 C",
+            lambda: unpack_to_bits(_dd[1], _c.select(1, 33)),
+            ValueError,
+            "unpack_to_bits() got 33 bits as bit_block, and DD1 holds 32 bits. "
+            "Pass at most 32 bits.",
+        ),
+        # CLICK gives copy-bank-incompatible.
+        (
+            "unpack_words DS->DH",
+            lambda: unpack_to_words(_ds[1], _dh.select(1, 2)),
+            TypeError,
+            "unpack_to_words() got the Int tag DS1 as source. "
+            "Pass one Dint or Real tag, or a pointer to one.",
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) and "->" in value else "",
+)
+def test_pack_refused_when_built(case: str, write, error: type[Exception], message: str):
+    with pytest.raises(error) as refusal:
+        _build(write)
+    assert str(refusal.value) == message
 
 
 @pytest.mark.parametrize(
