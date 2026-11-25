@@ -149,7 +149,7 @@ The scan stops at `undecoded()`. In the main program the scan ends there (`stop=
 
 pyrung leaves out the rungs after `undecoded()`. A breakpoint on one of them does not bind.
 
-The export to CLICK and the CircuitPython code refuse `undecoded()`. Write the rung's logic in its place, or remove the rung. Codegen refuses a marker inside a For loop. A `next()` after a marker with no `for()` above it imports as an empty rung, because the marker may have replaced the `for()`. The marker's notice names that `next()`.
+The export to CLICK and the CircuitPython code refuse `undecoded()`. Write the rung's logic in its place, or remove the rung. Codegen refuses a marker inside a For loop. If a `next()` has no `for()` above it but comes after a marker, codegen writes an empty rung in its place, because the marker may have replaced the `for()`. The debugger console and the `undecoded-rung` finding name that `next()`.
 
 ## Multi-file project codegen
 

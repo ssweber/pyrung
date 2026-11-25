@@ -21,7 +21,7 @@ CLICK cannot take the marker, so the export to CLICK and the CircuitPython code 
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from laddercodec import Undecoded, UndecodedStop
 
@@ -40,9 +40,9 @@ class UndecodedInstruction(Instruction):
     """A marker that stops its scope, in place of a rung that laddercodec could not decode.
 
     ``marker`` is laddercodec's :class:`~laddercodec.Undecoded`. It says where decoding failed
-    and why. ``lone_next`` holds the CLICK rungs, from 0, of the ``next()`` rungs after the
-    marker that have no ``for()`` above them. The marker writes nothing. It is the last rung of its scope, so a no-op
-    ``execute`` is enough to stop the scope.
+    and why. ``lone_next`` lists the rung numbers, counted from 0, of the ``next()`` rungs after
+    the marker that have no ``for()`` above them. The marker writes nothing. It is the last
+    rung of its scope, so a no-op ``execute`` is enough to stop the scope.
     """
 
     INERT_WHEN_DISABLED = True
@@ -95,7 +95,7 @@ class UndecodedInstruction(Instruction):
         marker's place in pyrung, when it is given. The two numbers can differ, because the
         importer splits a CLICK rung that holds several wires into several pyrung rungs.
         When ``lone_next`` is set, two more sentences name the ``next()`` rungs and say that
-        the marker's rung may have held their ``for()``.
+        a rung that laddercodec could not decode may have held their ``for()``.
         """
         error = self.error.rstrip()
         if not error.endswith((".", "!", "?")):
@@ -112,13 +112,16 @@ class UndecodedInstruction(Instruction):
                 numbers[0] if len(numbers) == 1 else f"{', '.join(numbers[:-1])} and {numbers[-1]}"
             )
             if len(numbers) == 1:
-                first, second = f"CLICK rung {listed} has a next()", "that for()"
+                text += (
+                    f" CLICK rung {listed} has a next() with no for() above it."
+                    f" CLICK rung {self.rung + 1} may have held that for()."
+                )
             else:
-                first, second = f"CLICK rungs {listed} each have a next()", "those for() rungs"
-            text += (
-                f" {first} with no for() above it. CLICK rung {self.rung + 1}, which laddercodec "
-                f"could not decode, may have held {second}."
-            )
+                text += (
+                    f" CLICK rungs {listed} each have a next() with no for() above it."
+                    f" Rungs that laddercodec could not decode, from CLICK rung {self.rung + 1} on,"
+                    " may have held their for() rungs."
+                )
         return text
 
     def effect(self) -> str:
@@ -187,10 +190,24 @@ def undecoded(
         raise RuntimeError(
             f"undecoded(stop={marker.stop!r}) cannot be in {where}. Pass stop={expected!r} there."
         )
+    if isinstance(lone_next, (str, bytes)) or not all(
+        isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in _as_tuple(lone_next)
+    ):
+        raise ValueError(
+            f"undecoded(lone_next={lone_next!r}) must be a list of rung numbers, each an int "
+            "from 0 up. Pass lone_next=[3] for a next() at CLICK rung 4."
+        )
     source_file, source_line = _capture_source(depth=2)
     instruction = UndecodedInstruction(marker, lone_next)
     instruction.source_file, instruction.source_line = source_file, source_line
     logic.add_instruction(instruction)
+
+
+def _as_tuple(value: Any) -> tuple:
+    try:
+        return tuple(value)
+    except TypeError:
+        return (None,)
 
 
 def undecoded_rungs(program: Program) -> Iterator[tuple[str | None, int, UndecodedInstruction]]:

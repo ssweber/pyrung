@@ -853,13 +853,16 @@ def _analyze_rungs(
             if first_marker is None:
                 raise ValueError(
                     f"{where(i)}this next() has no for() above it. Either the program has no "
-                    "for() rung, or the tool that wrote this file could not read the rung that "
-                    "held it. Add or rewrite the for() rung in CLICK, then read the program again."
+                    "for() rung, or laddercodec could not read the rung that held it. Add the "
+                    "for() rung in CLICK, or remove the next(), then read the program again."
                 )
             # The marker may have replaced the for(). Program leaves out every rung after the
             # marker, so a placeholder that builds is enough.
             lone_nexts.append(i)
-            comment = f"next() with no for() above it, CLICK rung {i + 1}."
+            comment = (
+                f"CLICK rung {i + 1} is a next() with no for() above it. Remove this empty rung "
+                "when you write the loop in place of undecoded()."
+            )
             own_comment = analyze_one(i, role=RungRole.FORLOOP_NEXT).comment
             if own_comment:
                 comment += "\n" + own_comment
@@ -903,8 +906,9 @@ def _analyze_rungs(
             i += 1
 
     if lone_nexts:
-        # The marker's token carries the rungs, so the import writes them into undecoded().
-        # The shape check compares the token with the one in source_outputs, so both change.
+        # Add lone_next= to the marker's AF token, so the emitter writes it into undecoded().
+        # emitted_logic_mismatch() compares this token with the one in source_outputs, so
+        # change both.
         numbers = ",".join(str(index) for index in lone_nexts)
 
         def with_lone_next(token: str) -> str:

@@ -183,11 +183,16 @@ def _lone_next_code(tmp_path: Path, main_afs: list[tuple[str, str]], marker_at: 
 
 _BODY_AND_NEXT = [("X001", "out(Y001)"), ("X002", "out(Y002)"), ("-", "next()")]
 
+_PLACEHOLDER_COMMENT = (
+    "CLICK rung 4 is a next() with no for() above it. "
+    "Remove this empty rung when you write the loop in place of undecoded()."
+)
+
 _ONE_NEXT_NOTICE = (
     f"laddercodec could not decode CLICK rung 2 of the main program: {_MAIN_ERROR}. "
     "undecoded() stands in for that rung at main rung 2 in pyrung. "
     "CLICK rung 4 has a next() with no for() above it. "
-    "CLICK rung 2, which laddercodec could not decode, may have held that for(). "
+    "CLICK rung 2 may have held that for(). "
     "Each scan ends at this rung, so no rung after it in main runs."
 )
 
@@ -197,11 +202,7 @@ def test_the_import_takes_a_next_whose_for_became_a_marker(tmp_path: Path) -> No
     namespace = _load(code)
     logic = namespace["logic"]
     assert 'stop="end", lone_next=[3])' in code
-    assert (
-        "    comment('next() with no for() above it, CLICK rung 4.')\n"
-        "    with rung():\n"
-        "        pass\n"
-    ) in code
+    assert (f"    comment({_PLACEHOLDER_COMMENT!r})\n    with rung():\n        pass\n") in code
     # Program leaves out the rungs after the marker, the placeholder included.
     assert len(logic.rungs) == 2
     assert undecoded_notice(logic) == _ONE_NEXT_NOTICE
@@ -212,10 +213,7 @@ def test_a_lone_nexts_own_comment_stays_in_the_placeholder(tmp_path: Path) -> No
     rungs[2] = replace(rungs[2], comment="Loop end")
     marker = marker_rung(Undecoded(_MAIN_ERROR, 1, 0, 31, "end"))
     code = ladder_to_pyrung(_write_main(tmp_path, [rungs[0], marker, rungs[1], rungs[2]]))
-    assert (
-        'comment("""\\\n        next() with no for() above it, CLICK rung 4.\n        Loop end""")'
-        in code
-    )
+    assert f'comment("""\\\n        {_PLACEHOLDER_COMMENT}\n        Loop end""")' in code
 
 
 def test_the_import_takes_a_lone_next_in_a_subroutine(tmp_path: Path) -> None:
@@ -227,8 +225,7 @@ def test_the_import_takes_a_lone_next_in_a_subroutine(tmp_path: Path) -> None:
     assert len(logic.subroutines["Sub"]) == 2
     notice = undecoded_notice(logic).splitlines()[1]
     assert (
-        "CLICK rung 4 has a next() with no for() above it. "
-        "CLICK rung 2, which laddercodec could not decode, may have held that for()."
+        "CLICK rung 4 has a next() with no for() above it. CLICK rung 2 may have held that for()."
     ) in notice
 
 
@@ -240,7 +237,7 @@ def test_the_import_takes_two_lone_nexts_after_one_marker(tmp_path: Path) -> Non
     assert "lone_next=[3, 5]" in code
     assert (
         "CLICK rungs 4 and 6 each have a next() with no for() above it. "
-        "CLICK rung 2, which laddercodec could not decode, may have held those for() rungs."
+        "Rungs that laddercodec could not decode, from CLICK rung 2 on, may have held their for() rungs."
     ) in undecoded_notice(logic)
 
 
@@ -269,8 +266,7 @@ def test_the_finding_says_where_the_for_may_have_been(tmp_path: Path) -> None:
     findings = [f for f in everything if f.code == "undecoded-rung"]
     assert len(findings) == 1
     assert (
-        "CLICK rung 4 has a next() with no for() above it. "
-        "CLICK rung 2, which laddercodec could not decode, may have held that for()."
+        "CLICK rung 4 has a next() with no for() above it. CLICK rung 2 may have held that for()."
     ) in findings[0].message
 
 
@@ -286,6 +282,42 @@ def test_a_scan_stops_at_a_marker_that_stands_above_a_lone_next(tmp_path: Path, 
     assert not tags.get("Y002", False)
 
 
+def test_the_import_names_only_the_first_of_two_markers(tmp_path: Path) -> None:
+    rungs = _rungs(tmp_path, [*_BODY_AND_NEXT, ("X003", "out(Y003)"), ("-", "next()")])
+    first = marker_rung(Undecoded(_MAIN_ERROR, 1, 0, 31, "end"))
+    second = marker_rung(Undecoded(_SUB_ERROR, 4, 0, 31, "end"))
+    source = _write_main(
+        tmp_path, [rungs[0], first, rungs[1], rungs[2], second, rungs[3], rungs[4]]
+    )
+    code = ladder_to_pyrung(source)
+    logic = _load(code)["logic"]
+    assert "lone_next=[3, 6]" in code
+    assert len(logic.rungs) == 2
+    assert (
+        "CLICK rungs 4 and 7 each have a next() with no for() above it. "
+        "Rungs that laddercodec could not decode, from CLICK rung 2 on, may have held their "
+        "for() rungs."
+    ) in undecoded_notice(logic)
+
+
+def test_the_project_import_takes_a_lone_next(tmp_path: Path) -> None:
+    rungs = _rungs(tmp_path, _BODY_AND_NEXT)
+    marker = marker_rung(Undecoded(_MAIN_ERROR, 1, 0, 31, "end"))
+    source = _write_main(tmp_path, [rungs[0], marker, rungs[1], rungs[2]])
+    files = ladder_to_pyrung_project(source, output_dir=tmp_path / "project")
+    text = files["src/plc/main.py"]
+    assert "lone_next=[3]" in text
+    assert _PLACEHOLDER_COMMENT in text
+
+
+@pytest.mark.parametrize("bad", [["3"], [-1], [1.5], [True], 3, "3"])
+def test_undecoded_rejects_a_lone_next_that_is_not_rung_numbers(bad) -> None:
+    with pytest.raises(ValueError, match="lone_next=.* must be a list of rung numbers"):
+        with Program(strict=False):
+            with rung():
+                undecoded(_MAIN_ERROR, rung=0, stop="end", lone_next=bad)
+
+
 def test_the_import_refuses_a_marker_that_replaced_the_next(tmp_path: Path) -> None:
     rungs = _rungs(tmp_path, [("X001", "for(3)"), ("X002", "out(Y002)")])
     marker = marker_rung(Undecoded(_MAIN_ERROR, 2, 0, 31, "end"))
@@ -299,8 +331,8 @@ def test_the_import_refuses_a_next_with_no_for(tmp_path: Path) -> None:
     source = _write_main(tmp_path, rungs)
     expected = (
         r"Main program \(main.csv\), rung 2: this next\(\) has no for\(\) above it\. "
-        r"Either the program has no for\(\) rung, or the tool that wrote this file could not "
-        r"read the rung that held it\. Add or rewrite the for\(\) rung in CLICK, then read"
+        r"Either the program has no for\(\) rung, or laddercodec could not read the rung that "
+        r"held it\. Add the for\(\) rung in CLICK, or remove the next\(\), then read"
     )
     with pytest.raises(ValueError, match=expected):
         ladder_to_pyrung(source)
