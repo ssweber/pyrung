@@ -186,7 +186,6 @@ def test_declared_status_fields_are_shared_by_pdg_and_writer_lookup() -> None:
 #: The most characters a to_text() copy of each type writes, by (suppress_zero, exponential).
 #: A termination code adds one.
 _TEXT_BOUNDS = {
-    TagType.BOOL: {(True, False): 1, (False, False): 5},
     TagType.INT: {(True, False): 6, (False, False): 6},
     TagType.DINT: {(True, False): 11, (False, False): 11},
     TagType.WORD: {(True, False): 4, (False, False): 4},
@@ -194,7 +193,6 @@ _TEXT_BOUNDS = {
     TagType.REAL: {(True, False): 48, (True, True): 15},
 }
 _TAG_OF = {
-    TagType.BOOL: Bool,
     TagType.INT: Int,
     TagType.DINT: Dint,
     TagType.WORD: Word,
@@ -228,8 +226,6 @@ def test_to_text_of_a_tag_counts_the_longest_text_of_its_type(
 
 #: Each type's extremes, with the options that write the longest text of each.
 _EXTREMES: list[tuple[Any, Any, list[Any]]] = [
-    (Bool, to_text(), [False, True]),
-    (Bool, to_text(suppress_zero=False), [False, True]),
     (Int, to_text(), [-32768, 32767, 0]),
     (Int, to_text(suppress_zero=False), [-32768, 32767, 0]),
     (Dint, to_text(), [-2147483648, 2147483647, 0]),
