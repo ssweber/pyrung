@@ -435,58 +435,54 @@ def test_stop_from_free_running_run_ends_on_a_stop_frame(tmp_path: Path):
     _shutdown(adapter, out_stream)
 
 
-def test_stop_after_a_pause_that_is_still_pending_ends_on_a_stop_frame(tmp_path: Path):
+def _launch_and_pause(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+    """Launch, continue, then pause and wait until the worker has exited.
+
+    The `pause` request does not wait for the worker. Joining the thread here makes sure that
+    the worker's last frame and its `stopped` event are queued before the next request starts.
+    The test calls handle_request directly, so no loop sends them in the meantime.
+    """
     adapter, out_stream = _launch(tmp_path)
     _request(adapter, out_stream, "continue")
     _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
-
-    # The pause is set but the worker has not been joined when the stop request starts.
-    adapter._pause_event.set()
-    seen = _request(adapter, out_stream, "pyrungSetMode", {"mode": "stop"})
-    seen += _flush(adapter, out_stream)
-
-    frames = _state_frames(seen)
-    assert frames[-1]["mode"] == "stop"
-    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungSetMode"}
-    _shutdown(adapter, out_stream)
-
-
-def test_stop_after_the_worker_exited_ends_on_a_stop_frame(tmp_path: Path):
-    adapter, out_stream = _launch(tmp_path)
-    _request(adapter, out_stream, "continue")
-    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
-
-    # The worker has exited and its last frame is still queued when the stop request starts.
     _request(adapter, out_stream, "pause")
     thread = adapter._continue_thread
     assert thread is not None
     thread.join(timeout=5.0)
     assert not thread.is_alive()
-    seen = _request(adapter, out_stream, "pyrungSetMode", {"mode": "stop"})
+    return adapter, out_stream
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments", "stops"),
+    [
+        ("pyrungSetMode", {"mode": "stop"}, ["pause"]),
+        ("pyrungStepScan", {}, ["pause", "step"]),
+    ],
+)
+def test_request_after_the_worker_exited_ends_on_the_request_frame(
+    tmp_path: Path, command: str, arguments: dict[str, Any], stops: list[str]
+):
+    adapter, out_stream = _launch_and_pause(tmp_path)
+    seen = _request(adapter, out_stream, command, arguments)
     seen += _flush(adapter, out_stream)
 
     frames = _state_frames(seen)
-    assert frames[-1]["mode"] == "stop"
-    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungSetMode"}
+    assert frames[-1]["source"] == {"origin": "dap", "command": command}
+    assert [m["body"]["reason"] for m in seen if m.get("event") == "stopped"] == stops
     _shutdown(adapter, out_stream)
 
 
-def test_step_after_the_worker_exited_ends_on_the_step_frame(tmp_path: Path):
-    adapter, out_stream = _launch(tmp_path)
-    _request(adapter, out_stream, "continue")
-    _wait_for(adapter, out_stream, "pyrungScanFrame", lambda b: b["running"] is True)
-
-    _request(adapter, out_stream, "pause")
-    thread = adapter._continue_thread
-    assert thread is not None
-    thread.join(timeout=5.0)
-    seen = _request(adapter, out_stream, "pyrungStepScan")
+def test_force_after_a_pause_ends_on_the_force_frame(tmp_path: Path):
+    # A force does not pause the worker. handle_request must send the worker's queued last
+    # frame before the force's frame.
+    adapter, out_stream = _launch_and_pause(tmp_path)
+    seen = _request(adapter, out_stream, "pyrungForce", {"tag": "Button", "value": True})
     seen += _flush(adapter, out_stream)
 
     frames = _state_frames(seen)
-    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungStepScan"}
-    stops = [m["body"]["reason"] for m in seen if m.get("event") == "stopped"]
-    assert stops == ["pause", "step"]
+    assert frames[-1]["source"] == {"origin": "dap", "command": "pyrungForce"}
+    assert frames[-1]["trace"]["forces"] == {"Button": True}
     _shutdown(adapter, out_stream)
 
 

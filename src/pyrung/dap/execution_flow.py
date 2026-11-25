@@ -188,21 +188,9 @@ def continue_worker(adapter: Any) -> None:
     meter = SpeedMeter(clock)
     last_emit_time: float | None = None
 
-    def _emit_scan_frame(
-        *, force: bool = False, running: bool = True, stopped: str | None = None
-    ) -> None:
-        """Queue a frame, then a ``stopped`` event for *stopped* if given.
-
-        Both are queued under the state lock, so a request cannot send its own frame between them.
-        """
+    def _emit_scan_frame(*, force: bool = False, running: bool = True) -> None:
         nonlocal last_emit_time
-
-        def _queue_stopped() -> None:
-            if stopped is not None:
-                adapter._enqueue_internal_event("stopped", adapter._stopped_body(stopped))
-
         if not adapter._configuration_done:
-            _queue_stopped()
             return
         now = clock()
         if (
@@ -214,18 +202,15 @@ def continue_worker(adapter: Any) -> None:
 
         buffer = adapter._session.scan_frame_buffer
         if buffer is None:
-            _queue_stopped()
             return
 
         with adapter._state_lock:
             if adapter._runner is None:
-                _queue_stopped()
                 return
             # A program with no rungs has no trace; its frames still carry the scan.
             no_rungs = not adapter._top_level_rungs(adapter._runner)
             trace_body = adapter._live_trace_body_locked(allow_empty=force or no_rungs)
             if trace_body is None:
-                _queue_stopped()
                 return
             current_tags = dict(adapter._runner.current_state.tags)
 
@@ -254,10 +239,9 @@ def continue_worker(adapter: Any) -> None:
                 outputs=buffer.outputs,
                 source=WORKER_SOURCE,
             )
-            # Queued under the lock, so a request that runs after this frame's state
-            # cannot send its own frame first.
+            # Queue the frame while the lock is held. A request that changes the state after
+            # this scan then finds a stopping worker's last frame in the queue and sends it first.
             adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
-            _queue_stopped()
         last_emit_time = now
 
         buffer.monitors = []
@@ -280,7 +264,8 @@ def continue_worker(adapter: Any) -> None:
                 with adapter._state_lock:
                     if adapter._pending_stop and adapter._runner is not None:
                         enter_stop_locked(adapter)
-                _emit_scan_frame(force=True, running=False, stopped="pause")
+                _emit_scan_frame(force=True, running=False)
+                adapter._enqueue_internal_event("stopped", adapter._stopped_body("pause"))
                 return
 
             with adapter._state_lock:
@@ -310,11 +295,13 @@ def continue_worker(adapter: Any) -> None:
                 emit_bounds_violations(adapter)
 
             if hit_breakpoint:
-                _emit_scan_frame(force=True, running=False, stopped="breakpoint")
+                _emit_scan_frame(force=True, running=False)
+                adapter._enqueue_internal_event("stopped", adapter._stopped_body("breakpoint"))
                 return
 
             if hit_data_breakpoint:
-                _emit_scan_frame(force=True, running=False, stopped="data breakpoint")
+                _emit_scan_frame(force=True, running=False)
+                adapter._enqueue_internal_event("stopped", adapter._stopped_body("data breakpoint"))
                 return
 
             if committed:

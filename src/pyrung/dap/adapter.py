@@ -308,16 +308,14 @@ class DAPAdapter:
         if check_state:
             with self._state_lock:
                 before = self._state_fingerprint_locked()
-        flushed = False
         try:
-            body, events = handler(request.get("arguments") or {})
-            if check_state:
-                with self._state_lock:
-                    flushed = self._state_fingerprint_locked() != before
-                if flushed:
-                    # A request that paused the worker finds the worker's last frame queued.
-                    # Sending it here keeps the events in the order they happened, and keeps
-                    # that frame from coming after this request's frame.
+            try:
+                body, events = handler(request.get("arguments") or {})
+            finally:
+                # If the continue worker stopped before or during this request, its last frame
+                # may still be queued. Sent later, that frame would follow this request's frame
+                # and show the state from before the request.
+                if check_state:
                     self._send_queued_events()
             self._send_response(request, success=True, body=body)
             for event_name, event_body in events:
@@ -333,10 +331,6 @@ class DAPAdapter:
         with self._state_lock:
             changed = self._state_fingerprint_locked() != before
         if changed:
-            if not flushed:
-                # The handler failed, or another thread changed the state after it returned.
-                # A worker frame still queued would describe the state from before the request.
-                self._send_queued_events()
             self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
     def _send_response(
@@ -367,8 +361,7 @@ class DAPAdapter:
         """Send the queued internal events and state frames now, in the order they were queued.
 
         Does nothing unless the continue worker has queued a frame with ``running`` False.  Only
-        a worker that is stopping queues one, and its frame would otherwise come after the
-        request's frame.  Requests stay queued in their own order.
+        a worker that is stopping queues such a frame.  Requests stay queued in their own order.
         """
         due = ("internal_event", "state_frame")
         with self._queue.mutex:
