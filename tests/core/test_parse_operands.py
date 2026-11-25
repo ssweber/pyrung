@@ -132,6 +132,13 @@ def test_a_wrapper_needs_immediate():
         TagArg(x[1], False, immediate(x[1]))
 
 
+def test_a_wrapper_must_wrap_the_operand():
+    with pytest.raises(ValueError, match="The wrapper holds .*, but the operand is"):
+        TagArg(x[1], True, immediate(x[2]))
+    with pytest.raises(ValueError, match="The wrapper holds .*, but the operand is"):
+        RangeArg(ds.select(1, 2), True, immediate(x.select(1, 2)))
+
+
 def test_as_authored_returns_any_other_value_unchanged():
     expr = Count + 1
     for value in (Count, expr, 5, None, ds.select(1, 2)):

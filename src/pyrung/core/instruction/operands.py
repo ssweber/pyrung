@@ -130,9 +130,16 @@ class PointerRangeArg:
 
 
 def _check_wrapper(arg: TagArg | RangeArg, held_object: Tag | BlockRange) -> None:
-    """Build the ``ImmediateRef`` of an immediate *arg* that was made without one."""
+    """Build the ``ImmediateRef`` of an immediate *arg* that has none.
+
+    Refuse a wrapper on an arg that is not immediate, or one that wraps another object.
+    """
     if arg.wrapper is not None and not arg.immediate:
         raise ValueError("A wrapper needs immediate=True.")
+    if arg.wrapper is not None and arg.wrapper.value is not held_object:
+        raise ValueError(
+            f"The wrapper holds {arg.wrapper.value!r}, but the operand is {held_object!r}."
+        )
     if arg.immediate and arg.wrapper is None:
         object.__setattr__(arg, "wrapper", ImmediateRef(held_object))
 
