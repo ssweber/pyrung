@@ -5,7 +5,8 @@ export it.  laddercodec's ``Copy`` judges each pair as CLICK's Copy dialog offer
 every source, target and converter below, the test builds laddercodec's ``Copy`` and notes
 whether it raises a ``FieldError`` with the code ``copy-converter-bank``.  Then it builds the
 same ``copy()`` in pyrung and notes whether it raises a converter refusal.  The two answers
-must agree, except for the pairs that the sets at the end of this module list.
+must agree, except for the pairs that ``ONLY_LADDERCODEC_REFUSES`` and
+``ONLY_PYRUNG_REFUSES`` list.
 """
 
 from __future__ import annotations
@@ -86,38 +87,16 @@ def _pyrung_refuses(source: Any, target: Any, converter: Any) -> bool:
     return False
 
 
-def _bank(text: str) -> str | None:
-    """Return the bank of an operand's text, or None for a constant."""
-    bank = text.split("[")[0].rstrip("0123456789")
-    return bank or None
-
-
-def _pyrung_builds_what_laddercodec_refuses(source: str, target: str, converter: str) -> bool:
-    """Return whether the pair is one that pyrung's rule does not check yet.
-
-    pyrung checks a converter against its target, and to_binary into a number against its
-    source too.  laddercodec also refuses to_value and to_ascii from a source that is not
-    TXT, and to_text and to_binary from TXT into TXT.
-    """
-    from_text = _bank(source) == "TXT"
-    if converter in ("to_value", "to_ascii"):
-        # pyrung refuses both into TXT and DF whatever the source.
-        return not from_text and _bank(target) not in ("TXT", "DF")
-    return from_text and _bank(target) == "TXT"
-
-
 #: The pairs that laddercodec refuses and pyrung builds.
-ONLY_LADDERCODEC_REFUSES = frozenset(
-    (source, target, converter)
-    for source, _ in SOURCES
-    for target, _ in TARGETS
-    for converter in CONVERTERS
-    if _pyrung_builds_what_laddercodec_refuses(source, target, converter)
-)
+ONLY_LADDERCODEC_REFUSES: frozenset[tuple[str, str, str]] = frozenset()
 
 #: The pairs that pyrung refuses and the installed laddercodec (0.5.1) accepts.  Empty this at
-#: the next laddercodec pin.  It holds no pair at 0.5.1, so the test fails if one appears.
-ONLY_PYRUNG_REFUSES: frozenset[tuple[str, str, str]] = frozenset()
+#: the next laddercodec pin.  CLICK 4.00's Copy dialog hides Copy Binary from a DF into a TXT.
+ONLY_PYRUNG_REFUSES = frozenset(
+    (source, target, "to_binary")
+    for source in ("DF1", "DF[DS1]")
+    for target in ("TXT2", "TXT[DS2]")
+)
 
 
 def test_copy_refuses_the_converter_pairs_that_laddercodec_refuses() -> None:

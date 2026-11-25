@@ -2437,26 +2437,14 @@ class TestBoardPeripheralsAndRunStop:
                 with rung():
                     blockcopy(sensor.instance(2), working.select(1, 3))
 
-    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
-    def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
-        """A code needs an integer, so the TXT stays as it was and SC43 is set.
-
-        The rung runs on.
-        """
-        r, setup = self._non_finite_real(operand)
-        ch = Char("Ch", default="A")
-        after = Bool("After")
-        with Program(strict=False) as prog:
-            with rung(system.sys.first_scan):
-                for expr, target in setup:
-                    math(expr, target)
-            with rung(~system.sys.first_scan):
-                copy(r, ch, convert=to_binary)
-                out(after)
-
-        results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS, after), scans=2)
-        faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
-        assert results == {name: ("A", *faults, True) for name in results}
+    def test_a_real_to_binary_into_a_char_is_refused_at_build(self):
+        """CLICK's Copy dialog hides Copy Binary from a DF into a TXT."""
+        with pytest.raises(
+            ValueError, match=r"^copy\(\) got convert=to_binary with the Real tag R"
+        ):
+            with Program(strict=False):
+                with rung():
+                    copy(Real("R"), Char("Ch"), convert=to_binary)
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):

@@ -1625,7 +1625,7 @@ class TestWrappedCopySources:
 
         def logic():
             with rung():
-                copy(dd[Pointer], Dest, convert=to_value)
+                copy(txt[Pointer], Dest, convert=to_value)
 
         prog = _build_program(logic)
         tag_map = TagMap([Pointer.map_to(ds[100]), Dest.map_to(dd[1])], include_system=False)

@@ -47,6 +47,7 @@ from .operands import (
     Span,
     TagArg,
     Value,
+    _is_expression,
     check_rules,
     describe,
 )
@@ -226,9 +227,8 @@ def _refuse_converter_into(
     such forms would store nothing and set the out-of-range flag.  The message names
     *authored*, the target as the user wrote it, so a TXT range is named whole.
 
-    Also raise for a ``to_binary`` into a Dint or a Real from a source that CLICK's Copy
-    dialog offers no Copy Binary for.  *source* is the parsed source, and *authored_source*
-    is the source as the user wrote it.
+    Also raise for a source that CLICK's Copy dialog offers the converter no option for.
+    *source* is the parsed source, and *authored_source* is the source as the user wrote it.
     """
     if not isinstance(convert, CopyConverter):
         return
@@ -245,9 +245,10 @@ def _refuse_converter_into(
             "Real tag or a constant with a fraction, and into a Real only from a Dint tag or "
             "an integer constant outside -32768..32767. Leave convert out."
         )
-    if allowed is None or not isinstance(target_type, TagType) or target_type in allowed:
-        return
     shown = "to_text()" if convert.mode == "text" else f"to_{convert.mode}"
+    if allowed is None or not isinstance(target_type, TagType) or target_type in allowed:
+        _refuse_converter_from(convert, shown, source, authored_source, authored, target_type)
+        return
     names = [tag_type.name.capitalize() for tag_type in allowed]
     article = "an" if names[0][0] in "AEIOU" else "a"
     if len(names) == 1:
@@ -258,6 +259,39 @@ def _refuse_converter_into(
     raise ValueError(
         f"copy() got convert={shown} with {describe(authored)} as the target. {shown} stores "
         f"only into {kinds}. Leave convert out, or {advice}."
+    )
+
+
+def _refuse_converter_from(
+    convert: CopyConverter,
+    shown: str,
+    source: Value,
+    authored_source: Any,
+    authored: Any,
+    target_type: Any,
+) -> None:
+    """Raise ``ValueError`` for a source that CLICK's Copy dialog offers *convert* no option for.
+
+    The target already suits the converter.  ``to_value`` and ``to_ascii`` read a TXT.
+    ``to_text()`` and ``to_binary`` write a number into TXT, so a text source has nothing for
+    them to convert.  CLICK's dialog also hides Copy Binary from a DF into a TXT.
+    """
+    kind = copy_source_kind(source)
+    text = kind is TagType.CHAR or (isinstance(source, ConstArg) and isinstance(source.value, str))
+    if convert.mode in ("value", "ascii"):
+        if text:
+            return
+        reads = "only a Char tag or a text constant"
+    elif convert.mode in ("text", "binary") and text:
+        reads = "a number, not text"
+    elif convert.mode == "binary" and kind is TagType.REAL and target_type is TagType.CHAR:
+        reads = "no Real tag when it writes into Char tags"
+    else:
+        return
+    raise ValueError(
+        f"copy() got convert={shown} with {describe(authored_source)} as the source and "
+        f"{describe(authored)} as the target. {shown} reads {reads}. Leave convert out, or "
+        "use a converter that matches the source and target."
     )
 
 
@@ -783,7 +817,7 @@ class FillInstruction(OneShotMixin, Instruction):
 
     An integer constant into a TXT range writes its text, as a plain ``copy()`` into one TXT
     does.  ``convert`` holds that ``to_text()`` converter, and is ``None`` for any other
-    Fill.  The builder refuses a number register or a Real constant there.  Text of more
+    Fill.  The builder refuses a number register, an expression or a Real constant there.  Text of more
     than one character sets the out-of-range flag and writes nothing.
     """
 
@@ -816,10 +850,13 @@ class FillInstruction(OneShotMixin, Instruction):
                 "register."
             )
         if dest_type is TagType.CHAR and (
-            copy_source_kind(value) in _NUMBER_TYPES or isinstance(value, float)
+            copy_source_kind(value) in _NUMBER_TYPES
+            or isinstance(value, float)
+            or _is_expression(value)
         ):
-            # CLICK's editor refuses a number register here (OBJ-024).  A CLICK was read
-            # writing a Real constant's text at each address in turn, past the range's end.
+            # CLICK's editor refuses a number register here (OBJ-024).  An expression stores
+            # as a register does.  A CLICK was read writing a Real constant's text at each
+            # address in turn, past the range's end.
             raise ValueError(
                 f"fill() got {describe(value)} as the value and {describe(dest)} as the "
                 "target. fill() writes only an integer or a text constant into Char tags. "

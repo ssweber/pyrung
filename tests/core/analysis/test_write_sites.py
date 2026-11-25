@@ -192,7 +192,6 @@ _TEXT_BOUNDS = {
     TagType.WORD: {(True, False): 4, (False, False): 4},
     # pyrung keeps a Real at 64-bit precision, so "-4.9406565E-324" is 15 characters.
     TagType.REAL: {(True, False): 48, (True, True): 15},
-    TagType.CHAR: {(True, False): 1, (False, False): 5},
 }
 _TAG_OF = {
     TagType.BOOL: Bool,
@@ -231,8 +230,6 @@ def test_to_text_of_a_tag_counts_the_longest_text_of_its_type(
 _EXTREMES: list[tuple[Any, Any, list[Any]]] = [
     (Bool, to_text(), [False, True]),
     (Bool, to_text(suppress_zero=False), [False, True]),
-    (Char, to_text(), ["0", "9"]),
-    (Char, to_text(suppress_zero=False), ["0", "9"]),
     (Int, to_text(), [-32768, 32767, 0]),
     (Int, to_text(suppress_zero=False), [-32768, 32767, 0]),
     (Dint, to_text(), [-2147483648, 2147483647, 0]),

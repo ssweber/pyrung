@@ -295,8 +295,9 @@ def instruction_specs(
 
     has_char = len(pool.char_tags) > 0
     has_real = len(pool.real_tags) > 0
-    # copy() refuses to_value and to_ascii into a Real.
+    # copy() refuses to_value and to_ascii into a Real, and to_binary from a Real into text.
     text_number_dests = pool.int_tags + pool.dint_tags + pool.word_tags
+    binary_text_sources = pool.int_inputs + pool.int_tags + pool.dint_tags + pool.word_tags
 
     choices: list[tuple[str, int]] = []
     if has_bool:
@@ -313,8 +314,10 @@ def instruction_specs(
         choices.append(("copy_float", 3))
     if has_char and text_number_dests:
         choices.extend([("copy_to_value", 2), ("copy_to_ascii", 2)])
+    if has_char and binary_text_sources:
+        choices.append(("copy_to_binary", 2))
     if has_char and has_numeric:
-        choices.extend([("copy_to_binary", 2), ("copy_to_text", 2)])
+        choices.append(("copy_to_text", 2))
     if has_timers:
         choices.extend([("on_delay", 6), ("off_delay", 3)])
     if has_counters:
@@ -393,7 +396,7 @@ def instruction_specs(
             args={"source": source, "dest": dest, "converter": "to_ascii"},
         )
     elif kind == "copy_to_binary":
-        source = draw(st.sampled_from(pool.all_numeric()))
+        source = draw(st.sampled_from(binary_text_sources))
         dest = draw(st.sampled_from(pool.char_tags))
         return InstrSpec(
             kind="copy_convert",

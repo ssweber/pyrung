@@ -2,7 +2,8 @@
 
 The refused pairs are the ones that the CLICK export refuses for every source.  copy() also
 refuses a to_binary into a Dint or a Real from a source that CLICK's Copy dialog was read
-offering no Copy Binary for.  fill() refuses a number register into Char tags, which
+offering no Copy Binary for.  It refuses every other source that CLICK's Copy dialog offers
+the converter no option for.  fill() refuses a number register into Char tags, which
 CLICK's Fill dialog was read refusing with OBJ-024.  fill() also refuses a Real constant
 into Char tags, which a CLICK was read writing past the end of the range.
 """
@@ -37,12 +38,12 @@ TARGETS: dict[str, Callable[[], Any]] = {
 }
 
 # The source that each converter reads, so that an accepted pair can build.  to_binary into
-# a Real reads a Dint, and into any other target it reads a Real.
-SOURCES = {"to_value": txt[5], "to_ascii": txt[5], "to_text()": ds[1], "to_binary": df[1]}
+# a Dint reads a Real, and into any other target it reads a Dint.
+SOURCES = {"to_value": txt[5], "to_ascii": txt[5], "to_text()": ds[1], "to_binary": dd[1]}
 
 
 def _source(converter: str, target: str) -> Any:
-    return dd[1] if (converter, target) == ("to_binary", "Real") else SOURCES[converter]
+    return df[1] if (converter, target) == ("to_binary", "Dint") else SOURCES[converter]
 
 
 ACCEPTED = {
@@ -207,6 +208,7 @@ def test_a_text_to_number_converter_into_a_txt_is_refused_before_check(
         (lambda: Int("Count"), "the Int tag Count"),
         (lambda: 1.5, "the constant 1.5"),
         (lambda: 5.0, "the constant 5.0"),
+        (lambda: ds[1] + 1, "the expression (DS1 + 1)"),
     ],
 )
 def test_fill_of_a_number_register_or_a_real_constant_into_char_tags_is_refused(
@@ -228,3 +230,83 @@ def test_fill_of_a_constant_or_a_char_into_char_tags_builds(value) -> None:
     with Program(strict=False):
         with rung(x[1]):
             fill(value, txt.select(1, 3))
+
+
+_ADVICE = "Leave convert out, or use a converter that matches the source and target."
+
+
+@pytest.mark.parametrize(
+    "source,target,converter,shown,reads",
+    [
+        (
+            lambda: ds[1],
+            lambda: ds[2],
+            "to_value",
+            "the Int tag DS1",
+            "only a Char tag or a text constant",
+        ),
+        (
+            lambda: dd[ds[1]],
+            lambda: dh[2],
+            "to_ascii",
+            "the Dint pointer DD[DS1]",
+            "only a Char tag or a text constant",
+        ),
+        (
+            lambda: 55,
+            lambda: dd[2],
+            "to_value",
+            "the constant 55",
+            "only a Char tag or a text constant",
+        ),
+        (lambda: txt[1], lambda: txt[2], "to_text()", "the Char tag TXT1", "a number, not text"),
+        (
+            lambda: txt[ds[1]],
+            lambda: txt[2],
+            "to_binary",
+            "the Char pointer TXT[DS1]",
+            "a number, not text",
+        ),
+        (lambda: "A", lambda: txt[2], "to_text()", "the text 'A'", "a number, not text"),
+        (
+            lambda: df[1],
+            lambda: txt[2],
+            "to_binary",
+            "the Real tag DF1",
+            "no Real tag when it writes into Char tags",
+        ),
+        (
+            lambda: df[ds[1]],
+            lambda: txt[2],
+            "to_binary",
+            "the Real pointer DF[DS1]",
+            "no Real tag when it writes into Char tags",
+        ),
+    ],
+)
+def test_a_converter_from_a_source_that_clicks_dialog_offers_no_option_for_is_refused(
+    source, target, converter, shown, reads
+) -> None:
+    with pytest.raises(ValueError) as refused:
+        _build(source(), target(), CONVERTERS[converter])
+    message = str(refused.value)
+    assert message.startswith(f"copy() got convert={converter} with {shown} as the source and ")
+    assert message.endswith(f"{converter} reads {reads}. {_ADVICE}")
+    assert message.isascii()
+
+
+@pytest.mark.parametrize(
+    "source,target,converter",
+    [
+        (lambda: txt[1], lambda: ds[2], "to_value"),
+        (lambda: "7", lambda: ds[2], "to_value"),
+        (lambda: txt[ds[1]], lambda: dd[2], "to_ascii"),
+        (lambda: ds[1], lambda: txt[2], "to_text()"),
+        (lambda: dd[1], lambda: txt[2], "to_binary"),
+        (lambda: 1.5, lambda: txt[2], "to_binary"),
+    ],
+)
+def test_a_converter_from_a_source_that_clicks_dialog_offers_builds(
+    source, target, converter
+) -> None:
+    _build(source(), target(), CONVERTERS[converter])

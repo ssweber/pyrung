@@ -56,7 +56,7 @@ fill(5, Txt.select(1, 3))           # Txt1..Txt3 = "5"
 
 An integer constant filled into a TXT range writes its text, the same as a plain `copy()` into one TXT. Each TXT holds one character. If the text is longer, such as "12", `fill()` writes nothing and sets `system.fault.out_of_range`. CLICK's editor refuses a Fill of 12 into a TXT.
 
-`fill()` refuses a number register as the value for a TXT range, as CLICK's editor does. Copy the register into one TXT with `copy()` instead.
+`fill()` refuses a number register or an expression as the value for a TXT range, as CLICK's editor does. Copy the value into one TXT with `copy()` instead.
 
 `fill()` also refuses a Real constant, such as `fill(1.5, Txt.select(1, 3))`. A CLICK accepts it, but it writes the real's text ("1.5000000") at each address of the range in turn. Each write overlaps the one before, and the last one runs past the end of the range.
 
@@ -137,6 +137,12 @@ Between a `Real` and a `Dint` register, `to_binary` moves the 32 bits unchanged.
 
 - into a `Dint`: a `Real` register, or a constant with a fraction;
 - into a `Real`: a `Dint` register, or an integer constant outside -32768..32767.
+
+`copy()` also refuses a source that CLICK's Copy dialog offers the converter no option for:
+
+- `to_value` or `to_ascii` from anything but a TXT or a text constant;
+- `to_text()` or `to_binary` from a TXT or a text constant;
+- `to_binary` from a `Real` register into a TXT. CLICK's dialog hides Copy Binary there. Use `to_text()`.
 
 `to_value`, `to_ascii`, and `to_binary` accept no arguments. Pass them bare, with no parentheses. `to_binary()` also works. `to_text()` accepts keyword arguments for formatting options.
 

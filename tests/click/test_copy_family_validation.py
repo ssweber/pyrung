@@ -584,10 +584,14 @@ def test_the_label_leaves_out_the_name_under_the_caret():
 
 
 def test_a_converter_refusal_labels_the_caret_and_leads_the_hint_with_the_explanation():
-    (finding,) = _errors(lambda: copy(ds[1], ds[2], convert=to_value))
+    # copy() refuses this pair at build, and blockcopy() leaves it to the export.
+    (finding,) = _errors(lambda: blockcopy(ds.select(1, 2), ds.select(3, 4), convert=to_value))
     assert finding.code == Code.COPY_CONVERTER_BANK
     (frame,) = finding.display.frames
-    assert (frame.lines, frame.caret) == (("copy(DS1, DS2, convert=to_value)",), (0, 23, 8))
+    assert (frame.lines, frame.caret) == (
+        ("blockcopy(DS1..DS2, DS3..DS4, convert=to_value)",),
+        (0, 38, 8),
+    )
     assert frame.caret_label
     assert finding.display.problem == ""
     assert finding.suggestion in finding.display.hint
@@ -763,13 +767,13 @@ def test_a_blockcopy_into_one_user_tag_names_it_as_copy_does(dest, label, text):
 
 
 def test_a_problem_line_names_the_tags():
-    count = Int("Count")
-    prog = _program(lambda: copy(count, ds[2], convert=to_value))
-    mapping = TagMap([count.map_to(ds[1])], include_system=False)
+    counts = Block("Count", TagType.INT, 1, 2)
+    prog = _program(lambda: blockcopy(counts.select(1, 2), ds.select(3, 4), convert=to_value))
+    mapping = TagMap([counts.map_to(ds.select(1, 2))], include_system=False)
     (finding,) = validate_click_program(prog, mapping, mode="strict").errors
-    assert "Count (DS1)" in finding.display.frames[0].caret_label
+    assert "Count1..Count2 (DS1..DS2)" in finding.display.frames[0].caret_label
     assert finding.display.problem == ""
-    assert "Count (DS1)" in finding.message
+    assert "Count1..Count2 (DS1..DS2)" in finding.message
 
 
 def test_an_export_error_names_each_place_once():
