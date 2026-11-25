@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from contextlib import AbstractContextManager
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, assert_never
 
 from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.click.validation.findings import (
@@ -21,9 +21,8 @@ from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
-from pyrung.core.instruction.operands import ConstArg, Value, held
+from pyrung.core.instruction.operands import Coil, ConstArg, RangeArg, TagArg, Value, held
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
-from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.render import operand_name
 
@@ -259,7 +258,7 @@ class _InstructionMixin:
         }[instruction_type]
         return self._fn(
             verb,
-            self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+            self._render_operand(instruction.target.tag, path=f"{path}.target", source=instruction),
             **kwargs,
         )
 
@@ -361,13 +360,23 @@ class _InstructionMixin:
         CLK_COPY_RANGE_NOT_CONSECUTIVE is allowed, so it never writes a list. CLICK's Out,
         Set and Reset take no list.
         """
-        target = instruction.target
+        target: Coil = instruction.target
         text = self._render_operand(
-            target, path=path, source=instruction, allow_immediate=True, immediate_context="coil"
+            held(target),
+            path=path,
+            source=instruction,
+            allow_immediate=True,
+            immediate_context="coil",
         )
-        if isinstance(target, BlockRange) and text.startswith("["):
-            self._render_run(target, path=path, instruction=instruction)
-        return text
+        match target:
+            case TagArg():
+                return text
+            case RangeArg(span=span, immediate=immediate):
+                if not immediate and text.startswith("["):
+                    self._render_run(span, path=path, instruction=instruction)
+                return text
+            case _:
+                assert_never(target)
 
     def _refuse_constant_text_past_txt(self, instruction: Any, dest: str, *, path: str) -> None:
         # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it,

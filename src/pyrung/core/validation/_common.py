@@ -114,7 +114,7 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         # an Out coil never sets the Timer's Done.
         targets += [instr.on_acc.name, instr.off_acc.name]
     elif isinstance(instr, TimedInstruction):
-        targets = [instr.target.name, instr.timer_acc.name]
+        targets = [instr.target.tag.name, instr.timer_acc.name]
     elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
         targets = [instr.done_bit.name, instr.accumulator.name]
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):

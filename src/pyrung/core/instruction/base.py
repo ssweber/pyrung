@@ -7,7 +7,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pyrung.core.instruction.operands import FitsRegister, NumberInto, Operand, check_fields
+from pyrung.core.instruction.operands import (
+    PARSED,
+    FitsRegister,
+    NumberInto,
+    Operand,
+    check_fields,
+    inner,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -117,6 +124,8 @@ class Instruction(ABC):
         result: list[tuple[str, str]] = []
         for field_name in self._exclusive_fields:
             tag = getattr(self, field_name)
+            if isinstance(tag, PARSED):
+                tag = inner(tag)
             result.append((type(self).__name__, tag.name))
         return result
 

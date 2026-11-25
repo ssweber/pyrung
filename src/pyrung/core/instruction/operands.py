@@ -32,12 +32,14 @@ A kind does not check the length of a range with pointers, because the pointers 
 read at scan time.  The scan checks it.
 
 ``copy()``, ``fill()``, ``blockcopy()``, ``pack_bits()``, ``pack_words()``,
-``pack_text()``, ``unpack_to_bits()`` and ``unpack_to_words()`` parse their operands
-instead.  Their builder calls ``parse()`` on each declaration, which returns one of
-the results below or raises the refusal.  The instruction then holds only results.
-``execute()``, the code generator and the CLICK export match on them and never test
-the raw value again.  A reader that takes the operands of every instruction calls
-:func:`as_authored` on each.
+``pack_text()``, ``unpack_to_bits()``, ``unpack_to_words()`` and the coils parse their
+operands instead.  The coils are ``out()``, ``latch()``, ``reset()``, ``toggle()``,
+``debounce()``, ``flasher()`` and ``timed()``, and each one parses only its target.
+Their builder calls ``parse()`` on each declaration, which returns one of the results
+below or raises the refusal.  The instruction then holds only results.  ``execute()``,
+the code generator and the CLICK export match on them and never test the raw value
+again.  A reader that takes the operands of every instruction calls :func:`as_authored`
+on each.
 """
 
 from __future__ import annotations
@@ -152,6 +154,8 @@ Dest = TagArg | PointerArg
 """What a field that writes one register holds, such as the destination of ``copy()``."""
 Span = RangeArg | PointerRangeArg
 """What a field that takes a range holds, such as the destination of ``fill()``."""
+Coil = TagArg | RangeArg
+"""What a coil writes, such as the target of ``out()``: one tag, or a range with fixed ends."""
 
 
 def held(arg: Value | Span) -> Any:
@@ -555,9 +559,75 @@ class EachOperand(Operand):
         return None
 
 
+@dataclass(frozen=True)
+class CoilOperand(Operand):
+    """The target of ``out()``, ``latch()`` or ``reset()``: one tag, or a range with fixed ends.
+
+    The field refuses a pointer, such as ``C[Ptr]``, and a range with pointers, such as
+    ``C.select(Lo, Hi)``.  Its refusal has words of its own.  It does not use the
+    "<call> got ..." form of the other kinds.
+    """
+
+    def fits(self, value: Any) -> bool:
+        return isinstance(value, (Tag, BlockRange))
+
+    def wanted(self) -> str:
+        return "one tag, or a range from .select()"
+
+    def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
+        """Return the error that refuses *value*, or None if it fits."""
+        if self.accepts(value):
+            return None
+        return TypeError(
+            "Expected Tag, BlockRange from .select(), or immediate(...) wrapper, "
+            f"got {type(unwrap(value)[0]).__name__}."
+        )
+
+    def parse(self, call: str, arg: str, value: Any) -> Coil:
+        """Return *value* as a tag or a range, or raise the error that refuses it."""
+        self._refuse(call, arg, value)
+        bare, wrapper = _split(value)
+        if isinstance(bare, Tag):
+            return TagArg(bare, wrapper is not None, wrapper)
+        return RangeArg(bare, wrapper is not None, wrapper)
+
+
+@dataclass(frozen=True)
+class CoilBitOperand(Operand):
+    """The target of ``toggle()``, ``debounce()``, ``flasher()`` or ``timed()``: one Bool tag.
+
+    Set *immediate* to False for a coil that has no Immediate option in CLICK.  Like
+    :class:`CoilOperand`, its refusals have words of their own.
+    """
+
+    def fits(self, value: Any) -> bool:
+        return isinstance(value, Tag) and value.type is TagType.BOOL
+
+    def wanted(self) -> str:
+        return "one Bool tag"
+
+    def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
+        """Return the error that refuses *value*, or None if it fits."""
+        if self.accepts(value):
+            return None
+        if isinstance(value, ImmediateRef) and not self.immediate:
+            return TypeError(
+                f"{call} takes no immediate(...) target; only out() and toggle() "
+                "coils write immediately."
+            )
+        return TypeError(f"{call} writes one Bool tag, got {value!r}.")
+
+    def parse(self, call: str, arg: str, value: Any) -> TagArg:
+        """Return *value* as one tag, or raise the error that refuses it."""
+        self._refuse(call, arg, value)
+        bare, wrapper = _split(value)
+        return TagArg(bare, wrapper is not None, wrapper)
+
+
 TAG = TagOperand()
 RANGE = RangeOperand()
 VALUE = ValueOperand()
+COIL = CoilOperand()
 
 
 @dataclass(frozen=True)

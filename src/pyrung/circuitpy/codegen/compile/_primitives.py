@@ -6,7 +6,7 @@ import math
 import operator
 import re
 from enum import IntEnum
-from typing import Any, NoReturn
+from typing import Any, NoReturn, assert_never
 
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
@@ -44,6 +44,7 @@ from pyrung.core.expression import (
     _op_pow,
     may_be_float,
 )
+from pyrung.core.instruction.operands import Coil, RangeArg, TagArg
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -1299,26 +1300,32 @@ def _compile_set_address_error_fault_body(ctx: CodegenContext) -> list[str]:
 
 
 def _compile_target_write_lines(
-    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
+    target: Coil,
     value_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
     sp = " " * indent
-    if isinstance(target, ImmediateRef):
-        return _compile_target_write_lines(target.value, value_expr, ctx, indent)
-    if isinstance(target, Tag):
-        return [f"{sp}{_compile_lvalue(target, ctx)} = {value_expr}"]
+    match target:
+        case TagArg(tag=tag):
+            return [f"{sp}{_compile_lvalue(tag, ctx)} = {value_expr}"]
+        case RangeArg(span=span):
+            return _compile_range_write_lines(span, value_expr, ctx, sp)
+        case _:
+            assert_never(target)
 
-    if isinstance(target, BlockRange):
-        layout = ctx.static_range_layout(target)
-        if not layout.uses_backing_storage:
-            lines = [f"{sp}{_compile_lvalue(tag, ctx)} = {value_expr}" for tag in layout.tags]
-            return lines if lines else [f"{sp}pass"]
+
+def _compile_range_write_lines(
+    span: BlockRange, value_expr: str, ctx: CodegenContext, sp: str
+) -> list[str]:
+    layout = ctx.static_range_layout(span)
+    if not layout.uses_backing_storage:
+        lines = [f"{sp}{_compile_lvalue(tag, ctx)} = {value_expr}" for tag in layout.tags]
+        return lines if lines else [f"{sp}pass"]
 
     if ctx.blockless:
         setup, symbol, indices_var, _ = _compile_range_setup(
-            target,
+            span,
             ctx,
             stem="targetwrite",
             include_addresses=False,
@@ -1332,44 +1339,13 @@ def _compile_target_write_lines(
         )
         return lines
 
-    if isinstance(target, BlockRange):
-        binding = ctx.block_bindings[id(target.block)]
-        symbol = ctx.symbol_for_block(target.block)
-        lines: list[str] = []
-        for addr in target.addresses:
-            index = ctx.block_index(binding.block_id, addr)
-            lines.append(f"{sp}{symbol}[{index}] = {value_expr}")
-        return lines if lines else [f"{sp}pass"]
-
-    binding = ctx.block_bindings[id(target.block)]
-    symbol = ctx.symbol_for_block(target.block)
-    helper = ctx.use_window_addrs_block(binding.block_id)
-    name = ctx.next_name("irange")
-    start_var = f"_{name}_start"
-    end_var = f"_{name}_end"
-    addr_list = f"_{name}_indices"
-    addr_var = f"_{name}_addr"
-    idx_var = f"_{name}_idx"
-    start_expr = _compile_address_expr(target.start_expr, ctx)
-    end_expr = _compile_address_expr(target.end_expr, ctx)
-    lines = [
-        f"{sp}{start_var} = int({start_expr})",
-        f"{sp}{end_var} = int({end_expr})",
-        f"{sp}if {start_var} > {end_var}:",
-        f'{sp}    raise ValueError("Indirect range start must be <= end")',
-        f"{sp}{addr_list} = []",
-        f"{sp}for {addr_var} in {helper}({start_var}, {end_var}):",
-        f"{sp}    {addr_list}.append({addr_var} - {binding.start})",
-    ]
-    if target.reverse_order:
-        lines.append(f"{sp}{addr_list}.reverse()")
-    lines.extend(
-        [
-            f"{sp}for {idx_var} in {addr_list}:",
-            f"{sp}    {symbol}[{idx_var}] = {value_expr}",
-        ]
-    )
-    return lines
+    binding = ctx.block_bindings[id(span.block)]
+    symbol = ctx.symbol_for_block(span.block)
+    lines: list[str] = []
+    for addr in span.addresses:
+        index = ctx.block_index(binding.block_id, addr)
+        lines.append(f"{sp}{symbol}[{index}] = {value_expr}")
+    return lines if lines else [f"{sp}pass"]
 
 
 def _compile_address_expr(

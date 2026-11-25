@@ -43,7 +43,7 @@ def test_bool_feedback_rungs_are_one_debounce_coil() -> None:
     (rung,) = rungs
     (coil,) = rung._instructions
     assert isinstance(coil, DebounceInstruction)
-    assert coil.target is Fb
+    assert coil.target.tag is Fb
     assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
     assert (coil.on_preset, coil.off_preset, coil.unit.name) == (200, 100, "Tms")
     (power,) = rung._conditions
@@ -74,7 +74,7 @@ def test_pulse_feedback_rungs_are_one_flasher_coil() -> None:
     (rung,) = rungs
     (coil,) = rung._instructions
     assert isinstance(coil, FlasherInstruction)
-    assert coil.target is Fb
+    assert coil.target.tag is Fb
     assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
     # One unit for both sides, as on a CLICK: 8 ms rounds up to a second.
     assert (coil.on_preset, coil.off_preset, coil.unit.name) == (1, 40, "Ts")
@@ -86,13 +86,13 @@ def test_copy_hold_rung_steady_vs_guarded() -> None:
     assert not steady._conditions  # unconditional steady hold
     (instr,) = steady._instructions
     assert isinstance(instr, LatchInstruction)
-    assert instr.target is Cmd
+    assert instr.target.tag is Cmd
 
     guarded = copy_hold_rung(value=False, dest=Cmd, guard=CompareEq(Cmd, 0))
     assert guarded._conditions  # gated by the guard
     (instr,) = guarded._instructions
     assert isinstance(instr, ResetInstruction)
-    assert instr.target is Cmd
+    assert instr.target.tag is Cmd
 
 
 def test_copy_hold_rung_keeps_copy_for_non_bool_destinations() -> None:

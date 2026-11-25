@@ -9,7 +9,7 @@ from pyrung.core import Bool, Program, out, rung
 
 
 def _targets(program: Program) -> list[str]:
-    return [i.target.name for rung in program.rungs for i in rung._instructions]
+    return [i.target.tag.name for rung in program.rungs for i in rung._instructions]
 
 
 def test_a_program_built_inside_another_gives_the_outer_one_back():

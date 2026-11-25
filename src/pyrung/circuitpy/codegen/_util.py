@@ -7,13 +7,14 @@ import math
 import re
 from collections import Counter
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS
 from pyrung.core.instruction.coils import reset_value_for_type
 from pyrung.core.instruction.conversions import copy_source_kind, copy_store_transform
+from pyrung.core.instruction.operands import Coil, RangeArg, TagArg
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import ImmediateRef, TagType
 
 if TYPE_CHECKING:
     from pyrung.circuitpy.codegen.context import CodegenContext
@@ -155,18 +156,17 @@ def _refuse_a_def_over_a_generated_name(source: str, function_sources: Mapping[s
             )
 
 
-def _coil_reset_value(
-    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
-    ctx: CodegenContext,
-) -> str:
-    if isinstance(target, ImmediateRef):
-        return _coil_reset_value(target.value, ctx)
+def _coil_reset_value(target: Coil, ctx: CodegenContext) -> str:
     # RESET writes the core engine's OFF/zero value; for CHAR that is NUL,
     # the same blank an unwritten TXT holds.
-    if isinstance(target, Tag):
-        return repr(reset_value_for_type(target.type))
-    binding = ctx.block_bindings[id(target.block)]
-    return repr(reset_value_for_type(binding.tag_type))
+    match target:
+        case TagArg(tag=tag):
+            return repr(reset_value_for_type(tag.type))
+        case RangeArg(span=span):
+            binding = ctx.block_bindings[id(span.block)]
+            return repr(reset_value_for_type(binding.tag_type))
+        case _:
+            assert_never(target)
 
 
 def _global_line(symbols: list[str], indent: int) -> str | None:

@@ -9,7 +9,7 @@ from typing import Any
 
 from laddercodec import OutVariant, OutVariantKind
 
-from pyrung.core.tag import ImmediateRef
+from pyrung.core.instruction.operands import TagArg
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.render import Call, operand_name
 
@@ -76,7 +76,7 @@ def _operands(instruction: Any) -> list[Operand]:
     name = type(instruction).__name__
     if name not in _SIDES:
         return list(declared_operands(instruction, {"target": "target"}))
-    found = [Operand(0, "target", (("target", instruction.target),))]
+    found = [Operand(0, "target", (("target", instruction.target.tag),))]
     for side, acc, preset in _SIDES[name]:
         found.append(Operand(f"{side}_acc", f"{side} timer", ((acc, getattr(instruction, acc)),)))
         found.append(
@@ -108,8 +108,8 @@ def _call(instruction: Any) -> Call:
         arguments.append((argument, len(text), len(shown), kind))
         text += shown
 
-    shown = operand_name(instruction.target)
-    if isinstance(instruction.target, ImmediateRef):
+    shown = operand_name(instruction.target.tag)
+    if instruction.target.immediate:
         shown = f"immediate({shown})"
     add("target", shown, "positional")
     for side, acc, preset in _SIDES[name]:
@@ -136,13 +136,11 @@ def _call(instruction: Any) -> Call:
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the Out variant that the export writes."""
     name = type(instruction).__name__
-    target = instruction.target
-    immediate = isinstance(target, ImmediateRef)
-    if immediate:
-        # The export refuses an immediate target outside Y itself. laddercodec gets the
-        # address and the flag, and refuses it in its own words.
-        target = target.value
-    operand = render_operand(exporter, target, "target", instruction)
+    # The export refuses an immediate target outside Y itself. laddercodec gets the
+    # address and the flag, and refuses it in its own words.
+    target: TagArg = instruction.target
+    immediate = target.immediate
+    operand = render_operand(exporter, target.tag, "target", instruction)
     kind = _KINDS[name]
     if name not in _SIDES:
         return refusals_of(lambda: OutVariant(kind, operand, immediate=immediate))

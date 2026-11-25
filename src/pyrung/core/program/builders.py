@@ -26,6 +26,7 @@ from pyrung.core.instruction import (
     TimeEventDrumInstruction,
     ToggleInstruction,
 )
+from pyrung.core.instruction.operands import CoilBitOperand
 from pyrung.core.instruction.utils import validate_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
@@ -1173,21 +1174,9 @@ def off_delay(
     )
 
 
-def _out_target(target: Tag | ImmediateRef, func_name: str, *, immediate: bool) -> Tag:
-    """Return the single Bool tag an Out coil variant writes.
-
-    Only toggle takes an ``immediate(...)`` target: CLICK's Debounce, Flasher
-    and Timed coils have no Immediate option.
-    """
-    if isinstance(target, ImmediateRef) and not immediate:
-        raise TypeError(
-            f"{func_name}() takes no immediate(...) target; only out() and toggle() "
-            "coils write immediately."
-        )
-    tag = target.value if isinstance(target, ImmediateRef) else target
-    if not isinstance(tag, Tag) or tag.type is not TagType.BOOL:
-        raise TypeError(f"{func_name}() writes one Bool tag, got {target!r}.")
-    return tag
+# CLICK's Debounce, Flasher and Timed coils have no Immediate option.  Toggle has one.
+_TOGGLE_TARGET = CoilBitOperand()
+_PLAIN_TARGET = CoilBitOperand(immediate=False)
 
 
 def _out_phase(
@@ -1228,9 +1217,9 @@ def toggle(target: Tag | ImmediateRef) -> Tag | ImmediateRef:
             toggle(Light)
             toggle(Y[1].immediate)
     """
-    _out_target(target, "toggle", immediate=True)
+    parsed = _TOGGLE_TARGET.parse("toggle()", "target", target)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("toggle")
-    instruction = ToggleInstruction(target, enable_condition)
+    instruction = ToggleInstruction(parsed, enable_condition)
     instruction.source_file, instruction.source_line = source_file, source_line
     _require_rung_context("toggle")._rung.add_instruction(instruction)
     return target
@@ -1259,7 +1248,7 @@ def debounce(
         off: ``(timer, preset)`` for the off side.
         unit: Time unit for both presets (default ``"ms"``).
     """
-    _out_target(target, "debounce", immediate=False)
+    parsed = _PLAIN_TARGET.parse("debounce()", "target", target)
     on_phase = _out_phase(on, "debounce", "on")
     off_phase = _out_phase(off, "debounce", "off")
     if on_phase is None or off_phase is None:
@@ -1268,7 +1257,7 @@ def debounce(
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("debounce")
     instruction = DebounceInstruction(
-        target,
+        parsed,
         on_done=on_phase[0],
         on_acc=on_phase[1],
         on_preset=on_phase[2],
@@ -1306,7 +1295,7 @@ def flasher(
         off: ``(timer, preset)`` for the off phase.
         unit: Time unit for both presets (default ``"ms"``).
     """
-    _out_target(target, "flasher", immediate=False)
+    parsed = _PLAIN_TARGET.parse("flasher()", "target", target)
     on_phase = _out_phase(on, "flasher", "on")
     off_phase = _out_phase(off, "flasher", "off")
     if on_phase is None or off_phase is None:
@@ -1315,7 +1304,7 @@ def flasher(
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("flasher")
     instruction = FlasherInstruction(
-        target,
+        parsed,
         on_done=on_phase[0],
         on_acc=on_phase[1],
         on_preset=on_phase[2],
@@ -1357,13 +1346,13 @@ def timed(
         unit: Time unit (default ``"ms"``).
         maintained: Keep the target on while the rung stays true after the on time.
     """
-    _out_target(target, "timed", immediate=False)
+    parsed = _PLAIN_TARGET.parse("timed()", "target", target)
     phase = _out_phase((timer, preset), "timed", "on", preset_label="timed() preset")
     assert phase is not None
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("timed")
     instruction = TimedInstruction(
-        target,
+        parsed,
         timer_done=phase[0],
         timer_acc=phase[1],
         on_preset=phase[2],

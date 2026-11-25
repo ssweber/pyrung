@@ -63,8 +63,7 @@ def _compile_toggle_instruction(
     _use_memory(ctx)
     sp = " " * indent
     key = f"_toggle:{ctx.state_key_for(instr)}"
-    target = instr.target.value if not isinstance(instr.target, Tag) else instr.target
-    assert isinstance(target, Tag)
+    target = instr.target.tag
     lines = [
         f"{sp}_en = bool({enabled_expr})",
         f"{sp}if {emit_rise('_en', key)}:",
@@ -92,7 +91,7 @@ def _compile_debounce_instruction(
     rung_key = f"_debounce_rung:{ctx.state_key_for(instr)}"
     on_write = _compile_lvalue(instr.on_acc, ctx)
     off_write = _compile_lvalue(instr.off_acc, ctx)
-    target_write = _compile_lvalue(instr.target, ctx)
+    target_write = _compile_lvalue(instr.target.tag, ctx)
     return [
         f"{sp}_en = bool({enabled_expr})",
         f"{sp}_was = {emit_prev(rung_key)}",
@@ -112,7 +111,7 @@ def _compile_debounce_instruction(
         f"{sp}else:",
         f"{sp4}{emit_frac_keep(instr.on_acc)}",
         # With the coil off, the off TD holds its value, including one the ladder wrote.
-        f"{sp4}if not {emit_truth(_compile_value(instr.target, ctx))}:",
+        f"{sp4}if not {emit_truth(_compile_value(instr.target.tag, ctx))}:",
         f"{sp8}{emit_frac_keep(instr.off_acc)}",
         f"{sp4}else:",
         # The off side compares what it had reached before this scan, and not on the fall.
@@ -178,7 +177,7 @@ def _compile_flasher_instruction(
     phase_key = f"_flash_phase:{ctx.state_key_for(instr)}"
     on_write = _compile_lvalue(instr.on_acc, ctx)
     off_write = _compile_lvalue(instr.off_acc, ctx)
-    target_write = _compile_lvalue(instr.target, ctx)
+    target_write = _compile_lvalue(instr.target.tag, ctx)
     no_preset = " or ".join(
         emit_cmp(p, "<=", "0", paren=False) for p in ("_on_preset", "_off_preset")
     )
@@ -234,7 +233,7 @@ def _compile_timed_instruction(
     sp = " " * indent
     sp4 = " " * (indent + 4)
     rung_key = f"_timed_rung:{ctx.state_key_for(instr)}"
-    target_write = _compile_lvalue(instr.target, ctx)
+    target_write = _compile_lvalue(instr.target.tag, ctx)
     acc_write = _compile_lvalue(instr.timer_acc, ctx)
     timing = emit_cmp("_acc", "<", "_t_preset", paren=False)
     timing_target = f"({timing} or _en)" if instr.maintained else f"({timing})"
@@ -244,7 +243,7 @@ def _compile_timed_instruction(
         f"{sp}_rose = {emit_rise('_en', rung_key)}",
         f"{sp}{emit_mem_set(rung_key, '_en')}",
         f"{sp}_t_preset = int({_compile_value(instr.on_preset, ctx)})",
-        f"{sp}_timing = {emit_truth(_compile_value(instr.target, ctx))} and (",
+        f"{sp}_timing = {emit_truth(_compile_value(instr.target.tag, ctx))} and (",
         f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc, ctx)})', '<', '_t_preset', paren=False)}",
         f"{sp})",
         f"{sp}if _rose and not _timing:",
