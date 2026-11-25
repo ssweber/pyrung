@@ -317,11 +317,19 @@ RULE_CASES: list[tuple[type[Instruction], dict[str, Callable[[], Any]]]] = [
 
 
 def _declaring_classes() -> list[type[Instruction]]:
+    """Return pyrung's instruction classes that declare operands or operand rules.
+
+    A test file may define a subclass of its own.  The subclass stays in
+    ``__subclasses__()`` after that file runs, so the walk skips any class from outside
+    pyrung.
+    """
     found: set[type[Instruction]] = set()
     pending = list(Instruction.__subclasses__())
     while pending:
         cls = pending.pop()
         pending.extend(cls.__subclasses__())
+        if not cls.__module__.startswith("pyrung."):
+            continue
         if cls._operands or cls._operand_rules:
             found.add(cls)
     return sorted(found, key=lambda cls: cls.__name__)
