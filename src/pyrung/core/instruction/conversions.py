@@ -157,7 +157,7 @@ def copy_binary_store(source: Any, target_type: Any) -> str | None:
 
     CLICK's Copy dialog offers Copy Binary into a number only from the other 32-bit type.
     Return :data:`BINARY_BITS` from a Real register into a Dint, or from a Dint register
-    into a Real.  Return :data:`BINARY_VALUE` from a constant with a fraction into a Dint,
+    into a Real.  Return :data:`BINARY_VALUE` from a Real constant, such as 1.5, into a Dint,
     or from an integer constant outside -32768..32767 into a Real.  A CLICK was read storing
     1 for 1.5 into a DD, and 40000.0 for 40000 into a DF, with no flag.  Return ``None`` for
     any other pair, which ``copy()`` refuses.

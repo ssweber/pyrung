@@ -21,13 +21,13 @@
   Leave `convert` out, or use a converter that matches the source and target.
 - `fill()` of a number register or an expression into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the number).
   Copy the value into one TXT with `copy()`, or fill a constant.
-- `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). A CLICK writes the real's text past the end of the range.
+- `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). CLICK accepts it.
   Copy the constant into one TXT with `copy()`.
 
 ### Fixes
 
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
-- `copy(..., convert=to_binary)` between a `DF` and a `DD` now moves the 32 bits, and from a constant it stores the number, as a CLICK does (it wrote nothing and set the out-of-range flag).
+- `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 
 ## v0.18.1 (2026-11-25)
 

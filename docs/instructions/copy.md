@@ -58,11 +58,11 @@ An integer constant filled into a TXT range writes its text, the same as a plain
 
 `fill()` refuses a number register or an expression as the value for a TXT range, as CLICK's editor does. Copy the value into one TXT with `copy()` instead.
 
-`fill()` also refuses a Real constant, such as `fill(1.5, Txt.select(1, 3))`. A CLICK accepts it, but it writes the real's text ("1.5000000") at each address of the range in turn. Each write overlaps the one before, and the last one runs past the end of the range.
+`fill()` also refuses a Real constant, such as `fill(1.5, Txt.select(1, 3))`. A CLICK accepts it, but it writes the real's text ("1.5000000") at each address of the range in turn. Each write overlaps the one before, and the last one runs past the end of the range. Copy the constant into one TXT with `copy()` instead.
 
 ## Type conversion (copy converters)
 
-Copy converters handle conversions between numeric and text registers. They offer the same options as the CLICK PLC Copy Single dialog. Pass them as the `convert` argument to `copy()`.
+Copy converters convert between numeric and text registers, and `to_binary` also moves bits between a `Real` and a `Dint`. They offer the same options as the CLICK PLC Copy Single dialog. Pass them as the `convert` argument to `copy()`.
 
 ### Text → Numeric
 
@@ -113,7 +113,7 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_value)
 blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 ```
 
-`fill()` does not support `convert=`. An integer constant filled into a TXT range is written as text, the same as a plain `copy()`.
+`fill()` does not support `convert=`.
 
 ### Converter reference
 
@@ -122,7 +122,7 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 | `to_value` | Text → Numeric | Copy Character Value (Option 4b) | yes | yes | no |
 | `to_ascii` | Text → Numeric | Copy ASCII Code Value (Option 4b) | yes | yes | no |
 | `to_text()` | Numeric → Text | Copy Option 4a / 4c | yes | no | no |
-| `to_binary` | Numeric → Text | Copy Binary (Option 4a) | yes | no | no |
+| `to_binary` | Numeric → Text, Real ↔ Dint | Copy Binary (Option 4a) | yes | no | no |
 
 `copy()` refuses a converter that cannot store into its target, such as `to_value` into a `Char`. `to_value` and `to_ascii` write an `Int`, `Dint` or `Word`. `to_text()` writes a `Char`. `to_binary` writes a `Char`, a `Dint` or a `Real`.
 
@@ -135,8 +135,10 @@ copy(40000, DF[1], convert=to_binary)   # 40000.0
 
 Between a `Real` and a `Dint` register, `to_binary` moves the 32 bits unchanged. From a constant, it stores what a plain `copy()` stores. CLICK's Copy dialog offers Copy Binary into a number only from these sources, and `copy()` refuses any other:
 
-- into a `Dint`: a `Real` register, or a constant with a fraction;
-- into a `Real`: a `Dint` register, or an integer constant outside -32768..32767.
+- into a `Dint`: a `Real` register, or a Real constant, such as 1.5
+- into a `Real`: a `Dint` register, or an integer constant outside -32768..32767
+
+On the P1AM-200, a NaN copied from a `Real` into a `Dint` stores -1 (0xFFFFFFFF). CircuitPython's floats can't hold a NaN's bits.
 
 `copy()` also refuses a source that CLICK's Copy dialog offers the converter no option for:
 

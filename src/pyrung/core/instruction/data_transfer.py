@@ -242,7 +242,7 @@ def _refuse_converter_into(
         raise ValueError(
             f"copy() got convert=to_binary with {describe(authored_source)} as the source and "
             f"{describe(authored)} as the target. to_binary stores into a Dint only from a "
-            "Real tag or a constant with a fraction, and into a Real only from a Dint tag or "
+            "Real tag or a Real constant, such as 1.5, and into a Real only from a Dint tag or "
             "an integer constant outside -32768..32767. Leave convert out."
         )
     shown = "to_text()" if convert.mode == "text" else f"to_{convert.mode}"

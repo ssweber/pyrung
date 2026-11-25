@@ -13,6 +13,7 @@ These are the ways a Real gets one:
   operands gives NaN or Inf through ``0 ** -1``, a power, or a division by a Real near 0.
 - A copy, fill or block copy of a Real that may hold one.
 - A ``pack_words()`` or ``pack_bits()`` into a Real stores raw bits, and some are NaN.
+  So does a ``copy()`` from a Dint with ``convert=to_binary``.
 - A ``pack_text()`` of a number past the Real range stores +/-Inf.
 - The outside writes a tag ``tag_written_from_outside`` names, and a ``receive()`` payload
   holds what a peer sends.  Both can be the words of a NaN.

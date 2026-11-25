@@ -145,7 +145,7 @@ def test_to_binary_into_a_number_from_a_source_that_clicks_dialog_refuses(
         _build(build_source(), build_target(), to_binary)
     assert str(refused.value) == (
         f"copy() got convert=to_binary with {shown} as the source and {named} as the target. "
-        "to_binary stores into a Dint only from a Real tag or a constant with a fraction, and "
+        "to_binary stores into a Dint only from a Real tag or a Real constant, such as 1.5, and "
         "into a Real only from a Dint tag or an integer constant outside -32768..32767. "
         "Leave convert out."
     )

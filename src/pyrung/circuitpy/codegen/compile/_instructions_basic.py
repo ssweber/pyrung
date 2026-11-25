@@ -79,6 +79,7 @@ from ._primitives import (
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _copy_source_past_end_test,
+    _number_text_lines,
     _pack_store_expr,
     _past_end_keeps,
     _pointer_check_lines,
@@ -608,20 +609,11 @@ def _compile_copy_converter_instruction(
             ]
         )
     elif mode == "text":
-        ctx.mark_helper("_render_text_from_numeric")
-        ctx.mark_helper("_termination_char")
-        source_type = _optional_value_type_name(instr.source)
+        text_lines = _number_text_lines("_rendered", source_expr, instr.source, converter, ctx)
         enabled_body.extend(
             [
                 "try:",
-                "    _rendered = _render_text_from_numeric(",
-                f"        {source_expr},",
-                f"        source_type={source_type!r},",
-                f"        suppress_zero={converter.suppress_zero!r},",
-                "        pad=None,",
-                f"        exponential={converter.exponential!r},",
-                "    )",
-                f"    _rendered += _termination_char({converter.termination_code!r})",
+                *_indent_body(text_lines, 4),
                 f"    {values_var} = [{_store_coerce_expr('_ch', target_type, ctx)} for _ch in _rendered]",
                 *_indent_body(write_lines, 4),
                 "except IndexError:",

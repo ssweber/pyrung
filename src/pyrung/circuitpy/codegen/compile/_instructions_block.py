@@ -64,6 +64,7 @@ from ._primitives import (
     _compile_set_out_of_range_fault_body,
     _compile_value,
     _copy_clamp_condition,
+    _number_text_lines,
     _range_item_read_expr,
     _range_item_write_expr,
     _refuse,
@@ -211,20 +212,14 @@ def _compile_fill_instruction(
     converter = instr.convert
     if converter is not None:
         # A number into a TXT range writes its text, as the core's FillInstruction does.
-        ctx.mark_helper("_render_text_from_numeric")
-        ctx.mark_helper("_termination_char")
         ctx.mark_helper("_as_single_ascii_char")
+        text_lines = _number_text_lines("_fill_text", "_fill_value", value, converter, ctx)
         enabled_body = [
             *dst_setup,
             f"_fill_value = {value_expr}",
             "try:",
-            "    _fill_char = _as_single_ascii_char(_render_text_from_numeric(",
-            "        _fill_value,",
-            f"        source_type={_optional_value_type_name(value)!r},",
-            f"        suppress_zero={converter.suppress_zero!r},",
-            "        pad=None,",
-            f"        exponential={converter.exponential!r},",
-            f"    ) + _termination_char({converter.termination_code!r}))",
+            *_indent_body(text_lines, 4),
+            "    _fill_char = _as_single_ascii_char(_fill_text)",
             "except (TypeError, ValueError, OverflowError):",
             *_indent_body(fault_body, 4),
             "else:",
