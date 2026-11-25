@@ -143,7 +143,7 @@ with rung():
     undecoded("unknown instruction (40 bytes)", rung=4, row=0, column=31, stop="end")
 ```
 
-`rung`, `row` and `column` count from 0, as laddercodec counts them. The comment counts from 1, as CLICK shows them, so `rung=4` is CLICK rung 5.
+`rung`, `row` and `column` count from 0, as laddercodec counts them. CLICK counts the comment's numbers from 1, so the comment says rung 5 for `rung=4`.
 
 When laddercodec stops reading partway through a file, one marker stands for that rung and every rung after it (`to_the_end=True`).
 

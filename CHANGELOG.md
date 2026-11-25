@@ -11,22 +11,28 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
-## Unreleased
+## v0.18.1 (2026-11-25)
+
+Upgrade if you import CLICK projects, or if you link tags in the debugger console. `ladder_to_pyrung()` no longer fails on a rung that laddercodec cannot decode. A client that reads the refusal text of the console's `link` command must read the new text. Read Behaviour changes first.
 
 ### What's new
 
-- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode (it raised `ValueError`). The rung becomes `undecoded()`, which ends the scan there and says why. When laddercodec stops reading a save, one `undecoded()` stands for that rung and every rung after it. The export to CLICK refuses it. If that rung held a `for()`, its `next()` imports too.
+- `ladder_to_pyrung()` now imports a rung that laddercodec could not decode (it raised `ValueError`). The rung becomes `undecoded()`, which ends the scan there and says why.
+  - When laddercodec stops reading a save, one `undecoded()` stands for that rung and every rung after it. If that rung held a `for()`, its `next()` imports too.
+  - The debugger console names each marker when you launch or reload, and `mapping.validate()` reports it as `undecoded-rung`.
+  - The export to CLICK and the CircuitPython code refuse an `undecoded()`.
 - A generated project's `AGENTS.pyrung.md` now tells an agent to start tests from a PLC data file in `tests/data/`, so setpoints are not left at 0.
+
+### Behaviour changes
+
+- Linking an address that no rung uses now says so. The refusal reads `cannot link Y001: no rung uses Y001, so the program has no tag for it` (it read `cannot link Y001: unknown tag: Y001`).
+  If a client matches the old text, match the new text too.
 
 ### Fixes
 
-- A project opened through a junction, a symlink or a subst drive now finds its TagMap, and a reload runs the new program
-  (it kept running the old one).
-- Linking an address that no rung uses now says so. The refusal reads `cannot link Y001: no rung uses Y001, so the
-  program has no tag for it` (it read `cannot link Y001: unknown tag: Y001`). A client that matches the old text must
-  match the new text too.
-- The debugger now reports STOP after you stop a running program (its last state event said `run`). After a step
-  sent while the program runs, the last state event is the step's.
+- A project opened through a junction, a symlink or a subst drive now finds its TagMap, and a reload runs the new program (it kept running the old one).
+- The debugger now reports STOP after you stop a running program (its last state event said `run`). After a step sent while the program runs, the last state event is the step's.
+- `TagMap.from_nickname_file()` no longer asks you to repair a blank SD134 or SD135 nickname (it asked for SD132 to SD135). SD132 and SD133 still need the repair when they hold the old names.
 
 ## v0.18.0 (2026-11-20)
 
