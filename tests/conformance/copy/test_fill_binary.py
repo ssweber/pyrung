@@ -21,8 +21,11 @@ reads SC43, so no later instruction can clear the flag first.
   with Copy Binary.  Result1 classes DD453: 1 for 1, 2 for 2, 3 for 1069547520 (the bits of
   1.5) and 4 for 305419896.  Result2 classes DF453: 1 for 40000.0, 2 for 0.0 and 3 for -7.25.
   The bits of 40000 read as a Real are about 5.6E-41, which is none of these (0).  A CLICK
-  stores what a plain Copy stores, so both read 1.  Result3 holds SC43 as above, and a CLICK
-  reads 0.
+  stores what a plain Copy stores, so both read 1.  The case then copies the constant 2.0
+  into DD454 with Copy Binary.  Result4 classes DD454: 1 for 2, 2 for 1073741824 (the bits
+  of 2.0), 3 for 0 and 4 for 305419896.  Reading b9 (section B) saw a CLICK store 2, as a
+  plain Copy of 2.0 does, so it reads 1.  Result3 holds SC43 after each of the three Copy
+  Binary as bits 1 to 3, and a CLICK reads 0.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -86,20 +89,27 @@ def prove_copy_binary_constants(slot: Any) -> None:
     with rung(*once(slot)):
         copy(DD_BEFORE, dd[453])
         copy(DF_BEFORE, df[453])
+        copy(DD_BEFORE, dd[454])
     with rung(*once(slot)):
         copy(1.5, dd[453], convert=to_binary)
     flag_bit(slot, SC43, slot.Result3, 1)
     with rung(*once(slot)):
         copy(40000, df[453], convert=to_binary)
     flag_bit(slot, SC43, slot.Result3, 2)
+    # Reading b9 (section B): a CLICK stored 2 for 2.0, with no flag.
+    with rung(*once(slot)):
+        copy(2.0, dd[454], convert=to_binary)
+    flag_bit(slot, SC43, slot.Result3, 3)
     class_of(slot, dd[453], (1, 2, 1069547520, DD_BEFORE), slot.Result1)
     class_of(slot, df[453], (40000.0, 0.0, DF_BEFORE), slot.Result2)
+    class_of(slot, dd[454], (2, 1073741824, 0, DD_BEFORE), slot.Result4)
     finish(slot)
 
 
 def init_copy_binary_constants(slot: Any) -> None:
     copy(0, dd[453])
     copy(0.0, df[453])
+    copy(0, dd[454])
 
 
 group = Group(
@@ -120,11 +130,12 @@ group = Group(
             expect={"Result1": 1, "Result2": 1, "Result3": 0},
         ),
         case(
-            "A Copy Binary of the constant 1.5 into DD453 stores 1 (Result1 = 1), and of 40000 "
-            "into DF453 stores 40000.0 (Result2 = 1), with no SC43 (Result3 = 0)",
+            "A Copy Binary of the constant 1.5 into DD453 stores 1 (Result1 = 1), of 40000 "
+            "into DF453 stores 40000.0 (Result2 = 1), and of 2.0 into DD454 stores 2 "
+            "(Result4 = 1), with no SC43 (Result3 = 0)",
             ladder=prove_copy_binary_constants,
             init=init_copy_binary_constants,
-            expect={"Result1": 1, "Result2": 1, "Result3": 0},
+            expect={"Result1": 1, "Result2": 1, "Result4": 1, "Result3": 0},
         ),
     ],
 )

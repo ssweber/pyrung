@@ -534,7 +534,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     },
     "td_count_on": {"T": range(321, 324)},
     # The follow5_reads part.
-    "fill_binary": {"TXT": range(451, 455), "DD": range(451, 454), "DF": range(451, 454)},
+    "fill_binary": {"TXT": range(451, 455), "DD": range(451, 455), "DF": range(451, 454)},
     # DS10 is a spare header register no group writes, for a pointer with choices of its own.
     # DS4500 is the last DS, for a Modbus write that runs past it.
     "modbus_raw": {

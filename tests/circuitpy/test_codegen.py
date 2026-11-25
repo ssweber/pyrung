@@ -1840,12 +1840,21 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize(
         "value,dest_tag,stored",
-        [(1.5, Dint, 1), (-1.5, Dint, -1), (40000, Real, 40000.0), (-40000, Real, -40000.0)],
+        [
+            (1.5, Dint, 1),
+            (-1.5, Dint, -1),
+            (2.0, Dint, 2),
+            (40000, Real, 40000.0),
+            (-40000, Real, -40000.0),
+        ],
     )
     def test_to_binary_of_a_constant_into_a_number_stores_its_value_on_every_backend(
         self, monkeypatch, value, dest_tag, stored
     ):
-        """A CLICK was read storing 1 for 1.5 into a DD, and 40000.0 for 40000 into a DF."""
+        """A CLICK was read storing 1 for 1.5 into a DD, and 40000.0 for 40000 into a DF.
+
+        Reading b9 saw a CLICK store 2 for 2.0 into a DD, with no flag.
+        """
         dest = dest_tag("Dest", default=9)
         with Program(strict=False) as prog:
             with rung():
