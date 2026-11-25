@@ -32,7 +32,6 @@ Upgrade if you import CLICK projects, or if you link tags in the debugger consol
 
 - A project opened through a junction, a symlink or a subst drive now finds its TagMap, and a reload runs the new program (it kept running the old one).
 - The debugger now reports STOP after you stop a running program (its last state event said `run`). After a step sent while the program runs, the last state event is the step's.
-- `TagMap.from_nickname_file()` no longer asks you to repair a blank SD134 or SD135 nickname (it asked for SD132 to SD135). SD132 and SD133 still need the repair when they hold the old names.
 
 ## v0.18.0 (2026-11-20)
 
