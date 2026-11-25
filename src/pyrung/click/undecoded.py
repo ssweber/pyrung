@@ -20,8 +20,8 @@ CLICK cannot take the marker, so the export to CLICK and the CircuitPython code 
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from collections.abc import Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from laddercodec import Undecoded, UndecodedStop
 
@@ -40,8 +40,9 @@ class UndecodedInstruction(Instruction):
     """A marker that stops its scope, in place of a rung that laddercodec could not decode.
 
     ``marker`` is laddercodec's :class:`~laddercodec.Undecoded`. It says where decoding failed
-    and why. The marker writes nothing. It is the last rung of its scope, so a no-op
-    ``execute`` is enough to stop the scope.
+    and why. ``lone_next`` lists the rung numbers, counted from 0, of the ``next()`` rungs after
+    the marker that have no ``for()`` above them. The marker writes nothing. It is the last
+    rung of its scope, so a no-op ``execute`` is enough to stop the scope.
     """
 
     INERT_WHEN_DISABLED = True
@@ -49,10 +50,11 @@ class UndecodedInstruction(Instruction):
     _reads = ()
     _writes = ()
     _conditions = ()
-    _structural_fields = ("error", "rung", "row", "column", "stop")
+    _structural_fields = ("error", "rung", "row", "column", "stop", "lone_next")
 
-    def __init__(self, marker: Undecoded) -> None:
+    def __init__(self, marker: Undecoded, lone_next: Sequence[int] = ()) -> None:
         self.marker = marker
+        self.lone_next = tuple(lone_next)
 
     @property
     def error(self) -> str:
@@ -92,16 +94,35 @@ class UndecodedInstruction(Instruction):
         The first names the rung as CLICK numbers it, from 1. The second names *at*, the
         marker's place in pyrung, when it is given. The two numbers can differ, because the
         importer splits a CLICK rung that holds several wires into several pyrung rungs.
+        When ``lone_next`` is set, two more sentences name the ``next()`` rungs and say that
+        a rung that laddercodec could not decode may have held their ``for()``.
         """
         error = self.error.rstrip()
         if not error.endswith((".", "!", "?")):
             error += "."
         scope = "the main program" if self.stop == "end" else "its subroutine"
         where = f" at {at} in pyrung" if at else ""
-        return (
+        text = (
             f"laddercodec could not decode CLICK rung {self.rung + 1} of {scope}: {error} "
             f"undecoded() stands in for that rung{where}."
         )
+        if self.lone_next:
+            numbers = [str(index + 1) for index in self.lone_next]
+            listed = (
+                numbers[0] if len(numbers) == 1 else f"{', '.join(numbers[:-1])} and {numbers[-1]}"
+            )
+            if len(numbers) == 1:
+                text += (
+                    f" CLICK rung {listed} has a next() with no for() above it."
+                    f" CLICK rung {self.rung + 1} may have held that for()."
+                )
+            else:
+                text += (
+                    f" CLICK rungs {listed} each have a next() with no for() above it."
+                    f" Each for() may have been in CLICK rung {self.rung + 1} or in a later rung"
+                    " that laddercodec could not decode."
+                )
+        return text
 
     def effect(self) -> str:
         """Return what the marker does to the scan, as a sentence."""
@@ -121,13 +142,16 @@ def undecoded(
     row: int | None = None,
     column: int | None = None,
     stop: UndecodedStop,
+    lone_next: Sequence[int] = (),
 ) -> None:
     """Stop the scope here, in place of a CLICK rung that laddercodec could not decode.
 
     ``ladder_to_pyrung()`` writes this call for laddercodec's marker rung. Each argument is
     a field of :class:`laddercodec.Undecoded`. *error* says why decoding failed. *rung*,
     *row* and *column* say where, each counted from 0. Pass ``stop="end"`` in the main
-    program and ``stop="return"`` in a subroutine.
+    program and ``stop="return"`` in a subroutine. *lone_next* lists the CLICK rungs, from 0,
+    of ``next()`` rungs after the marker that have no ``for()`` above them. The importer sets
+    it, and the notice names those rungs.
 
     The call must be the only thing in a rung with no conditions, outside a forloop. The
     rungs after it in the same scope are left out of the program, because no scan reaches
@@ -166,10 +190,29 @@ def undecoded(
         raise RuntimeError(
             f"undecoded(stop={marker.stop!r}) cannot be in {where}. Pass stop={expected!r} there."
         )
+    numbers = _rung_numbers(lone_next)
+    if numbers is None:
+        raise ValueError(
+            "undecoded() needs lone_next as a list of rung numbers counted from 0, such as "
+            f"lone_next=[3] for a next() at CLICK rung 4. It got {lone_next!r}."
+        )
     source_file, source_line = _capture_source(depth=2)
-    instruction = UndecodedInstruction(marker)
+    instruction = UndecodedInstruction(marker, numbers)
     instruction.source_file, instruction.source_line = source_file, source_line
     logic.add_instruction(instruction)
+
+
+def _rung_numbers(value: Any) -> tuple[int, ...] | None:
+    """Return *value* as a tuple of non-negative ints, or None if it is not one."""
+    if isinstance(value, (str, bytes, Mapping)):
+        return None
+    try:
+        numbers = tuple(value)
+    except TypeError:
+        return None
+    if all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in numbers):
+        return numbers
+    return None
 
 
 def undecoded_rungs(program: Program) -> Iterator[tuple[str | None, int, UndecodedInstruction]]:
