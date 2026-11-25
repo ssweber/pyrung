@@ -17,6 +17,8 @@
 
 - `copy()` now raises `ValueError` when you build a program with a converter that cannot store into its target, such as `to_value` into a TXT (it built).
   Leave `convert` out, or copy into a tag type that the converter writes.
+- `copy(..., convert=to_binary)` into a `Dint` or a `Real` now raises `ValueError` when you build it from a source that CLICK's Copy dialog offers no Copy Binary for, such as 55 or an `Int` (it built, then wrote nothing and set the out-of-range flag).
+  Leave `convert` out. The Copy page lists the sources that build.
 - `fill()` of a number register into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the number).
   Copy the register into one TXT with `copy()`, or fill a constant.
 - `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). A CLICK writes the real's text past the end of the range.
@@ -25,6 +27,7 @@
 ### Fixes
 
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
+- `copy(..., convert=to_binary)` between a `DF` and a `DD` now moves the 32 bits, and from a constant it stores the number, as a CLICK does (it wrote nothing and set the out-of-range flag).
 
 ## v0.18.1 (2026-11-25)
 

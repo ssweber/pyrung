@@ -301,3 +301,12 @@ slots = 2
 
 [groups.td_count_on.cases]
 ton_counts_on_from_written_td = 1
+
+[groups.fill_binary]
+base = 1761 # Conf_FillBinary: DS1761..DS1800
+slots = 3
+
+[groups.fill_binary.cases]
+fill_number_into_txt = 1
+copy_binary_df_dd = 2
+copy_binary_constants = 3

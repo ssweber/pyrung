@@ -141,6 +141,52 @@ def _float_to_int_bits(f: float) -> int:
     return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
+#: The pairs of source and target type that a Copy Binary moves the 32 bits between.  A
+#: CLICK was read moving them unchanged from a DF into a DD and back, with no flag.
+_BINARY_BIT_MOVES = frozenset({(TagType.REAL, TagType.DINT), (TagType.DINT, TagType.REAL)})
+
+#: :func:`copy_binary_store` for a Copy Binary that moves the 32 bits unchanged.
+BINARY_BITS = "bits"
+
+#: :func:`copy_binary_store` for a Copy Binary that stores what a plain Copy stores.
+BINARY_VALUE = "value"
+
+
+def copy_binary_store(source: Any, target_type: Any) -> str | None:
+    """Return how a Copy Binary from the parsed *source* stores into a *target_type* number.
+
+    CLICK's Copy dialog offers Copy Binary into a number only from the other 32-bit type.
+    Return :data:`BINARY_BITS` from a Real register into a Dint, or from a Dint register
+    into a Real.  Return :data:`BINARY_VALUE` from a constant with a fraction into a Dint,
+    or from an integer constant outside -32768..32767 into a Real.  A CLICK was read storing
+    1 for 1.5 into a DD, and 40000.0 for 40000 into a DF, with no flag.  Return ``None`` for
+    any other pair, which ``copy()`` refuses.
+    """
+    if (copy_source_kind(source), target_type) in _BINARY_BIT_MOVES:
+        return BINARY_BITS
+    if not isinstance(source, ConstArg):
+        return None
+    value = source.value
+    if target_type is TagType.DINT and isinstance(value, float):
+        return BINARY_VALUE
+    if (
+        target_type is TagType.REAL
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and not _INT_MIN <= value <= _INT_MAX
+    ):
+        return BINARY_VALUE
+    return None
+
+
+def _binary_bits_into(value: Any, target_type: TagType) -> int | float:
+    """Return what a Copy Binary stores in *target_type* from the other 32-bit type's *value*."""
+    if target_type is TagType.DINT:
+        bits = _float_to_int_bits(value)
+        return bits - 0x100000000 if bits > _DINT_MAX else bits
+    return _int_to_float_bits(int(value))
+
+
 def _ascii_char_from_code(code: int) -> str:
     if code < 0 or code > 255:
         raise ValueError("character code out of range")

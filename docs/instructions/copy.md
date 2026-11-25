@@ -124,7 +124,19 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 | `to_text()` | Numeric → Text | Copy Option 4a / 4c | yes | no | no |
 | `to_binary` | Numeric → Text | Copy Binary (Option 4a) | yes | no | no |
 
-`copy()` refuses a converter that cannot store into its target, such as `to_value` into a `Char`. `to_value` and `to_ascii` write an `Int`, `Dint` or `Word`. `to_text()` writes a `Char`.
+`copy()` refuses a converter that cannot store into its target, such as `to_value` into a `Char`. `to_value` and `to_ascii` write an `Int`, `Dint` or `Word`. `to_text()` writes a `Char`. `to_binary` writes a `Char`, a `Dint` or a `Real`.
+
+```python
+copy(DF[1], DD[1], convert=to_binary)   # 2.5 → 1075838976 (0x40200000)
+copy(DD[1], DF[1], convert=to_binary)   # 1075838976 → 2.5
+copy(1.5, DD[1], convert=to_binary)     # 1
+copy(40000, DF[1], convert=to_binary)   # 40000.0
+```
+
+Between a `Real` and a `Dint` register, `to_binary` moves the 32 bits unchanged. From a constant, it stores what a plain `copy()` stores. CLICK's Copy dialog offers Copy Binary into a number only from these sources, and `copy()` refuses any other:
+
+- into a `Dint`: a `Real` register, or a constant with a fraction;
+- into a `Real`: a `Dint` register, or an integer constant outside -32768..32767.
 
 `to_value`, `to_ascii`, and `to_binary` accept no arguments. Pass them bare, with no parentheses. `to_binary()` also works. `to_text()` accepts keyword arguments for formatting options.
 

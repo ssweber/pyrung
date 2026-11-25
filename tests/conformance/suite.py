@@ -70,6 +70,7 @@ from tests.conformance.conditions import (
 from tests.conformance.copy import (
     test_block,
     test_copy_more,
+    test_fill_binary,
     test_pack_point,
     test_past_bank_write,
     test_past_clean,
@@ -358,6 +359,8 @@ APART_GROUPS = [
     # Stores and a TD write that a CLICK was read making in programs of their own.
     test_plc_stores.group,
     test_td_count_on.group,
+    # Stores that a CLICK was read making in programs of their own.
+    test_fill_binary.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -409,6 +412,9 @@ APART_PARTS: dict[str, ApartPart] = {
     # Stores of a fraction, NaN, Inf and text past the Real range, and a TON's TD written
     # mid-count.  A CLICK was read making each in a program of its own.
     "follow4_reads": ApartPart(("plc_stores", "td_count_on")),
+    # A Fill of a number into TXT registers, and Copy Binary into a DD or a DF.  A CLICK was
+    # read making each in a program of its own.
+    "follow5_reads": ApartPart(("fill_binary",)),
     # Values staged for raw Modbus reads, and the echo of raw writes. test_raw_requests uses
     # them.
     "modbus_raw": ApartPart(("modbus_raw",)),

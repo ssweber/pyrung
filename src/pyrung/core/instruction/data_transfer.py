@@ -18,14 +18,18 @@ from pyrung.core.tag import Tag, TagType
 from .base import Instruction, OneShotMixin
 from .conversions import (
     _NUMBER_TYPES,
+    BINARY_BITS,
+    BINARY_VALUE,
     LITERAL,
     _as_single_ascii_char,
     _ascii_char_from_code,
+    _binary_bits_into,
     _copy_clamps,
     _render_text_from_numeric,
     _store_copy_value_to_tag_type,
     _store_numeric_text_digits,
     _text_from_source_value,
+    copy_binary_store,
     copy_source_kind,
     copy_store_transform,
 )
@@ -203,9 +207,8 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
 
 
 # The target types that the CLICK export accepts for each converter of a single Copy.
-# The export accepts to_binary into a Dint or a Real from some sources and refuses it from
-# others, and it checks the source itself.  So the builder refuses only a target that no
-# source makes valid.
+# CLICK accepts to_binary into a Dint or a Real only from some sources, and
+# ``copy_binary_store`` names them.
 _CONVERTER_TARGETS: dict[str, tuple[TagType, ...]] = {
     "text": (TagType.CHAR,),
     "binary": (TagType.CHAR, TagType.DINT, TagType.REAL),
@@ -214,17 +217,34 @@ _CONVERTER_TARGETS: dict[str, tuple[TagType, ...]] = {
 }
 
 
-def _refuse_converter_into(convert: Any, dest: Any, authored: Any) -> None:
+def _refuse_converter_into(
+    convert: Any, dest: Any, authored: Any, source: Value, authored_source: Any
+) -> None:
     """Raise ``ValueError`` for a converter that cannot store into the type of *dest*.
 
     The CLICK export refuses such a Copy whatever its source.  Without the refusal, most
     such forms would store nothing and set the out-of-range flag.  The message names
     *authored*, the target as the user wrote it, so a TXT range is named whole.
+
+    Also raise for a ``to_binary`` into a Dint or a Real from a source that CLICK's Copy
+    dialog offers no Copy Binary for.  *source* is the parsed source, and *authored_source*
+    is the source as the user wrote it.
     """
     if not isinstance(convert, CopyConverter):
         return
     allowed = _CONVERTER_TARGETS.get(convert.mode)
     target_type = copy_source_kind(dest)
+    if (
+        convert.mode == "binary"
+        and target_type in (TagType.DINT, TagType.REAL)
+        and copy_binary_store(source, target_type) is None
+    ):
+        raise ValueError(
+            f"copy() got convert=to_binary with {describe(authored_source)} as the source and "
+            f"{describe(authored)} as the target. to_binary stores into a Dint only from a "
+            "Real tag or a constant with a fraction, and into a Real only from a Dint tag or "
+            "an integer constant outside -32768..32767. Leave convert out."
+        )
     if allowed is None or not isinstance(target_type, TagType) or target_type in allowed:
         return
     shown = "to_text()" if convert.mode == "text" else f"to_{convert.mode}"
@@ -402,7 +422,7 @@ class CopyInstruction(OneShotMixin, Instruction):
         self.source: Value = _one_value(VALUE.parse("copy()", "source", source))
         self.dest: Dest = _COPY_DEST.parse("copy()", "target", dest)
         check_rules(self._operands, self._operand_rules, "copy()", {"source": source, "dest": dest})
-        _refuse_converter_into(convert, dest, authored_dest)
+        _refuse_converter_into(convert, dest, authored_dest, self.source, source)
         self.authored_convert = convert
         self.convert = convert if convert is not None else _plain_text_converter(source, dest)
 
@@ -464,6 +484,9 @@ class CopyInstruction(OneShotMixin, Instruction):
             ctx.set_tags(updates)
             return
 
+        self._store_value(ctx, value, resolved_target)
+
+    def _store_value(self, ctx: ScanContext, value: Any, resolved_target: Tag) -> None:
         source = copy_source_kind(self.source)
         stored = _store_copy_value_to_tag_type(value, resolved_target, source)
         ctx.set_tag(resolved_target.name, stored)
@@ -481,7 +504,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             self._copy_numeric_to_text(ctx, resolved_target, converter)
             return
         if mode == "binary":
-            self._copy_binary_to_text(ctx, resolved_target, converter)
+            self._copy_binary(ctx, resolved_target, converter)
             return
         _set_fault_out_of_range(ctx)
 
@@ -561,9 +584,30 @@ class CopyInstruction(OneShotMixin, Instruction):
 
         ctx.set_tags(updates)
 
-    def _copy_binary_to_text(
+    def _copy_binary(
         self, ctx: ScanContext, resolved_target: Tag, converter: CopyConverter
     ) -> None:
+        store = copy_binary_store(self.source, resolved_target.type)
+        if store == BINARY_VALUE:
+            self._store_value(ctx, _read(self.source, ctx), resolved_target)
+            return
+        if store == BINARY_BITS:
+            try:
+                stored = _binary_bits_into(_read(self.source, ctx), resolved_target.type)
+            except IndexError:
+                _set_fault_address_error(ctx)
+                return
+            except TypeError:
+                if isinstance(self.source, PointerArg):
+                    _set_fault_address_error(ctx)
+                else:
+                    _set_fault_out_of_range(ctx)
+                return
+            except (ValueError, OverflowError):
+                _set_fault_out_of_range(ctx)
+                return
+            ctx.set_tag(resolved_target.name, stored)
+            return
         if resolved_target.type != TagType.CHAR:
             _set_fault_out_of_range(ctx)
             return

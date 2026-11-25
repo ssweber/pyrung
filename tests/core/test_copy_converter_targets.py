@@ -1,9 +1,10 @@
 """copy() refuses a converter that cannot store into the type of its target.
 
-The refused pairs are the ones that the CLICK export refuses for every source.  fill()
-refuses a number register into Char tags, which CLICK's Fill dialog was read refusing with
-OBJ-024.  fill() also refuses a Real constant into Char tags, which a CLICK was read
-writing past the end of the range.
+The refused pairs are the ones that the CLICK export refuses for every source.  copy() also
+refuses a to_binary into a Dint or a Real from a source that CLICK's Copy dialog was read
+offering no Copy Binary for.  fill() refuses a number register into Char tags, which
+CLICK's Fill dialog was read refusing with OBJ-024.  fill() also refuses a Real constant
+into Char tags, which a CLICK was read writing past the end of the range.
 """
 
 from __future__ import annotations
@@ -35,8 +36,14 @@ TARGETS: dict[str, Callable[[], Any]] = {
     "Char": lambda: txt[2],
 }
 
-# The source that each converter reads, so that an accepted pair can build.
-SOURCES = {"to_value": txt[5], "to_ascii": txt[5], "to_text()": ds[1], "to_binary": ds[1]}
+# The source that each converter reads, so that an accepted pair can build.  to_binary into
+# a Real reads a Dint, and into any other target it reads a Real.
+SOURCES = {"to_value": txt[5], "to_ascii": txt[5], "to_text()": ds[1], "to_binary": df[1]}
+
+
+def _source(converter: str, target: str) -> Any:
+    return dd[1] if (converter, target) == ("to_binary", "Real") else SOURCES[converter]
+
 
 ACCEPTED = {
     "to_value": {"Int", "Dint", "Word"},
@@ -59,7 +66,7 @@ def test_a_converter_builds_only_into_a_type_that_it_stores_into(
     converter: str, target: str
 ) -> None:
     def build() -> Program:
-        return _build(SOURCES[converter], TARGETS[target](), CONVERTERS[converter])
+        return _build(_source(converter, target), TARGETS[target](), CONVERTERS[converter])
 
     if target in ACCEPTED[converter]:
         build()
@@ -90,6 +97,76 @@ def test_a_pointer_target_is_refused_by_its_block_type() -> None:
 def test_a_txt_range_target_is_named_as_written() -> None:
     with pytest.raises(ValueError, match=r"with the range TXT2\.\.TXT3 of Char tags as the target"):
         _build(txt[1], txt.select(2, 3), to_value)
+
+
+_DINT_TARGETS = {
+    "DD1": (lambda: dd[1], "the Dint tag DD1"),
+    "DD[DS5]": (lambda: dd[ds[5]], "the Dint pointer DD[DS5]"),
+}
+_REAL_TARGETS = {
+    "DF1": (lambda: df[1], "the Real tag DF1"),
+    "DF[DS5]": (lambda: df[ds[5]], "the Real pointer DF[DS5]"),
+}
+
+# Each source that CLICK's Copy dialog offers no Copy Binary for, into a DD and into a DF.
+_REFUSED_SOURCES: dict[str, tuple[Callable[[], Any], str, set[str]]] = {
+    "55": (lambda: 55, "the constant 55", {"Dint", "Real"}),
+    "-2": (lambda: -2, "the constant -2", {"Dint", "Real"}),
+    "32767": (lambda: 32767, "the constant 32767", {"Real"}),
+    "-32768": (lambda: -32768, "the constant -32768", {"Real"}),
+    "40000": (lambda: 40000, "the constant 40000", {"Dint"}),
+    "1.5": (lambda: 1.5, "the constant 1.5", {"Real"}),
+    "DS1": (lambda: ds[1], "the Int tag DS1", {"Dint", "Real"}),
+    "DS[DS2]": (lambda: ds[ds[2]], "the Int pointer DS[DS2]", {"Dint", "Real"}),
+    "TD1": (lambda: td[1], "the Int tag TD1", {"Dint", "Real"}),
+    "DH1": (lambda: dh[1], "the Word tag DH1", {"Dint", "Real"}),
+    "DD2": (lambda: dd[2], "the Dint tag DD2", {"Dint"}),
+    "DF2": (lambda: df[2], "the Real tag DF2", {"Real"}),
+}
+
+
+_REFUSED_PAIRS = [
+    pytest.param(source, kind, address, id=f"{source} -> {address}")
+    for source, (_, _, refused_into) in _REFUSED_SOURCES.items()
+    for kind, targets in (("Dint", _DINT_TARGETS), ("Real", _REAL_TARGETS))
+    if kind in refused_into
+    for address in targets
+]
+
+
+@pytest.mark.parametrize("source,kind,address", _REFUSED_PAIRS)
+def test_to_binary_into_a_number_from_a_source_that_clicks_dialog_refuses(
+    source: str, kind: str, address: str
+) -> None:
+    build_source, shown, _ = _REFUSED_SOURCES[source]
+    build_target, named = (_DINT_TARGETS if kind == "Dint" else _REAL_TARGETS)[address]
+    with pytest.raises(ValueError) as refused:
+        _build(build_source(), build_target(), to_binary)
+    assert str(refused.value) == (
+        f"copy() got convert=to_binary with {shown} as the source and {named} as the target. "
+        "to_binary stores into a Dint only from a Real tag or a constant with a fraction, and "
+        "into a Real only from a Dint tag or an integer constant outside -32768..32767. "
+        "Leave convert out."
+    )
+
+
+@pytest.mark.parametrize(
+    "source,target",
+    [
+        (lambda: 1.5, lambda: dd[1]),
+        (lambda: -0.5, lambda: dd[ds[5]]),
+        (lambda: df[1], lambda: dd[1]),
+        (lambda: df[ds[2]], lambda: dd[ds[5]]),
+        (lambda: 40000, lambda: df[1]),
+        (lambda: -32769, lambda: df[ds[5]]),
+        (lambda: dd[1], lambda: df[1]),
+        (lambda: ctd[1], lambda: df[1]),
+    ],
+)
+def test_to_binary_into_a_number_builds_from_a_source_that_clicks_dialog_offers(
+    source, target
+) -> None:
+    _build(source(), target(), to_binary)
 
 
 # Each of these forms makes a TXT hold a number.  check() and the how() prior raise
