@@ -15,6 +15,7 @@ from pyrung.core.instruction.control import (
     for_loop_iterations,
     iter_loop_body_rungs,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import IndirectBlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef
 from pyrung.core.validation.walker import ProgramLocation, _instruction_fields
@@ -102,7 +103,7 @@ def _uses(instruction: Any) -> list[tuple[str, Any]]:
     found: list[tuple[str, Any]] = []
     seen: set[int] = set()
     for field in _instruction_fields(instruction) or ():
-        _names, refs = _scan(getattr(instruction, field, None))
+        _names, refs = _scan(as_authored(getattr(instruction, field, None)))
         for ref in refs:
             if id(ref) not in seen:
                 seen.add(id(ref))

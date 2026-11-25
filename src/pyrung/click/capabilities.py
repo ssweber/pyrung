@@ -6,9 +6,13 @@ pyrung Click validation.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Literal, assert_never
 
 from pyclickplc.banks import BANKS
+
+if TYPE_CHECKING:
+    from pyrung.core.instruction.operands import Span
+    from pyrung.core.tag import Tag
 
 InstructionRole = Literal["timer_done_bit"]
 
@@ -54,19 +58,24 @@ HEX_CONSTANT_BANKS: frozenset[str] = frozenset(
 )
 
 
-def single_register_fill_dest(dest: Any) -> Any | None:
+def single_register_fill_dest(dest: Span) -> Tag | None:
     """Return the one tag that a ``fill()`` destination covers, or ``None``.
 
     CLICK's Fill dialog needs at least two registers, so a Fill of one register
     exports as a Copy. Only a range that is known when the program is written counts. A
-    pointer range can be one register long at run time, and it stays a Fill.
+    pointer range can be one register long at run time, and it stays a Fill. An
+    ``immediate()`` range also stays a Fill.
     """
-    from pyrung.core.memory_block import BlockRange
+    from pyrung.core.instruction.operands import PointerRangeArg, RangeArg
 
-    if not isinstance(dest, BlockRange):
-        return None
-    tags = dest.tags()
-    return tags[0] if len(tags) == 1 else None
+    match dest:
+        case RangeArg(span=span, immediate=False):
+            tags = span.tags()
+            return tags[0] if len(tags) == 1 else None
+        case RangeArg() | PointerRangeArg():
+            return None
+        case _:
+            assert_never(dest)
 
 
 class ClickHardwareProfile:

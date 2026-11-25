@@ -16,6 +16,7 @@ from pyrung.core.instruction.control import (
     ReturnInstruction,
     iter_loop_body_rungs,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import rung_label
@@ -536,7 +537,9 @@ def _evaluate_text_windows(
         _text_literal_compares(rung._conditions[rung._branch_condition_start :], compares)
         for instruction in rung._instructions:
             for field_name in getattr(type(instruction), "_conditions", ()):
-                _text_literal_compares(getattr(instruction, field_name, None), compares)
+                _text_literal_compares(
+                    as_authored(getattr(instruction, field_name, None)), compares
+                )
         for written, tags in compares:
             if id(written) in seen:
                 continue

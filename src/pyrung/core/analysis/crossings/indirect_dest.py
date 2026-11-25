@@ -34,6 +34,7 @@ from pyrung.core.analysis.affine import extract_affine_expression, extract_forwa
 from pyrung.core.analysis.value_domains import declared_value_domain
 from pyrung.core.expression import TagExpr
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import Block, IndirectExprRef, IndirectRef
 from pyrung.core.tag import Tag
 
@@ -126,9 +127,9 @@ def _literal_write_values(root: str, writer_instrs: dict[str, list[Any]]) -> set
     values: set[Any] = set()
     for instr in writers:
         if isinstance(instr, CopyInstruction) and instr.convert is None:
-            src = instr.source
+            src = as_authored(instr.source)
         elif type(instr).__name__ == "FillInstruction":
-            src = getattr(instr, "value", None)
+            src = as_authored(getattr(instr, "value", None))
         else:
             return None  # Math / non-literal writer → not a pure literal domain
         if _is_int(src):

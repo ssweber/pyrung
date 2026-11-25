@@ -28,6 +28,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.rung import Rung
 
 if TYPE_CHECKING:
@@ -1049,8 +1050,8 @@ def _none_if_always(condition: Any) -> Any:
 
 
 def _row_target(instruction: Any) -> Any:
-    target = getattr(instruction, "target", None)
-    return getattr(instruction, "dest", None) if target is None else target
+    target = as_authored(getattr(instruction, "target", None))
+    return as_authored(getattr(instruction, "dest", None)) if target is None else target
 
 
 def _row_writes(row: Rung) -> str | None:

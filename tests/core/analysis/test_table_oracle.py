@@ -764,13 +764,16 @@ def _pointer_chase_program(depth):
 
 def _indirect_copy_source(prog):
     from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.instruction.operands import PointerArg
     from pyrung.core.memory_block import IndirectRef
 
     return next(
-        i.source
+        i.source.ref
         for r in prog.rungs
         for i in r._instructions
-        if isinstance(i, CopyInstruction) and isinstance(i.source, IndirectRef)
+        if isinstance(i, CopyInstruction)
+        and isinstance(i.source, PointerArg)
+        and isinstance(i.source.ref, IndirectRef)
     )
 
 

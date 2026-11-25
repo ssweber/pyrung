@@ -73,6 +73,7 @@ from pyrung.core.instruction.conversions import (
     calc_store_transform,
     copy_store_transform,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import RUNTIME_VALUES, SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import TagType, tag_written_from_outside
@@ -269,7 +270,7 @@ def _collect_implicit_edge_condition_exprs(
         if upstream is None:
             return True
         for field_name in getattr(type(instr), "_writes", ()):
-            targets = getattr(instr, field_name, None)
+            targets = as_authored(getattr(instr, field_name, None))
             if targets is None:
                 continue
             if hasattr(targets, "__iter__") and not isinstance(targets, str):
@@ -426,37 +427,37 @@ def _comparison_influencing_tags(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _tag_name_from_value(instr.source)
+            source_name = _tag_name_from_value(as_authored(instr.source))
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(instr.dest)
+            target_names = _resolve_tag_names(as_authored(instr.dest))
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
             for tn in target_names:
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, FillInstruction):
-            source_name = _tag_name_from_value(instr.value)
+            source_name = _tag_name_from_value(as_authored(instr.value))
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(instr.dest)
+            target_names = _resolve_tag_names(as_authored(instr.dest))
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
             for tn in target_names:
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _resolve_tag_names(instr.source)
-            dest_names = _resolve_tag_names(instr.dest)
+            source_names = _resolve_tag_names(as_authored(instr.source))
+            dest_names = _resolve_tag_names(as_authored(instr.dest))
             if not source_names:
-                source_names = _expand_indirect_tag_names(instr.source)
+                source_names = _expand_indirect_tag_names(as_authored(instr.source))
             if not dest_names:
-                dest_names = _expand_indirect_tag_names(instr.dest)
+                dest_names = _expand_indirect_tag_names(as_authored(instr.dest))
             if source_names and dest_names and len(source_names) == len(dest_names):
                 for src, dst in zip(source_names, dest_names, strict=True):
                     target_to_sources.setdefault(dst, set()).add(src)
         elif isinstance(instr, CalcInstruction):
-            target_name = _tag_name_from_value(instr.dest)
+            target_name = _tag_name_from_value(as_authored(instr.dest))
             if target_name is None:
                 continue
             edge = _calc_reverse_edge(instr.expression)
@@ -590,9 +591,9 @@ def _literal_write_values(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        raw_value = instr.source
+        raw_value = as_authored(instr.source)
     elif isinstance(instr, FillInstruction):
-        raw_value = instr.value
+        raw_value = as_authored(instr.value)
     else:
         return None
 
@@ -788,17 +789,17 @@ def _compute_stepping_tags(
                     arithmetic.add(target_name)
 
             if isinstance(instr, CalcInstruction):
-                if getattr(instr.dest, "name", None) == target_name and _expr_reads_tag(
-                    instr.expression, target_name
-                ):
+                if getattr(
+                    as_authored(instr.dest), "name", None
+                ) == target_name and _expr_reads_tag(instr.expression, target_name):
                     arithmetic.add(target_name)
 
             if isinstance(instr, CopyInstruction) and instr.convert is None:
-                source_name = _tag_name_from_value(instr.source)
+                source_name = _tag_name_from_value(as_authored(instr.source))
                 if source_name is not None and source_name != target_name:
                     copy_targets[target_name] = source_name
                 elif source_name is None:
-                    indirect_pending.append((target_name, instr.source))
+                    indirect_pending.append((target_name, as_authored(instr.source)))
 
         lit = _literal_write_values(instr, graph.tags)
         if lit is not None:
@@ -1308,11 +1309,17 @@ def _domain_from_blockcopy(
     from pyrung.core.memory_block import IndirectBlockRange
     from pyrung.core.validation._common import _resolve_tag_names
 
-    source_names = _resolve_tag_names(instr.source) or _expand_indirect_tag_names(instr.source)
-    dest_names = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest)
+    source_names = _resolve_tag_names(as_authored(instr.source)) or _expand_indirect_tag_names(
+        as_authored(instr.source)
+    )
+    dest_names = _resolve_tag_names(as_authored(instr.dest)) or _expand_indirect_tag_names(
+        as_authored(instr.dest)
+    )
     if not dest_names or target_name not in dest_names:
         return ()
-    if isinstance(instr.source, IndirectBlockRange) or isinstance(instr.dest, IndirectBlockRange):
+    if isinstance(as_authored(instr.source), IndirectBlockRange) or isinstance(
+        as_authored(instr.dest), IndirectBlockRange
+    ):
         if not source_names or any(name not in known_domains for name in source_names):
             return None
         values = {value for name in source_names for value in known_domains[name]}
@@ -1354,7 +1361,7 @@ def _domain_from_write_instruction(
         if instr.convert is not None:
             return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
-            instr.source,
+            as_authored(instr.source),
             target,
             graph,
             all_exprs,
@@ -1366,7 +1373,7 @@ def _domain_from_write_instruction(
 
     if isinstance(instr, FillInstruction):
         return _domain_from_copy_like_value(
-            instr.value,
+            as_authored(instr.value),
             target,
             graph,
             all_exprs,
@@ -1382,11 +1389,11 @@ def _domain_from_write_instruction(
         domain = _domain_from_blockcopy(instr, target_name, known_domains)
         if not domain:
             return domain
-        source = getattr(getattr(instr.source, "block", None), "type", None)
+        source = getattr(getattr(as_authored(instr.source), "block", None), "type", None)
         return None if source is None else _stored_domain(domain, source, target)
 
     if isinstance(instr, CalcInstruction):
-        if instr.dest.name != target_name:
+        if as_authored(instr.dest).name != target_name:
             return None
         return _domain_from_calc_expression(
             instr.expression,
@@ -1425,7 +1432,7 @@ def _is_monotone_self_feed_calc(instr: Any, target_name: str) -> bool:
         return False
     if getattr(instr, "oneshot", False):
         return False
-    if getattr(instr.dest, "name", None) != target_name:
+    if getattr(as_authored(instr.dest), "name", None) != target_name:
         return False
     fwd = _extract_forward_offset(instr)
     return fwd is not None and fwd[0] == target_name and fwd[1] != 0
@@ -1759,9 +1766,9 @@ def collect_produced_value_domains(
         """Prevent write helpers from falling back to comparison-derived bounds."""
         raw: Any | None = None
         if isinstance(instr, CopyInstruction):
-            raw = instr.source
+            raw = as_authored(instr.source)
         elif isinstance(instr, FillInstruction):
-            raw = instr.value
+            raw = as_authored(instr.value)
 
         if raw is not None:
             source_name = _tag_name_from_value(raw)
@@ -1780,7 +1787,7 @@ def collect_produced_value_domains(
             return refs is not None and target_name not in refs and refs <= known.keys()
 
         if isinstance(instr, BlockCopyInstruction):
-            sources = _resolve_tag_names(instr.source)
+            sources = _resolve_tag_names(as_authored(instr.source))
             return bool(sources) and set(sources) <= known.keys()
 
         # Drums, searches, and converting copies have intrinsic finite domains;
@@ -1805,7 +1812,11 @@ def collect_produced_value_domains(
                     break
                 # A self-copy contributes no new value beyond retention.
                 if isinstance(instr, (CopyInstruction, FillInstruction)):
-                    raw = instr.source if isinstance(instr, CopyInstruction) else instr.value
+                    raw = (
+                        as_authored(instr.source)
+                        if isinstance(instr, CopyInstruction)
+                        else as_authored(instr.value)
+                    )
                     if _tag_name_from_value(raw) == target_name:
                         continue
                 domain = _domain_from_write_instruction(
@@ -1901,9 +1912,9 @@ def _unsupported_reverse_sources(
                     source_name = _tag_name_from_value(instr.expression.right)
         if source_name is None:
             return []
-        target_names = _resolve_tag_names(instr.dest)
+        target_names = _resolve_tag_names(as_authored(instr.dest))
         if not target_names:
-            target_names = _expand_indirect_tag_names(instr.dest)
+            target_names = _expand_indirect_tag_names(as_authored(instr.dest))
         uncovered = [
             tn
             for tn in target_names
@@ -1913,11 +1924,15 @@ def _unsupported_reverse_sources(
             return [(source_name, uncovered)]
 
     elif isinstance(instr, (CopyInstruction, FillInstruction)):
-        raw = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        raw = (
+            as_authored(instr.source)
+            if isinstance(instr, CopyInstruction)
+            else as_authored(instr.value)
+        )
         source_name = _tag_name_from_value(raw)
         if source_name is None:
             return []
-        dest = instr.dest
+        dest = as_authored(instr.dest)
         target_names = _resolve_tag_names(dest)
         if not target_names:
             target_names = _expand_indirect_tag_names(dest)
@@ -1930,12 +1945,12 @@ def _unsupported_reverse_sources(
             return [(source_name, uncovered)]
 
     elif isinstance(instr, BlockCopyInstruction):
-        source_names = _resolve_tag_names(instr.source)
-        dest_names = _resolve_tag_names(instr.dest)
+        source_names = _resolve_tag_names(as_authored(instr.source))
+        dest_names = _resolve_tag_names(as_authored(instr.dest))
         if not source_names:
-            source_names = _expand_indirect_tag_names(instr.source)
+            source_names = _expand_indirect_tag_names(as_authored(instr.source))
         if not dest_names:
-            dest_names = _expand_indirect_tag_names(instr.dest)
+            dest_names = _expand_indirect_tag_names(as_authored(instr.dest))
         result: list[tuple[str, list[str]]] = []
         if source_names and dest_names:
             if len(source_names) == len(dest_names):
@@ -2078,23 +2093,23 @@ def _backward_propagate_comparison_boundaries(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _tag_name_from_value(instr.source)
+            source_name = _tag_name_from_value(as_authored(instr.source))
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(instr.dest)
+            target_names = _resolve_tag_names(as_authored(instr.dest))
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
             for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, FillInstruction):
-            source_name = _tag_name_from_value(instr.value)
+            source_name = _tag_name_from_value(as_authored(instr.value))
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(instr.dest)
+            target_names = _resolve_tag_names(as_authored(instr.dest))
             if not target_names:
-                target_names = _expand_indirect_tag_names(instr.dest)
+                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
             for target_name in target_names:
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
@@ -2102,10 +2117,10 @@ def _backward_propagate_comparison_boundaries(
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _resolve_tag_names(instr.source)
-            dest_names = _resolve_tag_names(instr.dest)
+            source_names = _resolve_tag_names(as_authored(instr.source))
+            dest_names = _resolve_tag_names(as_authored(instr.dest))
             if not dest_names:
-                dest_names = _expand_indirect_tag_names(instr.dest)
+                dest_names = _expand_indirect_tag_names(as_authored(instr.dest))
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
@@ -2118,7 +2133,7 @@ def _backward_propagate_comparison_boundaries(
                             covered_pairs.add((src, dst))
 
         elif isinstance(instr, CalcInstruction):
-            target_name = _tag_name_from_value(instr.dest)
+            target_name = _tag_name_from_value(as_authored(instr.dest))
             if target_name is None:
                 continue
             edge = _calc_reverse_edge(instr.expression)
@@ -2268,7 +2283,9 @@ def _backward_propagate_comparison_boundaries(
     for instr in walk_instructions(program):
         if carried_back and isinstance(instr, CalcInstruction):
             # Whatever shape it is in, a Math no edge covers has no way back from its target.
-            dest_names = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest)
+            dest_names = _resolve_tag_names(as_authored(instr.dest)) or _expand_indirect_tag_names(
+                as_authored(instr.dest)
+            )
             for source_name in sorted(carried_back & _extract_tag_names(instr.expression, {})):
                 for target_name in dest_names:
                     if (

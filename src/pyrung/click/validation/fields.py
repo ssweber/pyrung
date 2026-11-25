@@ -24,6 +24,7 @@ from laddercodec import Code, FieldError, LaddercodecError
 from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.core.expression import Expression
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import BlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation._common import instruction_frame
@@ -201,7 +202,8 @@ def declared_operands(instruction: Any, words: Mapping[str, str]) -> tuple[Opera
 
     def add(argument: int | str, name: str, attributes: tuple[str, ...]) -> None:
         values = tuple(
-            (attribute, getattr(instruction, attribute, None)) for attribute in attributes
+            (attribute, as_authored(getattr(instruction, attribute, None)))
+            for attribute in attributes
         )
         if any(value is not None for _attribute, value in values):
             spelled = _authored_range_tags(instruction, *values[0]) if len(values) == 1 else None
@@ -323,7 +325,7 @@ def _broken_ranges(instruction: Any, exporter: Any, family: Family) -> list[Rang
     """
     problems: list[RangeProblem] = []
     for attribute in family.ranges.get(type(instruction).__name__, ()):
-        value = getattr(instruction, attribute)
+        value = as_authored(getattr(instruction, attribute))
         if isinstance(value, ImmediateRef):
             # An immediate() range has the same list form, and the export refuses it too.
             value = value.value

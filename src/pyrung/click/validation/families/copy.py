@@ -12,6 +12,7 @@ from laddercodec import BlockCopy, Copy, Fill, Pack, Unpack
 from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.click.capabilities import single_register_fill_dest
+from pyrung.core.instruction.operands import ConstArg, held, inner
 from pyrung.core.tag import TagType
 
 from ..fields import Family, Unbuildable, memory_types, refusals_of, render_operand, split_range
@@ -113,15 +114,15 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
     if (
         code == "bank-not-allowed"
         and kind == "FillInstruction"
-        and memory_types(instruction.dest, resolver) & _BIT_BANKS
+        and memory_types(inner(instruction.dest), resolver) & _BIT_BANKS
     ):
-        if memory_types(instruction.value, resolver):
+        if memory_types(inner(instruction.value), resolver):
             return "Copy the bit into each destination bit with copy()."
         return "Set or clear the bits with latch() or reset() on the range."
     if (
         code == "bank-not-allowed"
         and kind == "BlockCopyInstruction"
-        and "YD" in memory_types(instruction.dest, resolver)
+        and "YD" in memory_types(inner(instruction.dest), resolver)
     ):
         return "Write each YD with copy() or math()."
     return _ADVICE.get(code)
@@ -184,7 +185,7 @@ def _single_register_fill_refusals(instruction: Any, tag: Any, exporter: Any) ->
         # The export refuses some of these Fills as a Copy, and says why.
         exporter._single_register_fill_token(instruction, tag, path="instruction", oneshot_kw={})
         with exporter._hex_constants("copy" if hex_dest(dest) else None):
-            value = render_operand(exporter, instruction.value, "value", instruction)
+            value = render_operand(exporter, held(instruction.value), "value", instruction)
         copy_refusals = refusals_of(lambda: Copy(source=value, dest=dest, oneshot=oneshot))
     except (_RenderError, Unbuildable):
         copy_refusals = None
@@ -192,7 +193,7 @@ def _single_register_fill_refusals(instruction: Any, tag: Any, exporter: Any) ->
         return copy_refusals
     try:
         with exporter._hex_constants("word" if hex_dest(dest) else None):
-            value = render_operand(exporter, instruction.value, "value", instruction)
+            value = render_operand(exporter, held(instruction.value), "value", instruction)
     except Unbuildable:
         if copy_refusals is None:
             raise
@@ -218,24 +219,24 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
         tag = single_register_fill_dest(instruction.dest)
         if tag is not None:
             return _single_register_fill_refusals(instruction, tag, exporter)
-        dest_start, dest_end = split_range(render(instruction.dest, "dest"))
+        dest_start, dest_end = split_range(render(held(instruction.dest), "dest"))
         with exporter._hex_constants("word" if hex_dest(dest_start) else None):
-            value = render(instruction.value, "value")
+            value = render(held(instruction.value), "value")
         return refusals_of(
             lambda: Fill(value=value, dest_start=dest_start, dest_end=dest_end, oneshot=oneshot)
         )
     if kind == "CopyInstruction":
         # The export writes a text Copy's destination as the range that the text fills.
         # laddercodec's Copy takes the first address of it.
-        dest = render(instruction.dest, "dest").partition("..")[0]
+        dest = render(held(instruction.dest), "dest").partition("..")[0]
         with exporter._hex_constants("copy" if hex_dest(dest) else None):
-            source = render(instruction.source, "source")
+            source = render(held(instruction.source), "source")
         kwargs = _copy_kwargs(instruction, instruction.source)
         return refusals_of(lambda: Copy(source=source, dest=dest, oneshot=oneshot, **kwargs))
     if kind == "BlockCopyInstruction":
-        source_start, source_end = split_range(render(instruction.source, "source"))
+        source_start, source_end = split_range(render(held(instruction.source), "source"))
         dest_start, dest_end = _dest_range(
-            render(instruction.dest, "dest"), source_start, source_end
+            render(held(instruction.dest), "dest"), source_start, source_end
         )
         convert = None if instruction.convert is None else f"to_{instruction.convert.mode}"
         return refusals_of(
@@ -286,9 +287,12 @@ def _export_ignores_allow(code: str, instruction: Any) -> bool:
     The export refuses a Fill of text with a quote among other characters, and a Fill of
     one register with text of several characters. It has no form of either to write.
     """
-    if type(instruction).__name__ != "FillInstruction" or not isinstance(instruction.value, str):
+    if type(instruction).__name__ != "FillInstruction":
         return False
-    value = instruction.value
+    parsed = instruction.value
+    value = parsed.value if isinstance(parsed, ConstArg) else None
+    if not isinstance(value, str):
+        return False
     if code == "invalid-text-constant":
         return '"' in value and value != '"'
     one_register = single_register_fill_dest(instruction.dest)

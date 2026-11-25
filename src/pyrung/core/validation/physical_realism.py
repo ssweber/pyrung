@@ -17,6 +17,7 @@ from pyrung.core.condition import (
     FallingEdgeCondition,
     RisingEdgeCondition,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import (
     WriteSite,
@@ -73,16 +74,16 @@ def _literal_range_targets(instr: Any) -> list[tuple[Tag, str, int | float]]:
     itype = type(instr).__name__
 
     if isinstance(instr, CopyInstruction):
-        source = instr.source
+        source = as_authored(instr.source)
         if not _is_numeric_literal(source):
             return []
-        return [(tag, itype, source) for tag in static_write_target_tags(instr.target)]
+        return [(tag, itype, source) for tag in static_write_target_tags(as_authored(instr.target))]
 
     if isinstance(instr, FillInstruction):
-        source = instr.value
+        source = as_authored(instr.value)
         if not _is_numeric_literal(source):
             return []
-        return [(tag, itype, source) for tag in static_write_target_tags(instr.dest)]
+        return [(tag, itype, source) for tag in static_write_target_tags(as_authored(instr.dest))]
 
     return []
 
@@ -252,7 +253,10 @@ def _out_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.instruction.coils import OutInstruction
 
     if isinstance(instr, OutInstruction):
-        return [(tag.name, type(instr).__name__) for tag in static_write_target_tags(instr.target)]
+        return [
+            (tag.name, type(instr).__name__)
+            for tag in static_write_target_tags(as_authored(instr.target))
+        ]
     return []
 
 

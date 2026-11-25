@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.instruction.operands import as_authored
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
@@ -91,9 +93,9 @@ def _check_literal_write(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        raw_value = instr.source
+        raw_value = as_authored(instr.source)
     elif isinstance(instr, FillInstruction):
-        raw_value = instr.value
+        raw_value = as_authored(instr.value)
     else:
         return None
 

@@ -29,6 +29,7 @@ from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
 from pyrung.core.function_source import _names_in, embedded_source, is_the_function
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.operands import ConstArg, TagArg
 from pyrung.core.instruction.resolvers import _fn_name
 from pyrung.core.memory_block import (
     UNSET,
@@ -337,15 +338,12 @@ class CodegenContext:
         A text and its digits go into the elements after the target, by address.  So the
         block that holds the target keeps every address (``build_compact_block_maps``).
         """
-        if not isinstance(instr, CopyInstruction):
+        if not isinstance(instr, CopyInstruction) or not isinstance(instr.dest, TagArg):
             return
-        target = instr.target
-        if isinstance(target, ImmediateRef):
-            target = target.value
-        if not isinstance(target, Tag):
-            return
-        if instr.convert is not None or (isinstance(instr.source, str) and len(instr.source) > 1):
-            self.multi_element_store_targets.add(target.name)
+        source = instr.source
+        text = source.value if isinstance(source, ConstArg) else None
+        if instr.convert is not None or (isinstance(text, str) and len(text) > 1):
+            self.multi_element_store_targets.add(instr.dest.tag.name)
 
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()

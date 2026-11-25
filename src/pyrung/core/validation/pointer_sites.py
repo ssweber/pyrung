@@ -21,6 +21,7 @@ from pyrung.core.instruction.conversions import (
     copy_source_kind,
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.rung import Rung
 from pyrung.core.tag import ImmediateRef, Tag
 
@@ -86,11 +87,15 @@ def site_evidence(
         changed = writes(instr)
         guards[:] = [g for g in guards if not (_extract_reads_from_condition(g, {}) & changed)]
         new: Values = None
-        target = instr.dest if isinstance(instr, (CopyInstruction, CalcInstruction)) else None
+        target = (
+            as_authored(instr.dest)
+            if isinstance(instr, (CopyInstruction, CalcInstruction))
+            else None
+        )
         if isinstance(target, ImmediateRef):
             target = target.value
         if isinstance(instr, CopyInstruction) and isinstance(target, Tag) and instr.convert is None:
-            source = instr.source
+            source = as_authored(instr.source)
             if isinstance(source, ImmediateRef):
                 source = source.value
             values = env.get(source.name) if isinstance(source, Tag) else (source,)

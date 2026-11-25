@@ -329,7 +329,14 @@ def test_a_declared_list_operand_shows_each_item() -> None:
     from pyrung.core.instruction import CopyInstruction
     from pyrung.core.validation.render import argument_span, declared_call
 
-    copy = CopyInstruction(5, [Int("A"), Int("Bee")])
+    # No builder accepts a list operand. copy(), fill(), out() and pack_bits() each refuse
+    # one. A stand-in class with the name of a Copy holds one, to test the list branch of
+    # declared_call().
+    def hold(self, source, dest) -> None:
+        vars(self).update(source=source, dest=dest, convert=None, oneshot=False)
+
+    stand_in = type("CopyInstruction", (CopyInstruction,), {"__init__": hold})
+    copy = stand_in(5, [Int("A"), Int("Bee")])
     assert declared_call(copy).text == "copy(5, [A, Bee])"
     assert argument_span(copy, 1) == ("copy(5, [A, Bee])", (8, 8))
     assert argument_span(copy, 1, 1) == ("copy(5, [A, Bee])", (12, 3))

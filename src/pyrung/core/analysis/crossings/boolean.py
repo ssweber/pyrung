@@ -48,6 +48,7 @@ from pyrung.core.instruction.coils import (
     ResetInstruction,
     reset_value_for_type,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import ImmediateRef, TagType
 
 
@@ -107,7 +108,7 @@ class ResetCrossing(BaseCrossing):
 
     @staticmethod
     def _reset_value(instr: Any) -> Any:
-        target = getattr(instr, "target", None)
+        target = as_authored(getattr(instr, "target", None))
         if isinstance(target, ImmediateRef):
             target = target.value
         tag_type = getattr(target, "type", None)

@@ -25,6 +25,7 @@ from pyrung.core.crossing import (
     Literal,
     invert_affine_candidate,
 )
+from pyrung.core.instruction.operands import as_authored
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -291,7 +292,7 @@ def writer_value_facts(program: Any, pdg: ProgramGraph) -> dict[str, tuple[Write
                 instr = _writer_for_tag(rung_obj, tag_name)
                 if not (
                     isinstance(instr, OutInstruction)
-                    and getattr(instr.target, "name", None) == tag_name
+                    and getattr(as_authored(instr.target), "name", None) == tag_name
                     and not getattr(instr, "_oneshot", False)
                 ):
                     continue
@@ -320,9 +321,9 @@ def _named_copy_source(instr: Any) -> str | None:
     from pyrung.core.instruction.data_transfer import CopyInstruction
 
     src = (
-        getattr(instr, "source", None)
+        as_authored(getattr(instr, "source", None))
         if isinstance(instr, CopyInstruction)
-        else getattr(instr, "value", None)
+        else as_authored(getattr(instr, "value", None))
     )
     if src is None:
         return None
@@ -626,7 +627,7 @@ def _derive_one_hop(
         for instr in ro._instructions:
             if not isinstance(instr, CalcInstruction):
                 continue
-            dest = getattr(instr.dest, "name", None)
+            dest = getattr(as_authored(instr.dest), "name", None)
             if dest is None or dest in out:
                 continue
             names = _expr_tag_names(instr.expression)

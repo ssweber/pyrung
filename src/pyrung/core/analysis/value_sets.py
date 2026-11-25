@@ -27,6 +27,7 @@ from pyrung.core.expression import CALC_FAULTS, Expression
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.conversions import _truncate_to_tag_type
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.instruction.resolvers import resolve_tag_or_value_ctx
 from pyrung.core.memory_block import (
     Block,
@@ -350,7 +351,7 @@ class _ValueSets:
                 out.add(stored)
             return frozenset(out)
         if _is_plain_copy(instr):
-            raw = self._evaluate(instr.source, values)
+            raw = self._evaluate(as_authored(instr.source), values)
             if raw is None:
                 return None
             for value in raw:

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute, expand_routes
 from pyrung.core.analysis.pilot.navigation_contracts import _context_value_key
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.instruction.operands import as_authored
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -682,9 +683,9 @@ def _scan_indirect_copy_targets(program: Any) -> set[str]:
         for r in rungs:
             for instr in getattr(r, "_instructions", ()):
                 if isinstance(instr, CopyInstruction) and isinstance(
-                    instr.source, (IndirectRef, IndirectExprRef)
+                    as_authored(instr.source), (IndirectRef, IndirectExprRef)
                 ):
-                    dest_name = getattr(instr.dest, "name", None)
+                    dest_name = getattr(as_authored(instr.dest), "name", None)
                     if dest_name:
                         targets.add(dest_name)
             _scan(getattr(r, "_branches", ()))

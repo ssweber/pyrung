@@ -256,8 +256,7 @@ def test_every_over_cap_indirect_write_is_covered_or_punts() -> None:
 
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-    from pyrung.core.tag import ImmediateRef
+    from pyrung.core.instruction.operands import PointerArg
 
     for desc in graph.indirect_writes:
         rung = resolve_rung(logic, graph.rung_nodes[desc.node_index])
@@ -266,11 +265,9 @@ def test_every_over_cap_indirect_write_is_covered_or_punts() -> None:
         for instr in rung._instructions:
             if not isinstance(instr, (CopyInstruction, FillInstruction)):
                 continue
-            dest = instr.dest
-            if isinstance(dest, ImmediateRef):
-                dest = dest.value
-            if not isinstance(dest, (IndirectRef, IndirectExprRef)):
+            if not isinstance(instr.dest, PointerArg):
                 continue
+            dest = instr.dest.ref
             slots = writable_slots(
                 dest, block=dest.block, writer_instrs=writer_instrs, tags=graph.tags
             )

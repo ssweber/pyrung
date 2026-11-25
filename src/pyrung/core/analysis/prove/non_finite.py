@@ -36,6 +36,7 @@ import math
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.reverse_edges import literal_value_from_value, tag_name_from_value
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
@@ -186,13 +187,13 @@ class _Bounds:
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 return _converted(instr.convert)
-            return self.value(instr.source)
+            return self.value(as_authored(instr.source))
         if isinstance(instr, FillInstruction):
-            return self.value(instr.value)
+            return self.value(as_authored(instr.value))
         if isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 return _converted(instr.convert)
-            return self.source_range(instr.source)
+            return self.source_range(as_authored(instr.source))
         if isinstance(instr, CalcInstruction):
             if instr.mode == "hex":
                 return (0, 65535)

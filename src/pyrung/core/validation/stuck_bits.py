@@ -54,6 +54,7 @@ from pyrung.core.analysis.write_sites import (
     instruction_written_tags,
     static_write_target_tags,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import ImmediateRef, tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
@@ -138,12 +139,12 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
         itype = type(instr).__name__
-        return [(tag.name, itype) for tag in static_write_target_tags(instr.target)]
+        return [(tag.name, itype) for tag in static_write_target_tags(as_authored(instr.target))]
 
     if isinstance(instr, OutInstruction):
         return [
             (tag.name, itype)
-            for tag in static_write_target_tags(instr.target)
+            for tag in static_write_target_tags(as_authored(instr.target))
             if tag.type == TagType.BOOL
             for itype in (_OUT_LATCH, _OUT_RESET)
         ]
@@ -153,14 +154,18 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
     ):
         return [
             (tag.name, itype)
-            for tag in static_write_target_tags(instr.target)
+            for tag in static_write_target_tags(as_authored(instr.target))
             for itype in (_VARIANT_LATCH, _VARIANT_RESET)
         ]
 
     if isinstance(instr, (CopyInstruction, FillInstruction)):
-        source = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        source = (
+            as_authored(instr.source)
+            if isinstance(instr, CopyInstruction)
+            else as_authored(instr.value)
+        )
         results: list[tuple[str, str]] = []
-        for tag in static_write_target_tags(instr.dest):
+        for tag in static_write_target_tags(as_authored(instr.dest)):
             if tag.type != TagType.BOOL:
                 continue
             for itype in _classify_copy_source_for_bool(source):
@@ -179,9 +184,9 @@ def _store_sides(instr: Any) -> list[str]:
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
     if isinstance(instr, CopyInstruction):
-        return _classify_copy_source_for_bool(instr.source)
+        return _classify_copy_source_for_bool(as_authored(instr.source))
     if isinstance(instr, FillInstruction):
-        return _classify_copy_source_for_bool(instr.value)
+        return _classify_copy_source_for_bool(as_authored(instr.value))
     return [_COPY_LATCH, _COPY_RESET]
 
 

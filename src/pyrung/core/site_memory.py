@@ -48,6 +48,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
@@ -258,7 +259,7 @@ def _operand_text(value: Any) -> str:
 def _operand_texts(instr: Instruction) -> dict[str, str]:
     """Map each operand field of *instr*, reads then writes, to its source text."""
     fields = dict.fromkeys(type(instr)._reads + type(instr)._writes)
-    return {name: _operand_text(getattr(instr, name, None)) for name in fields}
+    return {name: _operand_text(as_authored(getattr(instr, name, None))) for name in fields}
 
 
 def _instruction_operands(instr: Instruction) -> tuple[str, ...]:
@@ -311,7 +312,7 @@ def _first_tag_name(instr: Instruction) -> str | None:
     from pyrung.core.tag import Tag
 
     for name in type(instr)._writes + type(instr)._reads:
-        value = getattr(instr, name, None)
+        value = as_authored(getattr(instr, name, None))
         if isinstance(value, Tag):
             return value.name
     return None

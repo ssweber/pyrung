@@ -16,6 +16,7 @@ from pyrung.core.instruction.advanced import SearchInstruction
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+from pyrung.core.instruction.operands import PARSED, as_authored, inner
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -1119,6 +1120,9 @@ def _extract_tag_names(
     seen: set[int] = set()
 
     def walk(current: Any) -> None:
+        if isinstance(current, PARSED):
+            walk(inner(current))
+            return
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -1223,6 +1227,9 @@ def _extract_write_targets(
     seen: set[int] = set()
 
     def walk_target(current: Any) -> None:
+        if isinstance(current, PARSED):
+            walk_target(inner(current))
+            return
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -2380,7 +2387,7 @@ class _UnlistedReach:
         received: set[str] = set()
         for instr in instructions:
             if isinstance(instr, ModbusReceiveInstruction):
-                dest = instr.dest
+                dest = as_authored(instr.dest)
                 if isinstance(dest, Tag):
                     received.add(dest.name)
                 elif hasattr(dest, "tags"):

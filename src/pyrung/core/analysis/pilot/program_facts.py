@@ -14,6 +14,7 @@ from pyrung.core.analysis.pdg import ProgramGraph, TagRole, resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import single_calc_source
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _expr_tag_names, _values_match
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import tag_written_from_outside
 
 
@@ -47,7 +48,7 @@ def compute_reference_constants(
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    source = instruction.source
+                    source = as_authored(instruction.source)
                     if isinstance(source, IndirectRef):
                         name = getattr(source.pointer, "name", None)
                         if name:
@@ -104,8 +105,8 @@ def compute_reference_constants(
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    source_name = getattr(instruction.source, "name", None)
-                    destination_name = getattr(instruction.dest, "name", None)
+                    source_name = getattr(as_authored(instruction.source), "name", None)
+                    destination_name = getattr(as_authored(instruction.dest), "name", None)
                     if (
                         source_name
                         and destination_name
@@ -119,8 +120,8 @@ def compute_reference_constants(
                     ):
                         candidates.add(source_name)
                 elif isinstance(instruction, FillInstruction):
-                    source_name = getattr(instruction.value, "name", None)
-                    destination_name = getattr(instruction.dest, "name", None)
+                    source_name = getattr(as_authored(instruction.value), "name", None)
+                    destination_name = getattr(as_authored(instruction.dest), "name", None)
                     if (
                         source_name
                         and destination_name
@@ -154,7 +155,7 @@ def compute_reference_constants(
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    candidates.update(_indirect_read_slots(instruction.source))
+                    candidates.update(_indirect_read_slots(as_authored(instruction.source)))
             _scan_indirect_reads(getattr(rung, "_branches", ()))
 
     _scan_indirect_reads(program.rungs)

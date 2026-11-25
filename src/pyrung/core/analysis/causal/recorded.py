@@ -8,6 +8,7 @@ from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_nod
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.state import value_changed
 
 from ._rung_writes import RungWrite, ScanRungWriteProjection, build_scan_rung_write_projection
@@ -1801,13 +1802,15 @@ def _replayed_writer_proves_value(
     if (
         isinstance(instr, CopyInstruction)
         and instr.convert is None
-        and isinstance(instr.source, Tag)
-        and isinstance(instr.dest, Tag)
-        and instr.dest.name == tag_name
+        and isinstance(as_authored(instr.source), Tag)
+        and isinstance(as_authored(instr.dest), Tag)
+        and as_authored(instr.dest).name == tag_name
     ):
         try:
-            source = fire_view.get_tag(instr.source.name)
-            stored = _store_copy_value_to_tag_type(source, instr.dest, instr.source.type)
+            source = fire_view.get_tag(as_authored(instr.source).name)
+            stored = _store_copy_value_to_tag_type(
+                source, as_authored(instr.dest), as_authored(instr.source).type
+            )
             return _same_value(stored, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False

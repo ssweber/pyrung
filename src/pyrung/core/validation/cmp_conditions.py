@@ -83,6 +83,7 @@ from pyrung.core.expression import (
     LiteralExpr,
     TagExpr,
 )
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
     RungLoc,
@@ -475,7 +476,7 @@ def _calc_derived_names(program: Program) -> set[str]:
 
 
 def _real_dest(instr: Any) -> Tag | None:
-    dest = getattr(instr, "dest", None)
+    dest = as_authored(getattr(instr, "dest", None))
     if isinstance(dest, ImmediateRef):
         dest = dest.value
     if isinstance(dest, Tag) and dest.type is TagType.REAL:
@@ -504,7 +505,7 @@ def _computed_real_names(program: Program) -> set[str]:
             if may_be_float(instr.expression):
                 names.add(dest.name)
         elif isinstance(instr, CopyInstruction):
-            source = instr.source
+            source = as_authored(instr.source)
             if isinstance(source, ImmediateRef):
                 source = source.value
             if isinstance(source, Tag) and source.type is TagType.REAL:

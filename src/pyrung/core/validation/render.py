@@ -45,6 +45,7 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
     text_window_of,
 )
+from pyrung.core.instruction.operands import PARSED, held
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 _COMPARE_SYMBOLS: dict[type, str] = {
@@ -118,6 +119,8 @@ def operand_name(value: Any) -> str:
     )
     from pyrung.core.structure import InstanceView
 
+    if isinstance(value, PARSED):
+        value = held(value)
     if isinstance(value, ImmediateRef):
         return operand_name(value.value)
     if isinstance(value, Tag):
@@ -155,7 +158,6 @@ def operand_name(value: Any) -> str:
         return repr(value)
     if isinstance(value, (int, float)):
         return str(value)
-    # copy() and fill() still build with a list of tags, so a finding can name one.
     if isinstance(value, list):
         return f"[{', '.join(operand_name(item) for item in value)}]"
     if isinstance(value, tuple):
@@ -324,6 +326,8 @@ def renders_in_full(instr: Any) -> bool:
 
 def _value_text(value: Any) -> ArgumentText:
     """Return the text of an operand, or the text of each item of a list."""
+    if isinstance(value, PARSED):
+        value = held(value)
     if isinstance(value, list):
         return [operand_name(item) for item in value]
     return operand_name(value)

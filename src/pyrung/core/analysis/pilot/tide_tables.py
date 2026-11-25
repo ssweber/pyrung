@@ -21,6 +21,8 @@ from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.instruction.operands import as_authored
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
 
@@ -475,11 +477,11 @@ def table_operand_from_copy(
     for instruction in rung._instructions:
         if not isinstance(instruction, CopyInstruction):
             continue
-        if getattr(instruction.dest, "name", None) != tag:
+        if getattr(as_authored(instruction.dest), "name", None) != tag:
             continue
-        if isinstance(instruction.source, (IndirectRef, IndirectExprRef)):
+        if isinstance(as_authored(instruction.source), (IndirectRef, IndirectExprRef)):
             return table_from_indirect_src(
-                instruction.source,
+                as_authored(instruction.source),
                 snapshot,
                 pdg,
                 program,

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.expression import Expression
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -30,22 +29,93 @@ from .conversions import (
     copy_source_kind,
     copy_store_transform,
 )
-from .operands import TAG, VALUE, NumberInto
+from .operands import (
+    RANGE,
+    TAG,
+    VALUE,
+    ConstArg,
+    Dest,
+    ExprArg,
+    NumberInto,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+    check_rules,
+)
 from .resolvers import (
     _sequential_tags,
     _set_fault_address_error,
     _set_fault_out_of_range,
     _termination_char,
-    resolve_block_range_tags_ctx,
     resolve_source_type_tag_ctx,
-    resolve_tag_ctx,
-    resolve_tag_or_value_ctx,
 )
 from .utils import guard_oneshot_execution
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+_COPY_DEST = TAG.of(arg="target")
+
+
+def _one_value(parsed: Value | Span) -> Value:
+    """Return *parsed*, the source of a Copy or the value of a Fill.
+
+    Each builder refuses a range with its own message before it parses, so *parsed* is
+    never a range.
+    """
+    match parsed:
+        case RangeArg() | PointerRangeArg():
+            raise AssertionError("the builder refuses a range before it parses")
+        case TagArg() | PointerArg() | ConstArg() | ExprArg():
+            return parsed
+        case _:
+            assert_never(parsed)
+
+
+def _read(source: Value, ctx: ScanContext) -> Any:
+    """Return the value that *source* reads on this scan."""
+    match source:
+        case TagArg(tag=tag):
+            return ctx.get_tag(tag.name, tag.default)
+        case PointerArg(ref=ref):
+            try:
+                element = ref.resolve_ctx(ctx)
+            except PastBankError:
+                # pyrung has no memory past a bank, so the read returns the type's zero.
+                return ref.block._type_default()
+            return ctx.get_tag(element.name, element.default)
+        case ExprArg(expr=expr):
+            return expr.evaluate(ctx)
+        case ConstArg(value=value):
+            return value
+        case _:
+            assert_never(source)
+
+
+def _dest_tag(dest: Dest, ctx: ScanContext) -> Tag:
+    """Return the tag that *dest* writes on this scan."""
+    match dest:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return ref.resolve_ctx(ctx)
+        case _:
+            assert_never(dest)
+
+
+def _span_tags(span: Span, ctx: ScanContext) -> list[Tag]:
+    """Return the tags that *span* holds on this scan."""
+    match span:
+        case RangeArg(span=fixed):
+            return fixed.tags()
+        case PointerRangeArg(span=pointed):
+            return pointed.resolve_ctx(ctx).tags()
+        case _:
+            assert_never(span)
 
 
 def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
@@ -182,18 +252,16 @@ def _block_copy_dest(source: Any, dest: Any) -> Any:
     return block.select(addr, end)
 
 
-def _source_past_end_keeps(source: Any, ctx: ScanContext) -> bool:
+def _source_past_end_keeps(source: Value, ctx: ScanContext) -> bool:
     """Return True for a pointer *source* past the end of a bank whose Copy then writes nothing.
 
     CLICK leaves the destination of a Copy from past DS, DH, DF or TXT, with no flag
     (``Block._past_end_keeps``); past any other bank the read is the type's zero.
     """
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-    if not isinstance(source, (IndirectRef, IndirectExprRef)) or not source.block._past_end_keeps:
+    if not isinstance(source, PointerArg) or not source.block._past_end_keeps:
         return False
     try:
-        source.resolve_ctx(ctx)
+        source.ref.resolve_ctx(ctx)
     except PastBankError:
         return True
     except (IndexError, TypeError):
@@ -205,7 +273,9 @@ class CopyInstruction(OneShotMixin, Instruction):
     """Copy a single value from source to destination (CPY/MOV).
 
     Source may be a literal value, `Tag`, `IndirectRef`, `IndirectExprRef`, or
-    a string literal.  Destination may be a `Tag` or `IndirectRef`.
+    a string literal.  Destination may be a `Tag` or `IndirectRef`.  The builder parses
+    both, so ``source`` holds a ``Value`` and ``dest`` a ``Dest``
+    (:mod:`pyrung.core.instruction.operands`).
 
     Pass ``convert=`` to enable text/numeric conversion (see
     :mod:`pyrung.core.copy_converters`).  With none, a number register or a number
@@ -251,7 +321,7 @@ class CopyInstruction(OneShotMixin, Instruction):
     _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ("convert",)
-    _operands = {"source": VALUE, "dest": TAG.of(arg="target")}
+    _operands = {"source": VALUE, "dest": _COPY_DEST}
     _operand_rules = (NumberInto(value="source", dest="dest"),)
 
     def __init__(
@@ -271,37 +341,31 @@ class CopyInstruction(OneShotMixin, Instruction):
         check_real_literal(source, dest, "copy() source")
         if convert is None:
             _refuse_text_that_stores_no_number("copy()", source, copy_source_kind(dest))
-        self.source = source
-        self.dest = dest
+        self.source: Value = _one_value(VALUE.parse("copy()", "source", source))
+        self.dest: Dest = _COPY_DEST.parse("copy()", "target", dest)
+        check_rules(self._operands, self._operand_rules, "copy()", {"source": source, "dest": dest})
         self.authored_convert = convert
         self.convert = convert if convert is not None else _plain_text_converter(source, dest)
 
     @property
-    def target(self):
+    def target(self) -> Dest:
         return self.dest
 
-    @target.setter
-    def target(self, value):
-        self.dest = value
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         resolved_target: Tag | None
         try:
-            resolved_target = resolve_tag_ctx(self.dest, ctx)
+            resolved_target = _dest_tag(self.dest, ctx)
         except PastBankError:
             # The write is dropped with no flag.  The source is still read.
             resolved_target = None
-        except IndexError:
+        except (IndexError, TypeError):
+            # Only a pointer raises.  It points below its bank, or its index is not a number.
             _set_fault_address_error(ctx)
             return
-        except TypeError:
-            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-            if isinstance(self.dest, (IndirectRef, IndirectExprRef)):
-                _set_fault_address_error(ctx)
-                return
-            raise
 
         convert = self.convert
         if convert is not None:
@@ -312,21 +376,19 @@ class CopyInstruction(OneShotMixin, Instruction):
         if _source_past_end_keeps(self.source, ctx):
             return
         try:
-            value = resolve_tag_or_value_ctx(self.source, ctx)
+            value = _read(self.source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
         except TypeError:
-            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-            if isinstance(self.source, (IndirectRef, IndirectExprRef)):
+            if isinstance(self.source, PointerArg):
                 _set_fault_address_error(ctx)
                 return
             raise
 
         if resolved_target is None:
             return
-        if resolved_target.type.name == "REAL" and isinstance(self.source, Expression):
+        if resolved_target.type.name == "REAL" and isinstance(self.source, ExprArg):
             value = computed_real(value)
 
         # String literal fan-out: "00026" → sequential CHAR tags, as many as the block holds
@@ -373,14 +435,12 @@ class CopyInstruction(OneShotMixin, Instruction):
         mode: str,
     ) -> None:
         try:
-            source_value = resolve_tag_or_value_ctx(self.source, ctx)
+            source_value = _read(self.source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
         except TypeError:
-            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-            if isinstance(self.source, (IndirectRef, IndirectExprRef)):
+            if isinstance(self.source, PointerArg):
                 _set_fault_address_error(ctx)
             else:
                 _set_fault_out_of_range(ctx)
@@ -401,25 +461,28 @@ class CopyInstruction(OneShotMixin, Instruction):
     def _copy_numeric_to_text(
         self, ctx: ScanContext, resolved_target: Tag, converter: CopyConverter
     ) -> None:
-        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-        from pyrung.core.tag import TagType
-
         if resolved_target.type != TagType.CHAR:
             _set_fault_out_of_range(ctx)
             return
 
+        source = self.source
         source_tag: Tag | None = None
         try:
-            if isinstance(self.source, Tag):
-                source_tag = self.source
-            elif isinstance(self.source, (IndirectRef, IndirectExprRef)):
-                source_tag = resolve_source_type_tag_ctx(self.source, ctx)
-            value = resolve_tag_or_value_ctx(self.source, ctx)
+            match source:
+                case TagArg(tag=tag):
+                    source_tag = tag
+                case PointerArg(ref=ref):
+                    source_tag = resolve_source_type_tag_ctx(ref, ctx)
+                case ConstArg() | ExprArg():
+                    pass
+                case _:
+                    assert_never(source)
+            value = _read(source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
         except TypeError:
-            if isinstance(self.source, (IndirectRef, IndirectExprRef)):
+            if isinstance(source, PointerArg):
                 _set_fault_address_error(ctx)
             else:
                 _set_fault_out_of_range(ctx)
@@ -449,21 +512,17 @@ class CopyInstruction(OneShotMixin, Instruction):
     def _copy_binary_to_text(
         self, ctx: ScanContext, resolved_target: Tag, converter: CopyConverter
     ) -> None:
-        from pyrung.core.tag import TagType
-
         if resolved_target.type != TagType.CHAR:
             _set_fault_out_of_range(ctx)
             return
 
         try:
-            value = int(resolve_tag_or_value_ctx(self.source, ctx))
+            value = int(_read(self.source, ctx))
         except IndexError:
             _set_fault_address_error(ctx)
             return
         except TypeError:
-            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-            if isinstance(self.source, (IndirectRef, IndirectExprRef)):
+            if isinstance(self.source, PointerArg):
                 _set_fault_address_error(ctx)
             else:
                 _set_fault_out_of_range(ctx)
@@ -499,6 +558,9 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     A single tag as *dest* is the first address of the destination.  The Block Copy
     writes one element of its block for each source element, as CLICK's does.  ``dest``
     holds that range, and ``authored_dest`` holds the tag that was written.
+
+    The builder parses both ranges, so ``source`` and ``dest`` each hold a ``Span``
+    (:mod:`pyrung.core.instruction.operands`).
     """
 
     _reads = ("source",)
@@ -540,8 +602,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                     "blockcopy() needs ranges of the same length. "
                     f"The source has {source_count} tags, and the destination has {dest_count}."
                 )
-        self.source = source
-        self.dest = dest
+        self.source: Span = RANGE.parse("blockcopy()", "source", source)
+        self.dest: Span = RANGE.parse("blockcopy()", "dest", dest)
         self.authored_convert = convert
         if convert is None and _range_type(source) is TagType.CHAR:
             if _range_type(dest) in _NUMBER_TYPES:
@@ -550,10 +612,13 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 convert = to_value
         self.convert = convert
 
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
+
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
-            dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+            dst_tags = _span_tags(self.dest, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
@@ -563,7 +628,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
             return
 
         try:
-            src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+            src_tags = _span_tags(self.source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
@@ -586,7 +651,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         self, ctx: ScanContext, converter: CopyConverter, dst_tags: list[Tag]
     ) -> None:
         try:
-            src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+            src_tags = _span_tags(self.source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
@@ -616,7 +681,9 @@ class FillInstruction(OneShotMixin, Instruction):
     Writes a constant value to every element in a destination BlockRange.
 
     Value can be a literal, Tag, or Expression (resolved once, written to all).
-    Dest can be BlockRange or IndirectBlockRange (resolved at scan time).
+    Dest can be BlockRange or IndirectBlockRange (resolved at scan time).  The builder
+    parses both, so ``value`` holds a ``Value`` and ``dest`` a ``Span``
+    (:mod:`pyrung.core.instruction.operands`).
     """
 
     _reads = ("value",)
@@ -649,18 +716,22 @@ class FillInstruction(OneShotMixin, Instruction):
             )
         _refuse_text_that_stores_no_number("fill()", value, dest_type)
         check_real_literal(value, dest, "fill() value")
-        self.value = value
-        self.dest = dest
+        self.value: Value = _one_value(VALUE.parse("fill()", "value", value))
+        self.dest: Span = RANGE.parse("fill()", "dest", dest)
+        check_rules(self._operands, self._operand_rules, "fill()", {"value": value, "dest": dest})
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
-            dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
-            value = resolve_tag_or_value_ctx(self.value, ctx)
+            dst_tags = _span_tags(self.dest, ctx)
+            value = _read(self.value, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
-        if dst_tags and dst_tags[0].type.name == "REAL" and isinstance(self.value, Expression):
+        if dst_tags and dst_tags[0].type.name == "REAL" and isinstance(self.value, ExprArg):
             value = computed_real(value)
 
         source = copy_source_kind(self.value)

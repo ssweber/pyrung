@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import assert_never
+
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
     _INT_MAX,
@@ -18,7 +20,6 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.expression import Expression
 from pyrung.core.instruction import (
     BlockCopyInstruction,
     EventDrumInstruction,
@@ -29,7 +30,17 @@ from pyrung.core.instruction import (
     TimeEventDrumInstruction,
 )
 from pyrung.core.instruction.conversions import copy_source_kind
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+)
 from pyrung.core.kernel import prove_effective_preset_key
+from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -59,6 +70,20 @@ from ._primitives import (
 )
 
 
+def _copy_range(span: Span) -> BlockRange | IndirectBlockRange:
+    """Return the range that *span* holds, as the shared range helpers take it.
+
+    The generated code reads an ``immediate()`` range as it reads the plain range.
+    """
+    match span:
+        case RangeArg(span=fixed):
+            return fixed
+        case PointerRangeArg(span=pointed):
+            return pointed
+        case _:
+            assert_never(span)
+
+
 def _compile_blockcopy_instruction(
     instr: BlockCopyInstruction,
     enabled_expr: str,
@@ -68,12 +93,11 @@ def _compile_blockcopy_instruction(
     if instr.convert is not None:
         return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
     stem = ctx.next_name("blockcopy")
+    source, dest = _copy_range(instr.source), _copy_range(instr.dest)
     store_expr = _copy_store_expr(
-        "_raw", _range_type_name(instr.dest), TagType[_range_type_name(instr.source)], ctx
+        "_raw", _range_type_name(dest), TagType[_range_type_name(source)], ctx
     )
-    clamp_cond = _copy_clamp_condition(
-        "_raw", _range_type_name(instr.dest), _range_type_name(instr.source)
-    )
+    clamp_cond = _copy_clamp_condition("_raw", _range_type_name(dest), _range_type_name(source))
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     clamp_lines = (
         [f"    if {clamp_cond}:", *[f"        {line}" for line in fault_body]]
@@ -81,10 +105,10 @@ def _compile_blockcopy_instruction(
         else []
     )
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
-        instr.source, ctx, stem=f"{stem}_src", include_addresses=False
+        source, ctx, stem=f"{stem}_src", include_addresses=False
     )
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
-        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+        dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     # Stepping resolves the destination range before the source range.
     enabled_body = [
@@ -94,12 +118,12 @@ def _compile_blockcopy_instruction(
         f'    raise ValueError(f"blockcopy() needs ranges of the same length. The source has {{len({src_indices})}} tags, and the destination has {{len({dst_indices})}}.")',
         "_blockcopy_values = []",
         f"for _src_idx in {src_indices}:",
-        f"    _raw = {_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)}",
+        f"    _raw = {_range_item_read_expr(source, src_symbol, '_src_idx', ctx)}",
         "    _blockcopy_values.append(_raw)",
         f"for _raw, _dst_idx in zip(_blockcopy_values, {dst_indices}):",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
         *clamp_lines,
-        *_compile_range_flush(instr.dest, dst_symbol, ctx),
+        *_compile_range_flush(dest, dst_symbol, ctx),
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -115,14 +139,15 @@ def _compile_blockcopy_converter_instruction(
         raise TypeError("blockcopy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("blockcopymod")
+    source, dest = _copy_range(instr.source), _copy_range(instr.dest)
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
-        instr.source, ctx, stem=f"{stem}_src", include_addresses=False
+        source, ctx, stem=f"{stem}_src", include_addresses=False
     )
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
-        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+        dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     mode = converter.mode
-    dst_type = _range_type_name(instr.dest)
+    dst_type = _range_type_name(dest)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     # Stepping resolves the destination range before the source range.
     enabled_body: list[str] = [
@@ -140,14 +165,14 @@ def _compile_blockcopy_converter_instruction(
             [
                 f"for _src_idx, _dst_idx in zip({src_indices}, {dst_indices}):",
                 "    try:",
-                f"        _raw_char = _text_from_source_value({_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)})",
+                f"        _raw_char = _text_from_source_value({_range_item_read_expr(source, src_symbol, '_src_idx', ctx)})",
                 "        if len(_raw_char) != 1:",
                 '            raise ValueError("BlockCopy text->numeric conversion requires single CHAR values")',
                 f'        _numeric = _store_numeric_text_digit(_raw_char, "{mode}")',
                 f"        {_range_item_write_expr(dst_symbol, '_dst_idx', _store_coerce_expr('_numeric', dst_type, ctx))}",
                 "    except (IndexError, TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 8),
-                *_compile_range_flush(instr.dest, dst_symbol, ctx),
+                *_compile_range_flush(dest, dst_symbol, ctx),
             ]
         )
     else:
@@ -162,16 +187,32 @@ def _compile_fill_instruction(
     indent: int,
 ) -> list[str]:
     stem = ctx.next_name("fill")
-    dest_type = _range_type_name(instr.dest)
+    dest = _copy_range(instr.dest)
+    dest_type = _range_type_name(dest)
     store_expr = _copy_store_expr("_fill_value", dest_type, copy_source_kind(instr.value), ctx)
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
-        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+        dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
-    value_expr = _compile_value(instr.value, ctx)
-    if ctx.kernel_runtime and dest_type == "REAL" and isinstance(instr.value, Expression):
-        ctx.mark_helper("_computed_real")
-        value_expr = f"_computed_real({value_expr})"
-    source_type = "CHAR" if isinstance(instr.value, str) else _optional_value_type_name(instr.value)
+    value = instr.value
+    match value:
+        case TagArg(tag=tag):
+            value_expr = _compile_value(tag, ctx)
+        case PointerArg(ref=ref):
+            value_expr = _compile_value(ref, ctx)
+        case ExprArg(expr=expr):
+            value_expr = _compile_value(expr, ctx)
+            if ctx.kernel_runtime and dest_type == "REAL":
+                ctx.mark_helper("_computed_real")
+                value_expr = f"_computed_real({value_expr})"
+        case ConstArg(value=constant):
+            value_expr = _compile_value(constant, ctx)
+        case _:
+            assert_never(value)
+    source_type = (
+        "CHAR"
+        if isinstance(value, ConstArg) and isinstance(value.value, str)
+        else _optional_value_type_name(value)
+    )
     clamp_cond = _copy_clamp_condition("_fill_value", dest_type, source_type)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     clamp_lines = (
@@ -184,7 +225,7 @@ def _compile_fill_instruction(
         f"_fill_value = {value_expr}",
         f"for _dst_idx in {dst_indices}:",
         f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
-        *_compile_range_flush(instr.dest, dst_symbol, ctx),
+        *_compile_range_flush(dest, dst_symbol, ctx),
         *clamp_lines,
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)

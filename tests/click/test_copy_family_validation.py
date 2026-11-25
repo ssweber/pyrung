@@ -8,6 +8,7 @@ also cover how a refusal prints: the call, the caret under the refused argument,
 from __future__ import annotations
 
 import dataclasses
+import random
 
 import pytest
 from laddercodec import BlockCopy, Code, Copy, Fill, Pack, Unpack
@@ -15,11 +16,12 @@ from laddercodec import BlockCopy, Code, Copy, Fill, Pack, Unpack
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
+    CLK_BANK_UNRESOLVED,
     CLK_COPY_RANGE_NOT_CONSECUTIVE,
     CLK_PTR_CONTEXT_ONLY_COPY,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Dint, Int, Tag, TagType, udt
+from pyrung.core import Block, Bool, Dint, Int, Tag, TagType, immediate, udt
 from pyrung.core.copy_converters import to_value
 from pyrung.core.instruction import BlockCopyInstruction, CopyInstruction
 from pyrung.core.program import (
@@ -836,3 +838,29 @@ def test_allow_refuses_a_bare_string():
         pyrung_to_ladder(
             _program(lambda: copy(ds[1], ds[2])), TagMap(), allow="copy-bank-incompatible"
         )
+
+
+def test_strict_mode_flags_each_unmapped_immediate_copy_source():
+    # The rungs are shuffled, so a mapped and an unmapped source take turns. The resolver
+    # caches on id(), so each operand must reach it as one object for the whole check.
+    mapped = [Bool(f"M{i}") for i in range(12)]
+    unmapped = [Bool(f"U{i}") for i in range(12)]
+    sources = [*mapped, *unmapped]
+    random.Random(1).shuffle(sources)
+    dests = [Int(f"D{i}") for i in range(len(sources))]
+    prog = Program(strict=False)
+    with prog:
+        for source, dest in zip(sources, dests, strict=True):
+            with rung(x[1]):
+                copy(immediate(source), dest)
+    entries = [tag.map_to(c[i + 1]) for i, tag in enumerate(mapped)]
+    entries += [tag.map_to(ds[i + 1]) for i, tag in enumerate(dests)]
+    report = validate_click_program(prog, TagMap(entries, include_system=False), mode="strict")
+
+    flagged = {
+        int(finding.location.split("]")[0].removeprefix("main.rung["))
+        for finding in report.errors
+        if finding.code == CLK_BANK_UNRESOLVED
+    }
+    # A location counts rungs from 1.
+    assert flagged == {i + 1 for i, source in enumerate(sources) if source.name.startswith("U")}
