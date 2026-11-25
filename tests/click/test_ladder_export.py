@@ -2803,12 +2803,10 @@ def test_one_register_fill_exports_a_copy_of_the_same_value(build, token):
     assert _single_fill_tokens(build) == [token]
 
 
-def test_one_register_fill_into_text_from_a_number_register_is_still_refused():
-    # A Fill accepts no number register into TXT. A one-register Fill must pass
-    # laddercodec's Fill as well as its Copy.
-    with pytest.raises(LadderExportError, match=r"\[copy-bank-incompatible\]") as exc_info:
+def test_one_register_fill_into_text_from_a_number_register_is_refused_at_build():
+    # CLICK's Fill accepts no number register into TXT, though its Copy does.
+    with pytest.raises(ValueError, match=r"^fill\(\) got the Int tag DS1 as the value"):
         _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5)))
-    assert "|  fill(DS1, TXT5..TXT5)" in str(exc_info.value)
 
 
 def test_one_register_fill_keeps_the_checks_of_a_copy():
@@ -2820,13 +2818,8 @@ def test_one_register_fill_keeps_the_checks_of_a_copy():
 
 
 def test_one_register_fill_refuses_text_that_a_copy_would_convert():
-    # The bank check refuses this first. Allow its code so the export's own refusal is reached.
-    with pytest.raises(LadderExportError, match="copy-bank-incompatible"):
-        _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)))
     with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
-        _single_fill_tokens(
-            lambda: fill(df[1], txt.select(5, 5)), allow=("copy-bank-incompatible",)
-        )
+        _single_fill_tokens(lambda: fill(5, txt.select(5, 5)))
     with pytest.raises(TypeError, match=r"fill\(\) cannot write a TXT into a number register"):
         _single_fill_tokens(lambda: fill(txt[1], ds.select(5, 5)))
 

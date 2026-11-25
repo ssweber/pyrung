@@ -2051,6 +2051,59 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (first, second, seen), scans=1)
         assert results == {name: (32767, 32767, True) for name in results}
 
+    @staticmethod
+    def _fill_into_text(value) -> tuple[Program, tuple]:
+        """Return a program that fills *value* into TXT 1..3 of four, and the tags to watch.
+
+        Scan 0 writes "Z" into each TXT. Scan 1 runs the Fill. The watched codes are the
+        ASCII codes of the four TXT, then whether the Fill set the out-of-range flag.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 4)
+        codes = [Int(f"Code{i}") for i in range(1, 5)]
+        seen = Bool("Seen")
+        with Program(strict=False) as prog:
+            with rung(system.sys.first_scan):
+                fill("Z", chars.select(1, 4))
+            with rung(~system.sys.first_scan):
+                fill(value, chars.select(1, 3))
+            with rung(system.fault.out_of_range):
+                out(seen)
+            with rung(~system.sys.first_scan):
+                for i, code in enumerate(codes, start=1):
+                    copy(chars[i], code, convert=to_ascii)
+        return prog, (*codes, seen)
+
+    @pytest.mark.parametrize(
+        "value,digit",
+        [
+            pytest.param(5, "5", id="5"),
+            pytest.param(0, "0", id="0"),
+        ],
+    )
+    def test_fill_of_a_digit_into_txt_writes_its_character_on_every_backend(
+        self, monkeypatch, value, digit
+    ):
+        """A CLICK was read filling 5 into TXT1..TXT3 as the character "5", with no flag."""
+        prog, watch = self._fill_into_text(value)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
+        assert results == {name: (*[ord(digit)] * 3, ord("Z"), False) for name in results}
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(12, id="12"),
+            pytest.param(-5, id="-5"),
+        ],
+    )
+    def test_fill_of_text_longer_than_a_character_flags_on_every_backend(self, monkeypatch, value):
+        """Each TXT holds one character, so the Fill writes nothing and sets the flag.
+
+        A CLICK's editor refuses a Fill of 12 or -5 into a TXT.
+        """
+        prog, watch = self._fill_into_text(value)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
+        assert results == {name: (*[ord("Z")] * 4, True) for name in results}
+
     @pytest.mark.parametrize("exponential", [False, True])
     @pytest.mark.parametrize("operand,text", [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")])
     def test_copy_non_finite_to_text_on_every_backend(
@@ -2079,7 +2132,6 @@ class TestBoardPeripheralsAndRunStop:
         "store",
         [
             pytest.param(lambda r, chars, reals: copy(r, chars[1]), id="copy"),
-            pytest.param(lambda r, chars, reals: fill(r, chars.select(1, 2)), id="fill"),
             pytest.param(
                 lambda r, chars, reals: blockcopy(reals.select(1, 2), chars.select(1, 2)),
                 id="blockcopy",

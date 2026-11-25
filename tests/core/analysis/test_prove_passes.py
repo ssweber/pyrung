@@ -12,6 +12,7 @@ from pyrung.core import (
     TagType,
     call,
     copy,
+    fill,
     math,
     out,
     return_early,
@@ -271,3 +272,24 @@ class TestFunctionalDepAdvice:
         # and never enters (or re-enters) the state dims.
         assert "Scratch" not in context.stateful_dims
         assert context.elided_tags.get("Scratch") != "functional_dep"
+
+
+class TestFillOfANumberIntoText:
+    """A Fill of a number into a TXT range writes text, so the facts never mix it with text."""
+
+    @pytest.mark.parametrize("value", [5, 12, -5, 0])
+    def test_check_and_the_how_prior_accept_it(self, value) -> None:
+        chars = Block("Txt", TagType.CHAR, 1, 5)
+        start, lit = Bool("Start"), Bool("Lit")
+        with Program(strict=False) as logic:
+            with rung(start):
+                fill(value, chars.select(1, 3))
+            with rung(chars[1] == chars[5]):
+                out(lit)
+
+        logic.check()
+        facts = _build_prior_facts(logic)
+        if not isinstance(facts, Intractable):
+            for name in ("Txt1", "Txt2", "Txt3"):
+                values = facts.stateful_dims.get(name, ())
+                assert all(isinstance(value, str) for value in values), (name, values)

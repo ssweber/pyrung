@@ -126,17 +126,34 @@ def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
     does.  CLICK's dialog has no Copy there without a conversion, and it starts on Copy
     Value with Suppress zero.  CLICK stores the digits of a constant too.  A TXT into a
     number reads its digit, as ``to_value`` does.  Return ``None`` for any other Copy.
+    *dest* may also be the range of a Fill, which converts a number into a TXT the same way.
     """
     from pyrung.core.copy_converters import to_text, to_value
     from pyrung.core.tag import TagType
 
     source_type = copy_source_kind(source)
-    dest_type = copy_source_kind(dest)
+    dest_type = _range_type(dest) or copy_source_kind(dest)
     if dest_type is TagType.CHAR and (source_type in _NUMBER_TYPES or _is_number_constant(source)):
         return to_text()
     if source_type is TagType.CHAR and dest_type in _NUMBER_TYPES:
         return to_value
     return None
+
+
+def _number_text(value: Any, source_tag: Tag | None, converter: CopyConverter) -> str:
+    """Return the text that the ``to_text()`` *converter* writes for the number *value*.
+
+    A Copy writes this text from its target on.  A Fill of an integer constant writes it
+    into each element of its range, when the text is one character.
+    """
+    rendered = _render_text_from_numeric(
+        value,
+        source_tag=source_tag,
+        suppress_zero=converter.suppress_zero,
+        pad=None,
+        exponential=converter.exponential,
+    )
+    return rendered + _termination_char(converter.termination_code)
 
 
 def _is_number_constant(value: Any) -> bool:
@@ -534,14 +551,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             return
 
         try:
-            rendered = _render_text_from_numeric(
-                value,
-                source_tag=source_tag,
-                suppress_zero=converter.suppress_zero,
-                pad=None,
-                exponential=converter.exponential,
-            )
-            rendered += _termination_char(converter.termination_code)
+            rendered = _number_text(value, source_tag, converter)
             chars = [_as_single_ascii_char(char) for char in rendered]
             targets = _sequential_tags(resolved_target, len(chars))
             updates = {target.name: char for target, char in zip(targets, chars, strict=False)}
@@ -726,6 +736,11 @@ class FillInstruction(OneShotMixin, Instruction):
     Dest can be BlockRange or IndirectBlockRange (resolved at scan time).  The builder
     parses both, so ``value`` holds a ``Value`` and ``dest`` a ``Span``
     (:mod:`pyrung.core.instruction.operands`).
+
+    An integer constant into a TXT range writes its text, as a plain ``copy()`` into one TXT
+    does.  ``convert`` holds that ``to_text()`` converter, and is ``None`` for any other
+    Fill.  The builder refuses a number register or a Real constant there.  Text of more
+    than one character sets the out-of-range flag and writes nothing.
     """
 
     _reads = ("value",)
@@ -756,11 +771,22 @@ class FillInstruction(OneShotMixin, Instruction):
                 "number register with copy(..., convert=to_value), then fill() from that "
                 "register."
             )
+        if dest_type is TagType.CHAR and (
+            copy_source_kind(value) in _NUMBER_TYPES or isinstance(value, float)
+        ):
+            # CLICK's editor refuses a number register here (OBJ-024).  A CLICK was read
+            # writing a Real constant's text at each address in turn, past the range's end.
+            raise ValueError(
+                f"fill() got {describe(value)} as the value and {describe(dest)} as the "
+                "target. fill() writes only an integer or a text constant into Char tags. "
+                "Fill one of those, or copy() the value into one Char tag."
+            )
         _refuse_text_that_stores_no_number("fill()", value, dest_type)
         check_real_literal(value, dest, "fill() value")
         self.value: Value = _one_value(VALUE.parse("fill()", "value", value))
         self.dest: Span = RANGE.parse("fill()", "dest", dest)
         check_rules(self._operands, self._operand_rules, "fill()", {"value": value, "dest": dest})
+        self.convert = _plain_text_converter(value, dest)
 
     def check_operands(self, call: str | None = None) -> None:
         """Do nothing, because the builder parsed every operand."""
@@ -772,6 +798,14 @@ class FillInstruction(OneShotMixin, Instruction):
             value = _read(self.value, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
+            return
+        if self.convert is not None:
+            try:
+                char = _as_single_ascii_char(_number_text(value, None, self.convert))
+            except (TypeError, ValueError, OverflowError):
+                _set_fault_out_of_range(ctx)
+                return
+            ctx.set_tags({dst_tag.name: char for dst_tag in dst_tags})
             return
         if dst_tags and dst_tags[0].type.name == "REAL" and isinstance(self.value, ExprArg):
             value = computed_real(value)

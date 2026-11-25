@@ -189,7 +189,6 @@ def _compile_fill_instruction(
     stem = ctx.next_name("fill")
     dest = _copy_range(instr.dest)
     dest_type = _range_type_name(dest)
-    store_expr = _copy_store_expr("_fill_value", dest_type, copy_source_kind(instr.value), ctx)
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
@@ -208,13 +207,39 @@ def _compile_fill_instruction(
             value_expr = _compile_value(constant, ctx)
         case _:
             assert_never(value)
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    converter = instr.convert
+    if converter is not None:
+        # A number into a TXT range writes its text, as the core's FillInstruction does.
+        ctx.mark_helper("_render_text_from_numeric")
+        ctx.mark_helper("_termination_char")
+        ctx.mark_helper("_as_single_ascii_char")
+        enabled_body = [
+            *dst_setup,
+            f"_fill_value = {value_expr}",
+            "try:",
+            "    _fill_char = _as_single_ascii_char(_render_text_from_numeric(",
+            "        _fill_value,",
+            f"        source_type={_optional_value_type_name(value)!r},",
+            f"        suppress_zero={converter.suppress_zero!r},",
+            "        pad=None,",
+            f"        exponential={converter.exponential!r},",
+            f"    ) + _termination_char({converter.termination_code!r}))",
+            "except (TypeError, ValueError, OverflowError):",
+            *_indent_body(fault_body, 4),
+            "else:",
+            f"    for _dst_idx in {dst_indices}:",
+            f"        {_range_item_write_expr(dst_symbol, '_dst_idx', '_fill_char')}",
+            *_indent_body(_compile_range_flush(dest, dst_symbol, ctx), 4),
+        ]
+        return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
     source_type = (
         "CHAR"
         if isinstance(value, ConstArg) and isinstance(value.value, str)
         else _optional_value_type_name(value)
     )
+    store_expr = _copy_store_expr("_fill_value", dest_type, copy_source_kind(value), ctx)
     clamp_cond = _copy_clamp_condition("_fill_value", dest_type, source_type)
-    fault_body = _compile_set_out_of_range_fault_body(ctx)
     clamp_lines = (
         [f"if {dst_indices} and ({clamp_cond}):", *_indent_body(fault_body, 4)]
         if clamp_cond is not None and fault_body != ["pass"]

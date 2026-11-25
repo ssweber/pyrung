@@ -51,7 +51,14 @@ A single tag as the destination gives the first address. The copy writes as many
 ```python
 fill(0, DS.select(1, 100))          # Zero out DS1..DS100
 fill(Setpoint, Alarms.select(1, 8)) # Copy tag value to all 8 elements
+fill(5, Txt.select(1, 3))           # Txt1..Txt3 = "5"
 ```
+
+An integer constant filled into a TXT range writes its text, the same as a plain `copy()` into one TXT. Each TXT holds one character. If the text is longer, such as "12", `fill()` writes nothing and sets `system.fault.out_of_range`. CLICK's editor refuses a Fill of 12 into a TXT.
+
+`fill()` refuses a number register as the value for a TXT range, as CLICK's editor does. Copy the register into one TXT with `copy()` instead.
+
+`fill()` also refuses a Real constant, such as `fill(1.5, Txt.select(1, 3))`. A CLICK accepts it, but it writes the real's text ("1.5000000") at each address of the range in turn. Each write overlaps the one before, and the last one runs past the end of the range.
 
 ## Type conversion (copy converters)
 
@@ -106,7 +113,7 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_value)
 blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 ```
 
-`fill()` does not support `convert=`. It is a plain value copy only.
+`fill()` does not support `convert=`. An integer constant filled into a TXT range is written as text, the same as a plain `copy()`.
 
 ### Converter reference
 

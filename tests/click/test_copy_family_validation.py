@@ -86,10 +86,8 @@ _BANK, _INCOMPATIBLE = Code.BANK_NOT_ALLOWED, Code.COPY_BANK_INCOMPATIBLE
         (lambda: fill(c[1], y.select(1, 1)), [_BANK, _BANK]),
         (lambda: fill(c[1], c.select(2, 2)), [_BANK, _BANK]),
         (lambda: fill(x[1], y.select(1, 1)), [_BANK, _BANK]),
-        (lambda: fill(ds[1], txt.select(5, 5)), [_INCOMPATIBLE]),
-        (lambda: fill(df[1], txt.select(5, 5)), [_INCOMPATIBLE]),
     ],
-    ids=["C->Y", "C->C", "X->Y", "DS->TXT", "DF->TXT"],
+    ids=["C->Y", "C->C", "X->Y"],
 )
 def test_a_fill_of_one_register_must_pass_as_a_fill(write, codes):
     # The export writes it as a Copy, and CLICK's Copy accepts these banks. CLICK's Fill does
@@ -825,12 +823,10 @@ def test_allow_refuses_a_code_that_no_finding_has():
 
 
 def test_allow_takes_a_pyrung_code_and_a_laddercodec_code():
-    write = lambda: fill(ds[1], txt.select(5, 5))  # noqa: E731
+    write = lambda: blockcopy(ds.select(1, 2), txt.select(5, 6))  # noqa: E731
     with pytest.raises(LadderExportError, match="copy-bank-incompatible"):
         pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_PTR_CONTEXT_ONLY_COPY,))
-    # With laddercodec's code allowed, the export's own refusal is reached.
-    with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
-        pyrung_to_ladder(_program(write), TagMap(), allow=(Code.COPY_BANK_INCOMPATIBLE,))
+    pyrung_to_ladder(_program(write), TagMap(), allow=(Code.COPY_BANK_INCOMPATIBLE,))
 
 
 def test_allow_refuses_a_bare_string():

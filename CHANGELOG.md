@@ -17,6 +17,14 @@
 
 - `copy()` now raises `ValueError` when you build a program with a converter that cannot store into its target, such as `to_value` into a TXT (it built).
   Leave `convert` out, or copy into a tag type that the converter writes.
+- `fill()` of a number register into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the number).
+  Copy the register into one TXT with `copy()`, or fill a constant.
+- `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). A CLICK writes the real's text past the end of the range.
+  Copy the constant into one TXT with `copy()`.
+
+### Fixes
+
+- `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 
 ## v0.18.1 (2026-11-25)
 
