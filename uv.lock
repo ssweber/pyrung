@@ -193,11 +193,11 @@ wheels = [
 
 [[package]]
 name = "laddercodec"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ee/89/e501a4dc2e7be08a1d393081a72c1101ae62dff51344611855df4823b835/laddercodec-0.5.0.tar.gz", hash = "sha256:56662e4176fa13c40fc89107b795abc2dd6dca6b23d3044b61d7ead72ebba6f3", size = 3189556, upload-time = "2026-11-20T15:20:25.506Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/03/5535fd0dd564a1d0ed49403ff498dfe09c7fe2d69e5f953216ab1cef4207/laddercodec-0.5.1.tar.gz", hash = "sha256:207a8fc0409b6ef97442420e08810e829d9a648a8f84204e7165901c9229a49d", size = 3209473, upload-time = "2026-11-25T18:22:07.12Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/69/9f8d48d9e29976363ab5b642b6ff5ad9157a23c12dfa2b55840121233b2c/laddercodec-0.5.0-py3-none-any.whl", hash = "sha256:22452a03e717cfde569d77afd4accd4d82430b0805bb94ea97da442735063c3d", size = 383767, upload-time = "2026-11-20T15:20:23.538Z" },
+    { url = "https://files.pythonhosted.org/packages/28/42/9dd1f4b158f9c3a192822f38cc3bdd66925a3ce8148c37ddebc27be09ff6/laddercodec-0.5.1-py3-none-any.whl", hash = "sha256:ab8bd7b272dfd85e368b77f099b0ef10dde38d4c2a00b1eedf93b530a31fc150", size = 388141, upload-time = "2026-11-25T18:22:04.718Z" },
 ]
 
 [[package]]
@@ -500,14 +500,14 @@ wheels = [
 
 [[package]]
 name = "pyclickplc"
-version = "0.11.1"
+version = "0.11.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymodbus" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/25/fc2c871c8e20b778ef7917c531e77fa6c2c13ea5bf05f481d9dc93472af7/pyclickplc-0.11.1.tar.gz", hash = "sha256:b8c83a5e26e4494a7f04238fcead05133f6896b11f8387fe5de33743d08967b2", size = 271461, upload-time = "2026-11-20T17:08:12.729Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/3e/c1819ea93b6d5194a678dbfa1d2ebf231b80b0d73fd121d99c6ad37029c4/pyclickplc-0.11.3.tar.gz", hash = "sha256:de654cd887bb1d38716d8a8527a4e7068c2007ac97d2aa3a287c08bd14565b89", size = 274021, upload-time = "2026-11-25T18:15:00.68Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/07/a124f20212ad5fdfe550db7562821e5e7a2b79b23e8e710103f8f0270240/pyclickplc-0.11.1-py3-none-any.whl", hash = "sha256:9b20d29688d50bb3f5e032c3e29e7239e3e92b7fe96418016bcf3c3b9f1eb0bb", size = 92492, upload-time = "2026-11-20T17:08:11.449Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/b8/2c06708fd9f9657b38c8edb531f609f1c062428d7c885963c5eb307c87c7/pyclickplc-0.11.3-py3-none-any.whl", hash = "sha256:dc7aa26335622a3d06f4154ac312dd7026213d32b3e9831b4bc361d20f6c5df7", size = 93778, upload-time = "2026-11-25T18:14:59.387Z" },
 ]
 
 [[package]]
@@ -592,8 +592,8 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "executing", specifier = ">=2.2.0" },
-    { name = "laddercodec", specifier = ">=0.5.0" },
-    { name = "pyclickplc", specifier = ">=0.11.0" },
+    { name = "laddercodec", specifier = ">=0.5.1" },
+    { name = "pyclickplc", specifier = ">=0.11.3" },
     { name = "pymodbus", specifier = ">=3.12,<4" },
     { name = "pyrsistent", specifier = ">=0.20.0" },
     { name = "tomlkit", specifier = ">=0.13.3" },

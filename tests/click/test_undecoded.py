@@ -103,8 +103,8 @@ def test_the_import_writes_each_marker_as_an_undecoded_call(imported) -> None:
 def test_the_markers_comment_comes_through_as_a_rung_comment(imported) -> None:
     _, namespace = imported
     logic = namespace["logic"]
-    assert logic.rungs[1].comment == f"UNDECODED: rung 1, row 0: {_MAIN_ERROR}\nOld comment"
-    assert logic.subroutines["Sub"][1].comment == f"UNDECODED: rung 1, row 2: {_SUB_ERROR}"
+    assert logic.rungs[1].comment == f"UNDECODED: CLICK rung 2, row 1: {_MAIN_ERROR}\nOld comment"
+    assert logic.subroutines["Sub"][1].comment == f"UNDECODED: CLICK rung 2, row 3: {_SUB_ERROR}"
 
 
 def test_the_program_leaves_out_the_rungs_after_a_marker(imported) -> None:
