@@ -334,8 +334,8 @@ hex_by_zero_goes_on = 6
 false_rung_clears_sc46 = 7
 
 [groups.math_order]
-base = 1801 # Conf_MathOrder: DS1801..DS2170
-slots = 36
+base = 1801 # Conf_MathOrder: DS1801..DS2200
+slots = 39
 
 [groups.math_order.cases]
 dec_tiers = 1
@@ -374,3 +374,6 @@ negb_or = 33
 negb_xor = 34
 negpi_power = 35
 negneg_power = 36
+width_int = 37
+width_word = 38
+hex_by_zero = 39

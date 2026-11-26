@@ -411,15 +411,18 @@ _BRACKET = "a minus sign before a bracket"
         # Two operators that do not meet still count.
         ("DS1 / DS2 + DS3 MOD DS4", False, [("/", "MOD")]),
         ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
-        # Both groupings give the same value, but no reading shows the flags of an
-        # intermediate result outside the destination's range.
+        # Both groupings give the same value, but no reading shows whether an intermediate
+        # result outside the destination's range raises SC43 (math_order/width_int).
         ("DS1 + DS2 - DS3", False, [("+", "-")]),
         ("DS1 + DS2 + DS3", False, [("+", "+")]),
-        ("DH1 * DH2 * DH3", True, [("*", "*")]),
         ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
-        # Nor does a reading show a division or MOD by zero inside a formula.
         ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
         ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
+        # Nor does a reading show this for a Word (math_order/width_word), or what a hex
+        # division or MOD by zero does inside a formula (math_order/hex_by_zero).
+        ("DH1 * DH2 * DH3", True, [("*", "*")]),
+        ("- DH1 / DH2", True, [(NEGATE_ADDRESS, "/")]),
+        ("- DH1 MOD DH2", True, [(NEGATE_ADDRESS, "MOD")]),
         # A minus sign pairs with each operator to its right.
         ("- ( DS1 ) * DS2", False, [(_BRACKET, "*")]),
         ("- ( DS1 ) * DS2 - DS3", False, [(_BRACKET, "*"), (_BRACKET, "-")]),

@@ -70,8 +70,11 @@ def click_result(
 
     - an intermediate result outside the destination's range, except in a Real
       (``faults/real_intermediate_range`` read one past it, with no flag)
-    - a division or MOD by zero inside a formula, and a hex MOD by zero
+    - a hex division by zero inside a formula, and a hex MOD by zero
     - an error or Inf from ``^``
+
+    The probes ``math_order/width_int``, ``width_word`` and ``hex_by_zero`` ask about the
+    first two.
     """
     guard = _Guard(hex_mode, dest)
     return guard.store(_value(node, hex_mode, registers, guard))
@@ -86,10 +89,13 @@ class _Guard:
         self.flags: set[str] = set()
 
     def by_zero(self, op: str, outermost: bool) -> float:
-        # Only a division or MOD by zero as the whole formula was read (``numeric/div_by_zero``,
-        # ``math_more/math_errors``, ``hex_math/rotates_and_bits``).
-        if not outermost or (op == "MOD" and self.hex_mode):
-            raise Unread(f"{op} by zero")
+        # A decimal division or MOD by zero is 0, and the rest of the formula runs. The
+        # division raises SC40 and the MOD raises none (``math_terms/error_terms``,
+        # ``term_zero/quiet_terms``, ``numeric/div_by_zero``, ``math_more/math_errors``).
+        # A hex Math was read dividing by zero only as the whole formula
+        # (``hex_math/rotates_and_bits``).
+        if self.hex_mode and (op == "MOD" or not outermost):
+            raise Unread(f"hex {op} by zero")
         if op == "/":
             self.flags.add("division_error")
         return 0
@@ -99,6 +105,8 @@ class _Guard:
             raise Unread(f"intermediate {value}")
         if self.dest == "Real":
             return
+        # The readings show the value of a wide intermediate, but not whether it raises SC43
+        # (``numeric/intermediate_fits_32_bits``, ``numeric/word_math_unsigned``).
         low, high = _RANGES[self.dest]
         if not low <= value <= high:
             raise Unread(f"intermediate {value} outside a {self.dest}")

@@ -109,7 +109,7 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (
 #: ruled on 2026-11-26 that such a pair needs no reading. ``tests/click/test_click_formula.py``
 #: computes both groupings over a grid of values, with pyrung's ``math()`` and with a model of
 #: what the readings show a CLICK does. It checks that this list holds each pair that agrees in
-#: both. A pair agrees only if every intermediate result stays in a range that a reading shows.
+#: both. A pair agrees only if a reading shows each step of both groupings.
 SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     ("AND", "AND", True),
     ("OR", "OR", True),
