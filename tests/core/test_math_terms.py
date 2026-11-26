@@ -2,8 +2,9 @@
 
 Read on a CLICK (2026-11-06, conformance ``math_terms``): ``7 / 0 + 5`` and
 ``(7 / 0 + 1) * 5`` are 5 with SC40, ``SQRT(-4.0) + 5`` is 5 with SC46, into a DF
-too (5.0).  The quiet errors (``0 ^ 0``, MOD by 0) and ABS of a type's bottom follow
-the same model (2026-11-10, ``term_zero``), and ``0 ^ -1`` is +Inf.  Every engine must agree: the
+too (5.0).  ``0 ^ 0``, which sets no flag, MOD by 0 and ABS of a type's bottom follow
+the same model (2026-11-10, ``term_zero``), and ``0 ^ -1`` is +Inf.  MOD by 0 sets SC46
+(2026-11-26).  Every engine must agree: the
 interpreted runtime, the compiled kernel (legacy and blockless) and the generated
 CircuitPython code, and the prover must see the rest of the formula live.
 """
@@ -88,7 +89,7 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "root_into_real": (lambda: sqrt(MINUS) + 5, Real, 5.0, {46}),
     "root_over_zero": (lambda: sqrt(MINUS) / ZERO + 3, Int, 3, {40, 46}),
     "fractional_power": (lambda: MINUS_EIGHT**0.5 + 2, Real, 2.0, {46}),
-    "mod_zero": (lambda: SEVEN_INT % ZERO_INT + 5, Int, 5, set()),
+    "mod_zero": (lambda: SEVEN_INT % ZERO_INT + 5, Int, 5, {46}),
     "zero_to_zero": (lambda: ZERO**ZERO + 5, Dint, 5, set()),
     # 0 to a negative power is +Inf, not an error, so the formula is +Inf. An integer
     # register stores 0 and a Real stores +Inf. Both set SC43 (read 2026-11-10).

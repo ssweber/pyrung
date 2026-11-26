@@ -3000,8 +3000,9 @@ class TestBoardPeripheralsAndRunStop:
         ("mod_negative_divisor", lambda n, d, z, w, r: 7 % (n + 5), Int, 1, (0, 0, 0)),
         ("mod_real", lambda n, d, z, w, r: r % 2.0 * 10, Int, -15, (0, 0, 0)),
         ("mod_word_by_minus_two", lambda n, d, z, w, r: w % -2, Dint, 1, (0, 0, 0)),
-        ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
-        ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
+        # A CLICK read SC46 after a MOD by 0 on 2026-11-26.
+        ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 1)),
+        ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 1)),
         ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
         # A CLICK read both values on 2026-11-10.  Their SC43 is pyrung's, as for any Inf result.
         ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, pymath.inf, (0, 1, 0)),
@@ -3103,6 +3104,33 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with rung():
                 math(make(a, b), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    #: Each row is (label, tag type, formula of the tags (a, b, c), their values, stored,
+    #: flags as (SC40, SC43, SC46)).  The rows are what a CLICK's Math did (hardware
+    #: 2026-11-26).  The result starts at 99.
+    _CLICK_MATH_FLAGS = [
+        ("c1_division_by_zero", Int, lambda a, b, c: (a / b) + c, (5, 0, 1), 1, (1, 0, 0)),
+        ("c2_mod_by_zero", Int, lambda a, b, c: (a % b) + c, (5, 0, 1), 1, (0, 0, 1)),
+        ("c3_hex_mod_by_zero", Word, lambda a, b, c: a % b, (5, 0, 0), 0, (0, 0, 1)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "kind", "make", "values", "stored", "flags"),
+        _CLICK_MATH_FLAGS,
+        ids=[case[0] for case in _CLICK_MATH_FLAGS],
+    )
+    def test_click_math_flags_on_every_backend(
+        self, monkeypatch, label, kind, make, values, stored, flags
+    ):
+        a, b, c = (kind(name, default=value) for name, value in zip("ABC", values, strict=True))
+        dest = kind("Dest", default=99)
+        with Program(strict=False) as prog:
+            with rung():
+                math(make(a, b, c), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         expected = (stored, *(bool(flag) for flag in flags))

@@ -256,9 +256,9 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
     - A hex Math truncates the result of each ``/`` toward zero
       (:func:`~pyrung.core.expression._op_hex_div`).  So ``7h / 2h * 2h`` stores 6h
       (read, 2026-11-26).  A decimal ``/`` keeps the fraction.
-    - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
-      a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
-      Outside a Math they stay Python's.
+    - ``%`` truncates.  A ``%`` by 0 is 0 and sets SC46.  ``0 ^ 0`` is 0 with no
+      flag, and 0 to a negative power is +Inf
+      (:data:`~pyrung.core.expression.CALC_OPS`).  Outside a Math they stay Python's.
     - ``abs()`` of an Int or Dint tag cannot return the bottom of its range.
       ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43.  ``abs(DD1)`` with
       DD1 = -2147483648 does the same.  The rule depends on the operand's type, so it
@@ -331,12 +331,11 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1, a negative base to a fractional
-    power): the function is 0 and the math-operation error flag
+    power, a MOD by 0): the operation is 0 and the math-operation error flag
     (``system.fault.math_operation_error``, CLICK's SC46) is set until the next
     Math clears it, as SC40 is.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
-    hardware does not).  ``0 ** 0`` and a MOD by 0 are 0 and set no flag (into
-    a REAL 0.0).  0 to a negative power is +Inf, so into an INT, DINT or WORD
+    hardware does not).  ``0 ** 0`` is 0 and sets no flag (into a REAL 0.0).  0 to a negative power is +Inf, so into an INT, DINT or WORD
     the formula stores 0 and sets the out-of-range flag.  MOD truncates: the
     result has the dividend's sign.
 

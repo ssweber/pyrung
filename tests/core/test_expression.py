@@ -746,8 +746,7 @@ class TestExpressionEdgeCases:
     def test_calc_form_swaps_in_clicks_mod_and_power(self):
         """Make a Math run CLICK's MOD and ``**``, while the expression keeps Python's.
 
-        CLICK's MOD truncates, and MOD by 0 gives 0 with no flag. 0 ** 0 also gives 0 with no
-        flag.
+        CLICK's MOD truncates, and MOD by 0 gives 0 with SC46. 0 ** 0 gives 0 with no flag.
         """
         from pyrung.core.instruction.calc import calc_form
 
@@ -763,7 +762,7 @@ class TestExpressionEdgeCases:
                 assert calc_form(expr + 5, "decimal").evaluate(ctx) == 5
         finally:
             CALC_FAULTS.reset(token)
-        assert faults == []
+        assert faults == ["fault.math_operation_error"]
 
     def test_expression_with_default_value(self):
         """Expression uses tag's default when not in state."""
