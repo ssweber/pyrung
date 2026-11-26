@@ -125,7 +125,9 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     ("OR", "OR", True),
     ("XOR", "XOR", True),
     (NEGATE_ADDRESS, "*", True),
+    (NEGATE_ADDRESS, "MOD", True),
     (NEGATE_BRACKET, "*", True),
+    (NEGATE_BRACKET, "MOD", True),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
@@ -256,7 +258,7 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     """Return the tree of the Math formula *text*, in the order that a CLICK computes it.
 
     In hex mode (*hex_mode*) a bare number is hex, as CLICK's dialog reads it: ``255`` is
-    0x255. Raise ValueError for text that is not a formula.
+    0x255. Raise ValueError for text that is not a formula, such as ``^`` in hex mode.
 
     Return None unless a CLICK reading has settled the order of every pair of operators in
     each bracket scope. A scope is the whole formula outside brackets, the inside of one
@@ -409,6 +411,9 @@ class _Parser:
         kind, value = token
         if kind == "punct" or (kind == "word" and value in _WORD_OPS):
             if _TIER_OF.get(value) == tier:
+                if value == "^" and self.hex_mode:
+                    # CLICK's dialog refuses it with OBJ-1006 (reading rounds b17 and b18).
+                    raise self._error("CLICK has no '^' in hex mode")
                 return value
         return None
 

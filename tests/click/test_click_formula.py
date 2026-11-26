@@ -234,6 +234,15 @@ def test_click_formula_parse_refuses_what_is_not_a_formula(text: str) -> None:
         parse_click_formula(text)
 
 
+@pytest.mark.parametrize("text", ["DH1 ^ 2h", "DH1 AND DH2 ^ 2h", "( DH1 ^ 2h ) + 1h"])
+def test_click_formula_parse_refuses_a_power_in_hex_mode(text: str) -> None:
+    # CLICK's dialog refuses it (OBJ-1006), so no pair with it needs a reading.
+    with pytest.raises(ValueError, match=r"no '\^' in hex mode"):
+        parse_with_unconfirmed_pairs(text, hex_mode=True)
+    # The same formula reads in decimal mode.
+    parse_with_unconfirmed_pairs(text.replace("h", ""))
+
+
 _MINUS_SIGNS = {
     NEGATE_ADDRESS,
     NEGATE_BRACKET,
@@ -321,7 +330,7 @@ _DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] =
     True: (("Word", Word, Word, _HEX_GRID),),
 }
 
-#: The binary operators of each mode.
+#: The binary operators of each mode. CLICK has no ``^`` in hex mode.
 _MODE_OPERATORS = {
     False: ("+", "-", "*", "/", "^", "MOD"),
     True: ("+", "-", "*", "/", "MOD", "AND", "OR", "XOR"),
@@ -437,10 +446,8 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
         # Two operators that do not meet still count.
         ("DS1 / DS2 + DS3 MOD DS4", False, [("/", "MOD")]),
         ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
-        # Both groupings give the same value, but no reading shows what a hex division or MOD
-        # by zero does inside a formula (math_order/hex_by_zero).
+        # No reading shows a hex division of a negative value whose quotient has a fraction.
         ("- DH1 / DH2", True, [(NEGATE_ADDRESS, "/")]),
-        ("- DH1 MOD DH2", True, [(NEGATE_ADDRESS, "MOD")]),
         ("- ( DH1 ) / DH2", True, [(NEGATE_BRACKET, "/")]),
         # A minus sign pairs with each operator to its right.
         ("- ( DS1 ) * DS2 - DS3", False, [(NEGATE_BRACKET, "-")]),
@@ -510,6 +517,8 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("DH1 + DH2 - DH3", True),
         ("DH1 * DH2 * DH3", True),
         ("- DH1 * DH2", True),
+        ("- DH1 MOD DH2", True),
+        ("- ( DH1 ) MOD DH2", True),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(

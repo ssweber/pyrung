@@ -26,12 +26,12 @@ pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
 No probe asks about a minus sign before ``/`` or MOD. Both orders give the same value in
 pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them apart.
-``formula.SAME_VALUE_PAIRS`` holds them in decimal mode. In hex mode they wait on what a
-division or MOD by zero does inside a formula.
+``formula.SAME_VALUE_PAIRS`` holds them.
 
 The ``WIDTHS`` cases each bracket their formulas, so the order is fixed and only one step is
-read. ``width_int`` and ``width_word`` run formulas that a CLICK was read running on
-2026-11-26 (reading round b17, cases b1 to b4, b1x and b2x), and expect the values read then.
+read. They run formulas that a CLICK was read running on 2026-11-26, and expect the values read
+then. ``width_int`` and ``width_word`` run reading round b17's cases b1 to b4, b1x and b2x.
+``hex_by_zero`` runs reading round b18's cases d1 and d2.
 A CLICK keeps each intermediate whole and raises SC43 only for the value that it stores.
 
 - ``width_int``: ``( DS 32767 + DS 1 ) - DS 1`` (Result1) and ``( DS 300 * DS 300 ) / DS 400``
@@ -42,11 +42,11 @@ A CLICK keeps each intermediate whole and raises SC43 only for the value that it
 - ``width_word``: ``( DH FFFFh + DH 1h ) - DH 1h`` (Result1, FFFFh reads -1) and
   ``( DH 0h - DH 1h ) + DH 1h`` (Result2). A Word that saturates reads FFFEh and 1h. ErrorCode
   adds 1 and 2 for SC43 after each.
-- ``hex_by_zero`` (probe): into DHs preset to 99h, ``( DH 5h / DH 0h ) + DH 1h`` (Result1) and
-  ``( DH 5h MOD DH 0h ) + DH 1h`` (Result2). pyrung reads 1h and 1h. If the whole formula is
-  0, each reads 0h. If the write is skipped, each reads 99h. ErrorCode adds 1 and 2 for SC40
-  after each, and pyrung reads 1. b17 read a lone ``DH 5h MOD DH 0h`` as 0h with SC46, so the
-  case leaves that formula out. It does not read SC46, which pyrung does not raise yet.
+- ``hex_by_zero``: into DHs preset to 99h, ``( DH 5h / DH 0h ) + DH 1h`` (Result1) and
+  ``( DH 5h MOD DH 0h ) + DH 1h`` (Result2). Each stores 1h. If the whole formula were 0, each
+  would read 0h. If the write were skipped, each would read 99h. ErrorCode adds 1 and 2 for
+  SC40 after each, and reads 1. The MOD raises SC46 on a CLICK. The case does not read SC46,
+  which pyrung does not raise yet.
 
 CLICK's dialog refused ``5 - - DS1``, so it may refuse ``negneg_power`` too. The case then
 never runs on the PLC.
@@ -349,8 +349,6 @@ WIDTHS = [
         init=init_hex_by_zero,
         id="hex_by_zero",
         expect={"Result1": 1, "Result2": 1, "ErrorCode": 1},
-        probe="what a hex division or MOD by zero inside a formula stores, and whether the "
-        "division raises SC40",
     ),
 ]
 

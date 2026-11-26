@@ -72,8 +72,6 @@ def click_result(
     *dest* is ``Int``, ``Dint``, ``Real`` or ``Word``. Raise :class:`Unread` at each step that
     no reading shows. These steps are:
 
-    - a hex division or MOD by zero inside a longer formula (the probe
-      ``math_order/hex_by_zero`` asks about it)
     - a hex AND, OR or XOR of a value above FFFFh or below -FFFFh
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
       a negative divisor
@@ -95,13 +93,11 @@ class _Guard:
         self.dest = dest
         self.flags: set[str] = set()
 
-    def by_zero(self, op: str, outermost: bool) -> float:
+    def by_zero(self, op: str) -> float:
         # A division or MOD by zero is 0, and the rest of the formula runs. The division raises
-        # SC40 (b17 c1, ``math_terms/error_terms``, ``hex_math/rotates_and_bits``). The MOD
-        # raises SC46 (b17 c2 and c3). A hex division or MOD by zero was read only as the
-        # whole formula.
-        if self.hex_mode and not outermost:
-            raise Unread(f"hex {op} by zero inside a formula")
+        # SC40 (b17 c1, b18 d1 and d3, ``math_terms/error_terms``, ``hex_math/rotates_and_bits``).
+        # The MOD raises SC46 (b17 c2 and c3, b18 d2). b18 d1 and d2 read each in hex mode
+        # inside a longer formula.
         self.flags.add("division_error" if op == "/" else "math_operation_error")
         return 0
 
@@ -134,7 +130,8 @@ class _Guard:
                 value = math.copysign(math.inf, value)
             return value, frozenset(self.flags)
         # The store truncates and wraps, with SC43 (``numeric/real_to_int_truncates``,
-        # ``faults/math_store_out_of_range``, ``hex_math/shifts``).
+        # ``faults/math_store_out_of_range``, ``hex_math/shifts``). A hex result of 10000h
+        # stores 0h with SC43 (b18 d5x).
         whole = int(value)
         low, high = _RANGES[self.dest]
         if not low <= whole <= high:
@@ -175,7 +172,7 @@ def _value(
         a = _value(node.left, hex_mode, registers, guard, False)
         b = _value(node.right, hex_mode, registers, guard, False)
         if guard is not None and node.op in ("/", "MOD") and b == 0:
-            return guard.by_zero(node.op, outermost)
+            return guard.by_zero(node.op)
         result = _step(node.op, a, b, hex_mode, guard)
     if guard is not None and not outermost:
         guard.intermediate(result)
@@ -194,7 +191,8 @@ def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> 
             "/": lambda: _truncated(x, y),
             "MOD": lambda: x - y * _truncated(x, y),
             # AND, OR and XOR return 16 unsigned bits, so a negative operand gives no SC43
-            # (b17 a8 to a11).
+            # (b17 a8 to a11). The next step reads those bits as unsigned, so ( 0h - 1h ) OR 0h
+            # is FFFFh there (b18 d5, d5x and d6).
             "AND": lambda: (x & y) & 0xFFFF,
             "OR": lambda: (x | y) & 0xFFFF,
             "XOR": lambda: (x ^ y) & 0xFFFF,
@@ -215,8 +213,9 @@ def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> 
 
 def _check_hex_step(op: str, x: int, y: int) -> None:
     """Raise :class:`Unread` for a hex step whose operands no reading shows."""
-    # The readings show AND, OR and XOR of -2 and -3 (b17 a8 to a11, b14). The model takes any
-    # operand from -FFFFh to FFFFh by its low 16 bits, and leaves a wider one unread.
+    # The readings show AND, OR and XOR of -1, -2 and -3 (b17 a8 to a11, b14, b18 d5, d5x and
+    # d6). The model takes any operand from -FFFFh to FFFFh by its low 16 bits, and leaves a
+    # wider one unread.
     if op in ("AND", "OR", "XOR") and not (-0xFFFF <= x <= 0xFFFF and -0xFFFF <= y <= 0xFFFF):
         raise Unread(f"hex {x} {op} {y}")
     # A negative dividend was read in MOD (b17 a7, b15 m1b) and in an exact ``/`` (b17 a6).
