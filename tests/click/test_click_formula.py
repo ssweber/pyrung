@@ -1172,13 +1172,6 @@ def _program(readings):
     return ns["logic"], ns["mapping"], formulas, [ns[dest] for dest in dests]
 
 
-#: Readings whose value pyrung's ``math()`` does not give yet. A hex ``/`` in pyrung keeps the
-#: fraction until the store, so ``7h / 2h * 2h`` gives 7h. A CLICK drops the fraction at each
-#: ``/`` and gives 6h. Remove each case here in the commit that makes pyrung give the PLC's
-#: value.
-PENDING_HEX_MATH = {"b15-t1", "b15-t2"}
-
-
 def _close(got: Any, want: float) -> bool:
     return math.isclose(float(got), want, abs_tol=1e-9)
 
@@ -1203,7 +1196,7 @@ def test_imported_formula_gives_the_plc_value_on_every_backend(confirmed, monkey
             for reading, got in zip(READINGS, values, strict=True)
             if not _close(got, reading[4])
         }
-        assert wrong == PENDING_HEX_MATH, backend
+        assert not wrong, backend
 
 
 def test_imported_formula_exports_what_click_reads_the_same(confirmed) -> None:
@@ -1228,7 +1221,7 @@ def test_imported_formula_exports_what_click_reads_the_same(confirmed) -> None:
         for reading, dest in zip(READINGS, dests, strict=True)
         if not _close(tags[dest.name], reading[4])
     }
-    assert wrong == PENDING_HEX_MATH
+    assert not wrong
 
 
 def test_imported_formula_with_an_unconfirmed_pair_imports_with_a_warning() -> None:

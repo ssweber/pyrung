@@ -47,8 +47,8 @@ intermediate value to the destination's size. It raises SC43 only for the value 
 - ``hex_by_zero``: into DHs preset to 99h, ``( DH 5h / DH 0h ) + DH 1h`` (Result1) and
   ``( DH 5h MOD DH 0h ) + DH 1h`` (Result2). Each stores 1h. If the whole formula were 0, each
   would read 0h. If the write were skipped, each would read 99h. ErrorCode adds 1 and 2 for
-  SC40 after each, and reads 1. The MOD raises SC46 on a CLICK. The case does not read SC46,
-  which pyrung does not raise yet.
+  SC40 after each, and reads 1. The MOD raises SC46 instead, on a CLICK and in pyrung. This
+  case does not read SC46. ``math_flags/hex_by_zero_goes_on`` reads it.
 
 The ``doubles`` case is a probe. It types its formulas without brackets, as the order cases
 do, and expects what pyrung gives.
