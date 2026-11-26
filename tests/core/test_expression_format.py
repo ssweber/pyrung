@@ -168,7 +168,7 @@ class TestSignBeforePower:
         assert format_expr((-a) * 2) == "-A * 2"
 
     def test_text_reads_back_to_the_same_value(self):
-        """Python computes each text to the value that the expression stores."""
+        """Python evaluates each text to the value of its expression."""
         for expr, text in [
             (LiteralExpr(-2) ** 2, "(-2) ** 2"),
             (LiteralExpr(-2) ** LiteralExpr(3), "(-2) ** 3"),

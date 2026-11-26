@@ -66,7 +66,6 @@
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
   - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `DF1 + DF2 + DF3` or `DS1 / DS2 MOD 3`. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. It stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
-- `math(LiteralExpr(-2) ** 2, DS1)` now stores 4 in every runtime (a long `run_for()`, `CompiledPLC` and generated CircuitPython code stored -4). A rung condition such as `LiteralExpr(-2) ** 2 == 4` is now true in every runtime.
 
 ## v0.18.1 (2026-11-25)
 
