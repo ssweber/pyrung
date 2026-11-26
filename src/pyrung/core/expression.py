@@ -657,7 +657,8 @@ class MathDomainError(ValueError):
     Examples are ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative,
     ``asin``/``acos`` outside -1..1, and a MOD by 0. ``math()`` turns it into CLICK's
     math-operation error (SC46). The operation is 0 and the formula carries on
-    (``SQRT(-4.0) + 5`` is 5). The flag stays on until the next Math clears it, and the PLC stays in RUN.
+    (``SQRT(-4.0) + 5`` is 5). The flag stays on until the next Math clears it, and
+    the PLC stays in RUN.
     """
 
 

@@ -343,8 +343,9 @@ class CalcInstruction(OneShotMixin, Instruction):
     (``system.fault.math_operation_error``, CLICK's SC46) is set until the next
     Math clears it, as SC40 is.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
-    hardware does not).  ``0 ** 0`` is 0 and sets no flag (into a REAL 0.0).  0 to a negative power is +Inf, so into an INT, DINT or WORD
-    the formula stores 0 and sets the out-of-range flag.  MOD truncates: the
+    hardware does not).  ``0 ** 0`` is 0 and sets no flag (into a REAL 0.0).
+    0 to a negative power is +Inf, so into an INT, DINT or WORD the formula
+    stores 0 and sets the out-of-range flag.  MOD truncates: the
     result has the dividend's sign.
 
     **Constants:** a decimal Math keeps each integer constant whole, as a CLICK

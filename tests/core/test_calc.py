@@ -285,7 +285,7 @@ class TestCutIntConstants:
         assert (decimal_whole.ucut_tag.min, decimal_whole.ucut_tag.max) == (4464, 4466)
         hex_calc = CalcInstruction(decimal_whole | Word("Mask"), Word("W"))
         assert hex_calc.mode == "hex"
-        # A hex OR keeps 16 bits, so its node sits inside an ``& 0xFFFF``.
+        # calc_form wraps a hex OR in ``& 0xFFFF``.
         assert hex_calc.expression.right.value == 0xFFFF
         assert hex_calc.expression.left.left.tag.name == decimal_whole.ucut_tag.name
 

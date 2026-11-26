@@ -2,11 +2,11 @@
 
 Read on a CLICK (2026-11-06, conformance ``math_terms``): ``7 / 0 + 5`` and
 ``(7 / 0 + 1) * 5`` are 5 with SC40, ``SQRT(-4.0) + 5`` is 5 with SC46, into a DF
-too (5.0).  ``0 ^ 0``, which sets no flag, MOD by 0 and ABS of a type's bottom follow
-the same model (2026-11-10, ``term_zero``), and ``0 ^ -1`` is +Inf.  MOD by 0 sets SC46
-(2026-11-26).  Every engine must agree: the
-interpreted runtime, the compiled kernel (legacy and blockless) and the generated
-CircuitPython code, and the prover must see the rest of the formula live.
+too (5.0).  ``0 ^ 0``, MOD by 0 and ABS of a type's bottom follow the same model
+(2026-11-10, ``term_zero``).  ``0 ^ 0`` sets no flag, and MOD by 0 sets SC46
+(2026-11-26).  ``0 ^ -1`` is +Inf.  Every engine must agree: the interpreted runtime,
+the compiled kernel (legacy and blockless) and the generated CircuitPython code.  The
+prover must see the rest of the formula live.
 """
 
 from __future__ import annotations
