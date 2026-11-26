@@ -396,7 +396,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
     ],
     # A Math's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets SC46 in a Math.
     "_mod": [
-        "def _mod(a, b, flags=None):",
+        "def _mod(a, b, flags):",
         "    if b == 0:",
         "        return _term_fail(flags, 46)",
         "    r = abs(a) % abs(b)",
