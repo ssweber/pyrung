@@ -360,8 +360,17 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 #   both signs (_REAL_GRID). The model reads each as a double.
 # - A DF at -0.0 (_REAL_GRID). The model reads it as a double. A DF holds -0.0 from
 #   0.0 * -1.0 (``real_bits/minus_zero_math``).
-# - A minus sign before 0, from any of these. No reading shows the sign of the 0 it gives, so
+# - A minus sign before any operand that is 0. No reading shows the sign of the 0 it gives, so
 #   the model leaves it unread.
+# - -0.0 that a step makes. -1.0 * DF and DF / -1.0 keep the sign, and DF - DF gives +0.0
+#   (``real_bits/minus_zero_shapes``). No reading shows the sign that ^, MOD, SQRT or + of two
+#   -0.0 gives. The model computes each as a double does.
+# - A division or MOD by zero. The model gives 0 with SC40 or SC46. No reading shows the sign
+#   of that 0, so the model leaves a dividend with its sign bit set unread.
+# - SQRT of a negative (the stand-in SQRT ( DS4 ) at -1). The model gives 0 with SC46, and
+#   the rest of the formula runs (``math_terms/error_terms``). Both groupings raise the flag.
+# - A pointer. A Copy through one past its bank raises SC44 (``faults/pointer_past_bank``), and
+#   no reading shows one in a Math. The model leaves each pointer unread.
 # - Reals that cancel: 1.0 with 1.0E+17 and 1.0E+30, with both signs (_REAL_GRID). The model
 #   reads them in doubles, and a double drops the 1.0 from 1.0 + 1.0E+17.
 # - A DF at Inf, -Inf or NaN (_REAL_GRID). The model leaves each step on one unread.
@@ -385,10 +394,12 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 # - A longer formula below 0, down to -FFFFh (the difference). The model reads it in each step
 #   but three. It leaves unread a ``/`` whose quotient has a fraction, a MOD by it, and an AND,
 #   OR or XOR of one below -FFFFh.
+# - A longer formula below -FFFFh, down to -40000000h (the stand-in ( 0h - DH4 ) * DH5). The
+#   model reads it as it reads one above -FFFFh. It also leaves a value below -FDA93880h unread.
 # - Every hex step works in whole numbers, so no hex value is a fraction, -0, Inf or NaN.
 #
-# A function, PI or a pointer gives a value from one of these classes. The model reads SQRT
-# only, and in decimal mode only.
+# A function, PI or a pointer gives a value from one of these classes, or an error that raises
+# the same flag in both groupings. The model reads SQRT only, and in decimal mode only.
 
 #: The whole numbers reach the ends of the Int and Dint ranges. 164999119 * 114975250 * 58
 #: passes 2^53, so a double rounds its product, and the two groupings round it to different
@@ -482,6 +493,7 @@ _STAND_INS: dict[bool, tuple[tuple[str, _StandInValues], ...]] = {
         ("( {bank}4 ^ {bank}5 )", {Dint: ((10, 300), (10, -300)), Real: ((10, 300), (10, -300))}),
         ("0.1", {Dint: ((),), Real: ((),)}),
         ("2147483647", {Dint: ((),), Real: ((),)}),
+        ("SQRT ( {bank}4 )", {Dint: ((-1,), (4,)), Real: ((-1.0,), (2.25,))}),
     ),
     True: (
         (
@@ -496,6 +508,7 @@ _STAND_INS: dict[bool, tuple[tuple[str, _StandInValues], ...]] = {
             },
         ),
         ("( {bank}4 - {bank}5 )", {Word: ((0, 1), (0, 0xFFFF))}),
+        ("( ( 0h - {bank}4 ) * {bank}5 )", {Word: ((0x8000, 0x8000), (0x100, 0x100))}),
         ("FFFFh", {Word: ((),)}),
     ),
 }
@@ -588,14 +601,17 @@ class _PyrungRun:
         return context.get_tag("Dest")
 
 
-def _same_bits(first: tuple[float, frozenset[str]], second: tuple[float, frozenset[str]]) -> bool:
-    """Return whether two values and their flags, before the store, are the same bit for bit."""
-    (a, a_flags), (b, b_flags) = first, second
-    if a_flags != b_flags:
-        return False
+def _same_value(a: float, b: float) -> bool:
+    """Return whether two values are the same bit for bit, so that -0.0 differs from 0.0."""
     if isinstance(a, int) and isinstance(b, int):
         return a == b
     return struct.pack("<d", a) == struct.pack("<d", b)
+
+
+def _same_bits(first: tuple[float, frozenset[str]], second: tuple[float, frozenset[str]]) -> bool:
+    """Return whether two values and their flags are the same bit for bit."""
+    (a, a_flags), (b, b_flags) = first, second
+    return a_flags == b_flags and _same_value(a, b)
 
 
 def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
@@ -649,14 +665,16 @@ def _how_one_formula_differs(
                 click = None if _same_bits(*steps) else [click_store(*s, dest) for s in steps]
             except Unread as unread:
                 return f"no reading shows {unread} {where}"
-            if click is not None and click[0] != click[1]:
+            if click is not None and not _same_bits(*click):
                 return f"the model of a CLICK stores {click} {where}"
             if not runs:
                 runs = [
                     _PyrungRun(t, bank, indexes, operand_type, dest_type) for t in (tree, regrouped)
                 ]
             pyrung = [run(context, values) for run in runs]
-            if pyrung[0] != pyrung[1] or (click is not None and pyrung[0] != click[0][0]):
+            if not _same_value(*pyrung) or (
+                click is not None and not _same_value(pyrung[0], click[0][0])
+            ):
                 stored = "" if click is None else f", a CLICK {click[0][0]}"
                 return f"pyrung stores {pyrung} {where}{stored}"
     return None

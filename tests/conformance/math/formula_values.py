@@ -25,6 +25,7 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
+    Pointer,
     RangeCall,
     operator_kind,
 )
@@ -105,10 +106,12 @@ def click_steps(
       a negative divisor
     - a decimal step on Inf or NaN, which a DF can hold
     - a decimal minus sign before 0
+    - a decimal division or MOD by zero of a value whose sign bit is set
     - a decimal step whose value passes the largest double or falls below the smallest
       normal double
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
+    - a pointer
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -154,11 +157,14 @@ class _Guard:
         self.hex_mode = hex_mode
         self.flags: set[str] = set()
 
-    def by_zero(self, op: str) -> float:
+    def by_zero(self, op: str, dividend: float) -> float:
         # A division or MOD by zero is 0, and the rest of the formula runs. The division raises
         # SC40 (b17 c1, b18 d1 and d3, ``math_terms/error_terms``, ``hex_math/rotates_and_bits``).
         # The MOD raises SC46 (b17 c2 and c3, b18 d2). b18 d1 and d2 read each in hex mode
-        # inside a longer formula.
+        # inside a longer formula. No reading shows the sign of that 0. A minus sign before the
+        # dividend could flip it, so the model leaves a dividend with its sign bit set unread.
+        if not self.hex_mode and math.copysign(1.0, dividend) < 0:
+            raise Unread(f"a {op} by zero of {dividend}")
         self.flags.add("division_error" if op == "/" else "math_operation_error")
         return 0
 
@@ -186,6 +192,7 @@ class _Guard:
     def negate(self, value: float) -> None:
         # A DF holds -0.0 (``real_bits/minus_zero_math``), but no reading shows the sign of the
         # 0 that a minus sign gives. Flipping the sign bit gives -0.0, and 0 - x gives +0.0.
+        # This also leaves unread a minus sign before the 0 of a division or MOD by zero.
         if not self.hex_mode and value == 0:
             raise Unread("a minus sign before 0")
 
@@ -217,6 +224,12 @@ def _value(
     if isinstance(node, Address):
         value = registers[f"{node.bank}{node.index}"]
         return value & 0xFFFF if hex_mode else float(value)
+    if isinstance(node, Pointer):
+        # A Copy through a pointer past its bank raises SC44 (``faults/pointer_past_bank``). No
+        # reading shows a pointer in a Math.
+        if guard is None:
+            raise AssertionError("no model of a pointer")
+        raise Unread("a pointer in a formula")
     if isinstance(node, RangeCall):
         if guard is None:
             raise AssertionError(f"no model of {node.name}")
@@ -241,7 +254,7 @@ def _value(
         return _step(node.op, a, b, hex_mode, guard)
     guard.operands(a, b)
     if node.op in ("/", "MOD") and b == 0:
-        return guard.by_zero(node.op)
+        return guard.by_zero(node.op, a)
     result = _step(node.op, a, b, hex_mode, guard)
     guard.result(node.op, a, b, result)
     return result

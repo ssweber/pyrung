@@ -1,58 +1,79 @@
 """Check what a Math formula does with values that the readings of a CLICK have not shown
-inside a formula. This is the ``math_range`` group, in part ``follow5_reads``. Both cases are
-probes, and each expects what pyrung gives.
+inside a formula. This is the ``math_range`` group, in part ``follow5_reads``. Each case is a
+probe, and each expects what pyrung gives.
 
 ``double_overflow`` asks what a CLICK does with a step past the largest double, or below the
 smallest normal one. A CLICK computes a formula's steps in doubles
-(``faults/real_intermediate_range``). 10 ^ 300 is inside a double, and 10 ^ 300 * 1.0E+30
-passes the largest one. A CLICK might carry Inf to the store, hold the step at the largest
-double, set the step to 0 as it does a division by zero, or skip the write. Each destination
-is a DF preset to 99.0, so a skipped write reads 99.0. pyrung carries Inf.
+(``math_more/abs_and_precision``). 10 ^ 300 is inside a double, and 10 ^ 300 * 1.0E+30 passes
+the largest one. A CLICK might carry Inf to the store, hold the step at the largest double,
+set the step to 0 as it does a division by zero, or skip the write. Each destination is a DF
+preset to 99.0, so a skipped write reads 99.0. pyrung carries Inf.
 
-- Result1 classes ``( DF 10 ^ DF 300 ) * DF 1.0E+30 + DF 5``. It is 1 for Inf or a value
-  from 3.0E+38 up, 2 for 5.0 (the step set to 0) and 3 for 99.0.
-- Result2 classes ``( DF 10 ^ DF 300 ) * DF 1.0E+30`` the same way. It is 1 from 3.0E+38 up,
-  2 for 0.0 and 3 for 99.0.
-- Result3 classes ``( DF 10 ^ DF 300 ) * DF 1.0E+30 / ( DF 10 ^ DF 300 )``. It is 1 from
-  3.0E+38 up (Inf carried), and 2 for 1.7E+8 to 1.9E+8 (the step held at the largest double,
-  about 1.8E+308). It is 3 for 0.0 and 4 for 99.0.
+- Result1 shows what ``( DF 10 ^ DF 300 ) * DF 1.0E+30 + DF 5`` stored. It is 1 for Inf or a
+  value from 3.0E+38 up, 2 for 5.0 (the step set to 0) and 3 for 99.0 (the write skipped).
+- Result2 shows what ``( DF 10 ^ DF 300 ) * DF 1.0E+30`` stored. It is 1 from 3.0E+38 up, 2
+  for 0.0 and 3 for 99.0.
+- Result3 shows what ``( DF 10 ^ DF 300 ) * DF 1.0E+30 / ( DF 10 ^ DF 300 )`` stored. It is 1
+  from 3.0E+38 up (Inf carried), and 2 for 1.7E+8 to 1.9E+8 (the step held at the largest
+  double, about 1.8E+308). It is 3 for 0.0 and 4 for 99.0.
 - Result4 is 1 when ``( DF 10 ^ DF 300 ) / ( DF 10 ^ DF 299 )`` is about 10. That shows a
   CLICK computes 10 ^ 300 in a double.
 - ErrorCode adds 1 for SC43 after the first formula, and 2 after the second.
-- Scratch classes ``( DF 10 ^ DF -300 ) / DF 1.0E+10 * DF 1.0E+10 * ( DF 10 ^ DF 300 )``.
-  The division gives about 1.0E-310, which is below the smallest normal double. It is 1 for
-  0.99 to 1.01, which a CPU gives when it keeps such a value. It is 2 for 0.0, which a CPU
-  gives when it sets such a value to 0.
+- Scratch shows what ``( DF 10 ^ DF -300 ) / DF 1.0E+10 * DF 1.0E+10 * ( DF 10 ^ DF 300 )``
+  stored. The division gives about 1.0E-310, which is below the smallest normal double. It
+  is 1 for 0.99 to 1.01, which a CPU gives when it keeps such a value. It is 2 for 0.0, which
+  a CPU gives when it sets such a value to 0.
 
-``minus_sign`` asks what a minus sign gives before Inf, NaN and 0. It types each formula
-without brackets (``formulas=``). It stages Inf as 3.0E+38 * 10 and NaN as Inf - Inf, as
-``faults/inf_and_nan_arithmetic`` does. Copy Binary moves the bits of each 0 into a DD, and
-a DD below 0 shows the sign bit. A minus sign might flip the sign bit, which gives -0.0
-before 0.0. It might compute 0 - x instead, which gives +0.0.
+``minus_sign`` and ``by_zero`` ask about the sign of a zero, and about Inf and NaN. Each
+types its formulas without brackets (``formulas=``). Copy Binary moves the bits of each zero
+into a DD, and a DD below 0 shows the sign bit. Each field adds 1 for its first zero with the
+sign bit set, 2 for the second and 4 for the third.
 
-- Result1 is 1 when ``- DF Inf * DF 2`` and ``- DF Inf / DF 2`` are both -Inf.
-- Result2 adds 1 for the sign of ``- DF 0.0`` and 2 for ``- DF 0.0 * DF -5.0``.
-- Result3 adds 1 for the sign of ``- DF 0.0 / DF -5.0`` and 2 for ``- DF 5.0 MOD DF 5.0``.
-- ErrorCode adds 1 for the sign of ``- DS 0`` into a DF and 2 for ``- DS 0 * DS -5`` into
-  a DF.
-- Result4 is 1 when ``- DF NaN * DF 2``, ``- DF NaN / DF 2``, ``- DF Inf * DF 0.0`` and
+``minus_sign`` stages Inf as 3.0E+38 * 10 and NaN as Inf - Inf, as
+``faults/inf_and_nan_arithmetic`` does. A minus sign might flip the sign bit, which gives
+-0.0 before 0.0. It might compute 0 - x instead, which gives +0.0.
+
+- Result1 adds 1 when ``- DF Inf * DF 2`` and ``- DF Inf / DF 2`` are both -Inf. It adds 2
+  when ``- DF NaN * DF 2``, ``- DF NaN / DF 2``, ``- DF Inf * DF 0.0`` and
   ``- DF Inf / DF Inf`` are all NaN.
+- Result2 holds the signs of ``- DF 0.0``, ``- DF 0.0 * DF -5.0`` and ``- DF 0.0 / DF -5.0``.
+- Result3 holds the signs of ``- DF 5.0 MOD DF 5.0`` and ``DF -5.0 MOD DF 5.0``.
+- ErrorCode holds the signs of ``- DS 0``, ``- DS 0 * DS -5`` and ``DS 0 * DS -5``, each
+  stored in a DF.
 
-pyrung flips the sign of a Real and negates a whole number exactly. It reads Result1 = 1,
-Result2 = 1, Result3 = 2, ErrorCode = 0 and Result4 = 1.
+pyrung flips the sign of a Real. A minus sign before a DS of 0 gives the whole number 0,
+which stores +0.0. pyrung reads Result1 = 3, Result2 = 1, Result3 = 3 and ErrorCode = 0.
+
+``by_zero`` asks which sign the 0 of a division or MOD by zero takes. It stages -0.0 as
+0.0 * -1.0 (``real_bits/minus_zero_math``).
+
+- Result1 holds the signs of ``DF 5.0 / DF 0.0``, ``DF -5.0 / DF 0.0`` and
+  ``- DF 5.0 / DF 0.0``.
+- Result2 holds the signs of ``DF 0.0 / DF 0.0`` and ``DF -0.0 / DF 0.0``.
+- Result3 and Result4 hold the same for MOD.
+- Scratch holds the sign of the staged -0.0.
+
+pyrung gives +0.0 for each division and MOD by zero. It reads 0 in Result1 to Result4, and
+Scratch = 1.
 
 What the readings settle for the pairs of a minus sign with ``*``, ``/`` and MOD:
 
 - No value of Inf or NaN tells the two orders apart. A CLICK's Math stores one NaN, whatever
   its sign (``real_bits/non_finite_raw_bits``), and a minus sign before Inf gives -Inf in
-  either order. If Result1 and Result4 read 1, the model of a CLICK (``formula_values.py``)
-  can read a step on Inf or NaN.
-- If Result2 bit 1 and ErrorCode bit 1 are set, a minus sign flips the sign of every 0, and
-  both orders give the same 0. The model can then read a minus sign before 0, and the pairs
-  over DS and DD registers can join ``formula.SAME_VALUE_ON_PLAIN_OPERANDS``.
+  either order. If Result1 of ``minus_sign`` reads 3, the model of a CLICK
+  (``formula_values.py``) can read a step on Inf or NaN.
 - If a minus sign computes 0 - x, the orders differ. A CLICK that applies the minus sign
-  first sets Result2 bit 2, Result3 bit 1 and ErrorCode bit 2. Applied last, it sets none of
-  them. That reading settles the pairs in ``formula.CONFIRMED_PAIRS``.
+  first sets ``minus_sign`` Result2 bits 2 and 4 and ErrorCode bit 2. Applied last, it sets
+  none of them. That reading settles the pairs in ``formula.CONFIRMED_PAIRS``.
+- If a minus sign flips the sign bit, ``minus_sign`` Result2 bit 1 and ErrorCode bit 1 are
+  set. Then both orders give the same bits for ``*``, and for ``/`` by a value other than 0.
+  MOD by a value other than 0 also needs a MOD of a negative exact multiple to give -0.0.
+  Result3 then reads 3.
+- With a flip, a ``/`` by zero gives the same bits in both orders only when its 0 has the
+  dividend's sign. That needs ``by_zero`` Result1 to read 6 and Result2 to read 2. MOD by
+  zero needs Result3 to read 6 and Result4 to read 2. The model can then read the 0 of a
+  division by zero, and the pairs over DS and DD registers can join
+  ``formula.SAME_VALUE_ON_PLAIN_OPERANDS``.
 - The pairs over a DF also need ``double_overflow``. Its Result3 must read 1 or 2, and its
   Scratch 1 or 2. With 2, the model must also say which sign the 0 keeps.
 
@@ -64,7 +85,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import copy, fill, math, rung, system, to_binary
+from pyrung.core import And, Or, copy, fill, math, rung, system, to_binary
 from tests.conformance.memory import dd, df, ds
 from tests.conformance.probe_kit import finish, flag_bit, once
 
@@ -127,69 +148,143 @@ MINUS_FORMULAS = (
     "DF190 - DF190",
     "- DF190 * DF192",
     "- DF190 / DF192",
-    "- DF193",
-    "- DF193 * DF194",
-    "- DF193 / DF194",
-    "- DF195 MOD DF195",
-    "- DS4471",
-    "- DS4471 * DS4472",
     "- DF191 * DF192",
     "- DF191 / DF192",
     "- DF190 * DF193",
     "- DF190 / DF190",
+    "- DF193",
+    "- DF193 * DF194",
+    "- DF193 / DF194",
+    "- DF195 MOD DF195",
+    "DF194 MOD DF195",
+    "- DS4471",
+    "- DS4471 * DS4472",
+    "DS4471 * DS4472",
 )
+
+
+def _bits(slot: Any, into: Any, *checks: tuple[Any, Any]) -> None:
+    """Set *into* to the sum of ``1 << n`` over each check n that holds.
+
+    Each check holds two conditions. The first holds when the check passes, and the second when
+    it fails. Adding a bit would need a Math, and each Math of the case must be one of its typed
+    formulas. So each sum gets a rung of its own.
+    """
+    for total in range(1, 1 << len(checks)):
+        conditions = [check[0 if total >> n & 1 else 1] for n, check in enumerate(checks)]
+        with rung(*once(slot), *conditions):
+            copy(total, into)
+
+
+def _signs(slot: Any, values: list[Any], first_dd: int) -> list[tuple[Any, Any]]:
+    """Copy the bits of each of *values* into a DD from *first_dd* on, for :func:`_bits`.
+
+    Return a check for each value that holds when its sign bit is set.
+    """
+    with rung(*once(slot)):
+        for n, value in enumerate(values):
+            copy(value, dd[first_dd + n], convert=to_binary)
+    return [(dd[first_dd + n] < 0, dd[first_dd + n] >= 0) for n in range(len(values))]
 
 
 def prove_minus_sign(slot: Any) -> None:
     big, ten, inf, nan, two, zero, minus_five, five = (df[n] for n in range(188, 196))
-    signs = (df[198], df[199], df[200], df[201], df[202], df[203])
-    nans = (df[204], df[205], df[206], df[207])
+    infs, nans = (df[196], df[197]), [df[n] for n in range(198, 202)]
+    zeros = [df[n] for n in range(202, 210)]
+    zero_ds, minus_five_ds = ds[4471], ds[4472]
     with rung(*once(slot)):
         math(big * ten, inf)
         math(inf - inf, nan)
-        math(-inf * two, df[196])
-        math(-inf / two, df[197])
-        math(-zero, signs[0])
-        math(-zero * minus_five, signs[1])
-        math(-zero / minus_five, signs[2])
-        math(-five % five, signs[3])
-        math(-ds[4471], signs[4])
-        math(-ds[4471] * ds[4472], signs[5])
+        math(-inf * two, infs[0])
+        math(-inf / two, infs[1])
         math(-nan * two, nans[0])
         math(-nan / two, nans[1])
         math(-inf * zero, nans[2])
         math(-inf / inf, nans[3])
-    with rung(*once(slot)):
-        for n, sign in enumerate(signs):
-            copy(sign, dd[461 + n], convert=to_binary)
-    _reading(slot, slot.Result1, (1, df[196] <= -3.0e38, df[197] <= -3.0e38))
-    # Each field holds the sign bits of two zeros: 1 for the first and 2 for the second.
-    for n, into in enumerate((slot.Result2, slot.Result3, slot.ErrorCode)):
-        first, second = dd[461 + 2 * n], dd[462 + 2 * n]
-        _reading(
-            slot,
-            into,
-            (1, first < 0, second >= 0),
-            (2, first >= 0, second < 0),
-            (3, first < 0, second < 0),
-        )
-    _reading(slot, slot.Result4, (1, *(value != value for value in nans)))
+        math(-zero, zeros[0])
+        math(-zero * minus_five, zeros[1])
+        math(-zero / minus_five, zeros[2])
+        math(-five % five, zeros[3])
+        math(minus_five % five, zeros[4])
+        math(-zero_ds, zeros[5])
+        math(-zero_ds * minus_five_ds, zeros[6])
+        math(zero_ds * minus_five_ds, zeros[7])
+    signs = _signs(slot, zeros, 461)
+    _bits(
+        slot,
+        slot.Result1,
+        (And(*(x <= -3.0e38 for x in infs)), Or(*(x > -3.0e38 for x in infs))),
+        (And(*(x != x for x in nans)), Or(*(x == x for x in nans))),
+    )
+    _bits(slot, slot.Result2, *signs[0:3])
+    _bits(slot, slot.Result3, *signs[3:5])
+    _bits(slot, slot.ErrorCode, *signs[5:8])
     finish(slot)
 
 
 def init_minus_sign(slot: Any) -> None:
     copy(3.0e38, df[188])
     copy(10.0, df[189])
+    copy(0.0, df[190])
+    copy(0.0, df[191])
     copy(2.0, df[192])
     copy(0.0, df[193])
     copy(-5.0, df[194])
     copy(5.0, df[195])
-    copy(0.0, df[190])
-    copy(0.0, df[191])
-    fill(99.0, df.select(196, 207))
-    fill(0, dd.select(461, 466))
+    fill(99.0, df.select(196, 209))
+    fill(0, dd.select(461, 468))
     copy(0, ds[4471])
     copy(-5, ds[4472])
+
+
+#: The formulas of ``by_zero``, one for each ``math()`` in rung order, typed without brackets.
+BY_ZERO_FORMULAS = (
+    "DF212 * DF213",
+    "DF210 / DF212",
+    "DF211 / DF212",
+    "- DF210 / DF212",
+    "DF212 / DF212",
+    "DF214 / DF212",
+    "DF210 MOD DF212",
+    "DF211 MOD DF212",
+    "- DF210 MOD DF212",
+    "DF212 MOD DF212",
+    "DF214 MOD DF212",
+)
+
+
+def prove_by_zero(slot: Any) -> None:
+    five, minus_five, zero, minus_one, minus_zero = (df[n] for n in range(210, 215))
+    zeros = [df[n] for n in range(215, 225)]
+    with rung(*once(slot)):
+        # 0.0 * -1.0 stores -0.0 (``real_bits/minus_zero_math``).
+        math(zero * minus_one, minus_zero)
+        math(five / zero, zeros[0])
+        math(minus_five / zero, zeros[1])
+        math(-five / zero, zeros[2])
+        math(zero / zero, zeros[3])
+        math(minus_zero / zero, zeros[4])
+        math(five % zero, zeros[5])
+        math(minus_five % zero, zeros[6])
+        math(-five % zero, zeros[7])
+        math(zero % zero, zeros[8])
+        math(minus_zero % zero, zeros[9])
+    signs = _signs(slot, [*zeros, minus_zero], 469)
+    _bits(slot, slot.Result1, *signs[0:3])
+    _bits(slot, slot.Result2, *signs[3:5])
+    _bits(slot, slot.Result3, *signs[5:8])
+    _bits(slot, slot.Result4, *signs[8:10])
+    _bits(slot, slot.Scratch, signs[10])
+    finish(slot)
+
+
+def init_by_zero(slot: Any) -> None:
+    copy(5.0, df[210])
+    copy(-5.0, df[211])
+    copy(0.0, df[212])
+    copy(-1.0, df[213])
+    fill(99.0, df.select(214, 224))
+    fill(0, dd.select(469, 479))
 
 
 group = Group(
@@ -217,18 +312,29 @@ group = Group(
             "normal double, inside a formula",
         ),
         case(
-            "pyrung expects a minus sign before Inf to give -Inf. - Inf * 2 and - Inf / 2 "
-            "are -Inf (Result1 = 1). Result2, Result3 and ErrorCode hold the sign bits of the "
-            "zeros that a minus sign makes. pyrung gives -0.0 for - DF 0.0 (Result2 = 1) and "
-            "for - DF 5.0 MOD DF 5.0 (Result3 = 2), and +0.0 for the rest (ErrorCode = 0). "
-            "Each formula on NaN, Inf * 0 and Inf / Inf is NaN (Result4 = 1)",
+            "pyrung expects a minus sign before Inf to give -Inf, and a step on NaN to give NaN "
+            "(Result1 = 3). The other fields hold the sign bits of zeros. pyrung gives -0.0 for "
+            "- DF 0.0 (Result2 = 1), and for - DF 5.0 MOD DF 5.0 and DF -5.0 MOD DF 5.0 "
+            "(Result3 = 3). It computes a DS in whole numbers, so a DS of 0 gives +0.0 with a "
+            "minus sign and in a product (ErrorCode = 0)",
             ladder=prove_minus_sign,
             init=init_minus_sign,
             id="minus_sign",
-            expect={"Result1": 1, "Result2": 1, "Result3": 2, "ErrorCode": 0, "Result4": 1},
+            expect={"Result1": 3, "Result2": 1, "Result3": 3, "ErrorCode": 0},
             formulas=MINUS_FORMULAS,
             probe="what a minus sign gives before 0, Inf and NaN, and which order a CLICK "
             "applies to it with * and /",
+        ),
+        case(
+            "pyrung expects a division or MOD by zero to give +0.0 whatever the dividend. Each "
+            "field holds the sign bits of the zeros, so Result1 to Result4 read 0. 0.0 * -1.0 "
+            "gives -0.0 (Scratch = 1)",
+            ladder=prove_by_zero,
+            init=init_by_zero,
+            id="by_zero",
+            expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 0, "Scratch": 1},
+            formulas=BY_ZERO_FORMULAS,
+            probe="which sign the 0 of a division or MOD by zero takes",
         ),
     ],
 )

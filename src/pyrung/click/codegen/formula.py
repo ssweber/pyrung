@@ -363,9 +363,9 @@ def plain_operands(first: Formula, second: Formula, *, hex_mode: bool) -> bool:
     """Return whether each operand of the steps *first* and *second* is a plain operand.
 
     In hex mode a plain operand is a DH register, or a whole-number constant from 0h to FFFFh.
-    In decimal mode it is a DS or DD register, or a whole-number constant inside a Dint. The
-    other step is plain too. A constant such as 1.5, a DF, PI, a pointer, a function and a
-    longer formula are not plain.
+    In decimal mode it is a DS or DD register, or a whole-number constant inside a Dint. An
+    operand that is the other step of the pair counts as plain. A constant such as 1.5, a DF,
+    PI, a pointer, a function and a longer formula are not plain.
     """
     banks = ("DH",) if hex_mode else ("DS", "DD")
     low, high = (0, 0xFFFF) if hex_mode else (-(2**31), 2**31 - 1)
