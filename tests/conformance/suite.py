@@ -429,7 +429,7 @@ APART_PARTS: dict[str, ApartPart] = {
     # read making each in a program of its own.  It also asks what a Math formula does with a
     # step past the largest double or below the smallest normal one, with a minus sign before
     # Inf, NaN or 0, and with the sign of a 0, because follow5_order has no rung left. This
-    # part has no rung left either.
+    # part has one rung left.
     "follow5_reads": ApartPart(("fill_binary", "math_range")),
     # Math formulas typed without brackets, read in CLICK's order.
     "follow5_order": ApartPart(("math_order",)),

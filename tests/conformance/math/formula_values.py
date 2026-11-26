@@ -108,7 +108,7 @@ def click_steps(
     - a decimal minus sign before 0
     - a decimal division or MOD by zero
     - the sign of a decimal 0 that no reading shows, from a ``*`` or ``/`` other than +0.0 by
-      a negative value, a sum, a MOD, a ``^``, or SQRT of 0 or of a negative value
+      -1.0, a sum, a MOD, a ``^``, or SQRT of 0 or of a negative value
     - a decimal step whose value passes the largest double or falls below the smallest
       normal double
     - an error from ``^``
@@ -224,19 +224,18 @@ def _sign_bit(value: float) -> bool:
 def _zero_sign_is_read(op: str, a: float, b: float) -> bool:
     """Return whether a reading shows the sign of the 0 that *a* *op* *b* gives.
 
-    The readings show a ``*`` and a ``/`` of +0.0 by -1.0, and -0.0 - -0.0. The model takes any
-    negative value in place of -1.0. No reading shows the 0 of any other ``*`` or ``/``, of
-    another sum, of a MOD or of a ``^``. ``zero_sum`` in ``test_math_range.py`` asks for the 0
-    of a sum, and of -0.0 times or divided by -5.0.
+    The readings show a ``*`` and a ``/`` of +0.0 by -1.0, and -0.0 - -0.0. No reading shows
+    the 0 of any other ``*`` or ``/``, of another sum, of a MOD or of a ``^``. ``zero_sum`` in
+    ``test_math_range.py`` asks for the 0 of a sum, and of -0.0 times or divided by -5.0.
     """
     plus_zero = [x == 0 and not _sign_bit(x) for x in (a, b)]
     if op == "*":
         # 0.0 * -1.0 gives -0.0 (``real_bits/minus_zero_math``), and so does -1.0 * 0.0
         # (``real_bits/minus_zero_shapes``).
-        return (plus_zero[0] and b < 0) or (plus_zero[1] and a < 0)
+        return (plus_zero[0] and b == -1.0) or (plus_zero[1] and a == -1.0)
     if op == "/":
         # 0.0 / -1.0 gives -0.0 (``real_bits/minus_zero_shapes``).
-        return plus_zero[0] and b < 0
+        return plus_zero[0] and b == -1.0
     # -0.0 - -0.0 gives +0.0 (``real_bits/minus_zero_shapes``).
     return op == "-" and a == 0 and b == 0 and _sign_bit(a) and _sign_bit(b)
 

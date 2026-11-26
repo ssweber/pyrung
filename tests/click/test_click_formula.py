@@ -362,7 +362,7 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 #   0.0 * -1.0 (``real_bits/minus_zero_math``).
 # - A minus sign before any operand that is 0. No reading shows the sign of the 0 it gives, so
 #   the model leaves it unread.
-# - A 0 that a step makes. A * or / of +0.0 by a negative value gives -0.0, and -0.0 - -0.0
+# - A 0 that a step makes. A * or / of +0.0 by -1.0 gives -0.0, and -0.0 - -0.0
 #   gives +0.0 (``real_bits/minus_zero_shapes``). The model reads these. No reading shows the
 #   sign of the 0 of a sum, of any other * or /, of a MOD, or of a ^ or SQRT of 0. The model
 #   leaves each unread.
