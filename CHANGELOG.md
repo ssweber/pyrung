@@ -52,6 +52,8 @@
 - `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
 - `math()` on `Word` tags only no longer sets `system.fault.out_of_range` (SC43) when an AND, OR or XOR gives a negative result, as a CLICK does. `math(-DH[1] | 0, DH[2])` with DH1 = 2 stores FFFEh and sets no flag (it set SC43).
+- `check()` no longer reports a comparison as always false when the value comes from an AND, OR or XOR in a `math()`.
+- `check()` no longer raises `OverflowError` on a `math()` with a very large left shift or power, such as `1 << N` with N = 2000.
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
