@@ -5,9 +5,9 @@ never has to choose an order. A case that asks about CLICK's order passes ``form
 formula for each ``math()`` of the case, in rung order. The export then writes each formula
 in place of the bracketed one, so the PLC reads it in its own order.
 
-The pyrung rungs stay as they are, so every other target runs them as before. The swap is
-refused unless the importer reads the typed formula to the same operations as the bracketed
-one. So what the case runs in-process is what the drawing imports to.
+The pyrung rungs stay as they are, so every other target runs them as before. The build
+refuses a typed formula whose parse differs from the parse of the formula that the export
+writes for the case's ``math()``. So the PLC runs the same operations as the in-process case.
 """
 
 from __future__ import annotations

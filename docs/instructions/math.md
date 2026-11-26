@@ -19,16 +19,17 @@ The expression comes first and the destination second, as in every pyrung instru
 ```python
 math((DH[1] | DH[2]) & 0x8, DH[3])   # CLICK's DH1 OR DH2 AND 8h
 math((2 ** 3) ** 2, DF[1])           # CLICK's 2 ^ 3 ^ 2, which is 64
+math((-DS[1]) ** 2, DF[2])           # CLICK's - DS1 ^ 2, which is 4 for DS1 = 2
 ```
 
 Python groups a pyrung formula in Python's order. CLICK reads a formula in its own order, tightest first:
 
-1. a minus sign before a value
+1. a minus sign before a constant or an address
 2. `^`
 3. `*`, `/`, MOD, AND, OR and XOR, all at one level
 4. `+` and `-`
 
-CLICK works from the left within each level. The importer and the export add the brackets that keep CLICK's grouping. Add them yourself when you copy a CLICK formula by hand. `^` is power in CLICK and XOR in Python, so write CLICK's `^` as `**`.
+CLICK works from the left within each level. The importer writes the brackets that keep CLICK's grouping, and the export to CLICK brackets every operation. Add the brackets yourself when you copy a CLICK formula by hand. `^` is power in CLICK and XOR in Python, so write CLICK's `^` as `**`.
 
 ## An operation between two constants
 

@@ -1,9 +1,8 @@
 """Parse a CLICK Math formula in the order that a CLICK computes it.
 
 :func:`parse_click_formula` reads the formula text of a Math box, such as
-``DS1 + DS2 * 3`` or ``6h OR DH1 AND 8h``, and returns a tree. Equality ignores
-brackets, so two formulas that a CLICK computes the same way compare equal:
-``( DS1 * 2 ) + 3`` equals ``DS1 * 2 + 3``.
+``DS1 + DS2 * 3`` or ``6h OR DH1 AND 8h``, and returns a tree. Equality ignores brackets
+and spelling, so ``( DS1 * 2 ) + 3`` equals ``DS1 * 2 + 3`` and ``X001`` equals ``X1``.
 
 A CLICK does not read a formula in Python's order. :data:`BINARY_TIERS` gives its order,
 and the importer brackets the Python source that it writes so that pyrung computes the
@@ -13,36 +12,75 @@ same value.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from typing import TypeAlias
 
+from pyrung.click.codegen.constants import _OPERAND_PREFIXES
+
 #: CLICK's binary operators by tier, tightest first. A CLICK applies the operators of one
 #: tier from the left, so ``2 ^ 3 ^ 2`` is 64 and ``6 OR 3 AND 8`` is 0. A minus sign
-#: before a constant, an address or a bracket binds tighter than every tier, so
-#: ``- DS1 ^ 2`` is 4 with DS1 = 2. CLICK 4.00 on a C2-03CPU was read for these.
+#: before an address binds tighter than every tier, so ``- DS1 ^ 2`` is 4 with DS1 = 2.
+#: The parse reads a minus sign before a bracket or a function the same way, but no CLICK
+#: has been read running one. CLICK 4.00 on a C2-03CPU was read for the rest.
 BINARY_TIERS: tuple[tuple[str, ...], ...] = (
     ("^",),
     ("*", "/", "MOD", "AND", "OR", "XOR"),
     ("+", "-"),
 )
 
-#: The name that :data:`UNCONFIRMED_PAIRS` would give a minus sign before an address or a
-#: bracket. A minus sign before a constant is part of the constant, as CLICK stores it.
-NEGATE = "unary -"
+#: A minus sign before an address, as an operator in :data:`CONFIRMED_PAIRS`. A minus sign
+#: before a constant is part of the constant (CLICK stores ``-2`` as H-2), so it is no operator.
+NEGATE_ADDRESS = "a minus sign before an address"
 
-#: Operator pairs whose order no reading of a CLICK has shown yet. The parse places them
-#: by :data:`BINARY_TIERS`, but :func:`parse_click_formula` returns None for a formula in
-#: which their order would change the value. CLICK's tiers put the two operators of each
-#: pair below at one level, but no PLC has run a formula that uses both of them.
-UNCONFIRMED_PAIRS: tuple[tuple[str, str], ...] = (
-    ("/", "MOD"),
-    ("/", "AND"),
-    ("/", "XOR"),
-    ("MOD", "OR"),
-    ("MOD", "XOR"),
-    ("*", "OR"),
-    ("*", "XOR"),
+#: A minus sign before a bracket, a function, a pointer, PI or another minus sign. No CLICK
+#: reading has shown where it sits in CLICK's order.
+NEGATE_GROUP = "a minus sign before a bracket or a function"
+
+#: The pairs of operators whose order readings of a CLICK settled, with the rounds of those
+#: readings. Take two operators that meet in a formula (see :func:`parse_click_formula`). A
+#: reading of that formula rules out an order of the two when the formula, grouped in that
+#: order, gives another value. A pair is settled once its readings rule out every order but
+#: CLICK's. ``tests/click/test_click_formula.py`` checks this list against its readings.
+CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("^", "^", "b10"),
+    ("^", "*", "b11"),
+    ("^", "/", "b11"),
+    ("^", "MOD", "b12"),
+    ("^", "+", "b12"),
+    ("^", "-", "b12"),
+    ("*", "/", "b11, b12"),
+    ("*", "MOD", "b10, b11"),
+    ("*", "AND", "b11"),
+    ("*", "+", "b10"),
+    ("/", "/", "b10"),
+    ("/", "OR", "b14"),
+    ("/", "+", "b12"),
+    ("/", "-", "b12"),
+    ("MOD", "AND", "b14"),
+    ("MOD", "+", "b12"),
+    ("MOD", "-", "b12"),
+    ("AND", "OR", "b10"),
+    ("AND", "XOR", "b10, b11"),
+    ("AND", "+", "b11"),
+    ("OR", "XOR", "b11"),
+    ("OR", "+", "b11"),
+    ("XOR", "+", "b11"),
+    ("+", "-", "b11"),
+    ("-", "-", "b10"),
+    (NEGATE_ADDRESS, "^", "b11"),
+    (NEGATE_ADDRESS, "AND", "b12"),
+    (NEGATE_ADDRESS, "OR", "b14"),
+    (NEGATE_ADDRESS, "XOR", "b14"),
+    (NEGATE_ADDRESS, "+", "b12"),
+    (NEGATE_ADDRESS, "-", "b12"),
 )
+
+#: The order of these pairs never changes the value, so no reading needs to settle them.
+#: They are the same one of ``+ * AND OR XOR`` twice, two minus signs, and a minus sign
+#: with ``*``.
+_ORDER_FREE_SAME = frozenset({"+", "*", "AND", "OR", "XOR"})
+_NEGATIONS = frozenset({NEGATE_ADDRESS, NEGATE_GROUP})
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
 _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
@@ -75,7 +113,7 @@ _RANGE_AGG_TO_METHOD: dict[str, str] = {
     "AVG": "mean",
 }
 
-_BANKS = ("CTD", "CT", "TD", "TXT", "SC", "SD", "DS", "DD", "DH", "DF", "X", "Y", "C", "T")
+_BANKS = tuple(prefix for prefix, _, _ in _OPERAND_PREFIXES)
 _ADDRESS_RE = re.compile(rf"({'|'.join(_BANKS)})(\d+)")
 
 # A hex constant ends in a lowercase h, so it never reads as an address: C1h is 0xC1.
@@ -91,6 +129,7 @@ _TOKEN_RE = re.compile(
 
 _TIER_OF = {op: index for index, ops in enumerate(BINARY_TIERS) for op in ops}
 _WORD_OPS = frozenset(op for ops in BINARY_TIERS for op in ops if op.isalpha())
+_CONFIRMED = frozenset(frozenset((first, second)) for first, second, _ in CONFIRMED_PAIRS)
 
 
 @dataclass(frozen=True)
@@ -170,8 +209,16 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     """Return the tree of the Math formula *text*, in the order that a CLICK computes it.
 
     In hex mode (*hex_mode*) a bare number is hex, as CLICK's dialog reads it: ``255`` is
-    0x255. Return None when the formula holds a pair from :data:`UNCONFIRMED_PAIRS` whose
-    order would change the value. Raise ValueError for text that is not a formula.
+    0x255. Raise ValueError for text that is not a formula.
+
+    Return None unless a CLICK reading has settled the order of every pair of operators
+    that meet in the tree. Two operators meet when one is an operand of the other and no
+    bracket of its own holds it. In ``DS1 - DS2 * 3``, ``-`` and ``*`` meet. In
+    ``( DS1 - DS2 ) * 3`` no two operators meet. An operator inside a function's brackets
+    meets none outside them. A minus sign is an operator too, of the kind
+    :data:`NEGATE_ADDRESS` or :data:`NEGATE_GROUP`. A pair needs no reading when its order
+    never changes the value. The rule assumes that CLICK ranks its operators, so two
+    operators that meet only through a third follow from the pairs that do meet.
     """
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
@@ -180,25 +227,66 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
 def parse_with_unconfirmed_pairs(
     text: str, *, hex_mode: bool = False
 ) -> tuple[Formula, tuple[tuple[str, str], ...]]:
-    """Return the tree of *text* in :data:`BINARY_TIERS` order, and the unconfirmed pairs in it.
+    """Return the tree of *text* in :data:`BINARY_TIERS` order, and its unconfirmed pairs.
 
-    The pairs come from :data:`UNCONFIRMED_PAIRS`, in the order that the formula first
-    holds each. Raise ValueError for text that is not a formula.
+    Each pair meets in the tree, as :func:`parse_click_formula` says, and no reading in
+    :data:`CONFIRMED_PAIRS` settled it. Each pair lists its operators in the order that the
+    formula writes them. Raise ValueError for text that is not a formula.
     """
-    parser = _Parser(text, hex_mode=hex_mode)
-    tree = parser.parse()
-    return tree, tuple(dict.fromkeys(parser.pairs))
+    tree = _Parser(text, hex_mode=hex_mode).parse()
+    pairs: dict[frozenset[str], tuple[str, str]] = {}
+    for parent, child, child_is_left in _meetings(tree):
+        first, second = (child, parent) if child_is_left else (parent, child)
+        key = frozenset((first, second))
+        if key not in _CONFIRMED and not _order_free(first, second):
+            pairs.setdefault(key, (first, second))
+    return tree, tuple(pairs.values())
 
 
-def _leads_with_negate(node: Formula) -> bool:
-    """Return whether *node* starts with a minus sign that no bracket holds."""
-    if node.bracketed:
-        return False
-    if isinstance(node, Negate):
-        return True
+def operator_kind(node: Formula) -> str | None:
+    """Return the operator of *node* as :data:`CONFIRMED_PAIRS` names it, or None."""
     if isinstance(node, BinaryOp):
-        return _leads_with_negate(node.left)
-    return False
+        return node.op
+    if isinstance(node, Negate):
+        operand = node.operand
+        if isinstance(operand, Address) and not operand.bracketed:
+            return NEGATE_ADDRESS
+        return NEGATE_GROUP
+    return None
+
+
+def _meetings(node: Formula) -> Iterator[tuple[str, str, bool]]:
+    """Yield each pair of operators that meet in *node*, in the order the formula writes them.
+
+    Each item is the outer operator, the inner one, and whether the inner one is the outer
+    one's left operand.
+    """
+    if isinstance(node, Call):
+        for arg in node.args:
+            yield from _meetings(arg)
+        return
+    parent = operator_kind(node)
+    if isinstance(node, BinaryOp):
+        operands = ((node.left, True), (node.right, False))
+    elif isinstance(node, Negate):
+        operands = ((node.operand, False),)
+    else:
+        return
+    for operand, is_left in operands:
+        child = operator_kind(operand)
+        if is_left:
+            yield from _meetings(operand)
+        if parent is not None and child is not None and not operand.bracketed:
+            yield parent, child, is_left
+        if not is_left:
+            yield from _meetings(operand)
+
+
+def _order_free(first: str, second: str) -> bool:
+    if first == second and first in _ORDER_FREE_SAME:
+        return True
+    pair = {first, second}
+    return pair <= _NEGATIONS or (bool(pair & _NEGATIONS) and "*" in pair)
 
 
 class _Parser:
@@ -207,7 +295,6 @@ class _Parser:
         self.hex_mode = hex_mode
         self.tokens = self._tokenize(text)
         self.pos = 0
-        self.pairs: list[tuple[str, str]] = []
 
     def _error(self, reason: str) -> ValueError:
         return ValueError(f"Cannot read the Math formula {self.text!r}: {reason}.")
@@ -261,31 +348,11 @@ class _Parser:
 
     def _tier(self, tier: int) -> Formula:
         operand = self._tier if tier > 0 else lambda _tier: self._unary()
-        operands = [operand(tier - 1)]
-        ops: list[str] = []
-        node = operands[0]
+        node = operand(tier - 1)
         while (op := self._binary_op(tier)) is not None:
             self.pos += 1
-            right = operand(tier - 1)
-            operands.append(right)
-            ops.append(op)
-            node = BinaryOp(op, node, right)
-        self._note_pairs(operands, ops)
+            node = BinaryOp(op, node, operand(tier - 1))
         return node
-
-    def _note_pairs(self, operands: list[Formula], ops: list[str]) -> None:
-        """Record each unconfirmed pair whose order this chain of one tier depends on."""
-        for pair in UNCONFIRMED_PAIRS:
-            first, second = pair
-            if NEGATE in pair:
-                other = second if first == NEGATE else first
-                if any(
-                    _leads_with_negate(node) and other in ops[index:]
-                    for index, node in enumerate(operands)
-                ):
-                    self.pairs.append(pair)
-            elif first in ops and second in ops:
-                self.pairs.append(pair)
 
     def _unary(self) -> Formula:
         token = self._peek()

@@ -88,7 +88,7 @@ A CLICK pin can run from the rail with its contacts, or tee off the box's input 
 
 ## Typed formulas
 
-pyrung's exporter brackets every operation of a `math()`, so a CLICK that runs the export never chooses an order. A case that asks about CLICK's order passes `formulas=`, one CLICK formula for each `math()` of the case, in rung order. The CLICK export (`ConformanceProgram.export()`, and the group hash) writes each formula in place of the bracketed one. Every other target runs the case's pyrung rungs as before. The build refuses a formula that the importer reads to other operations than the case's `math()`, so the in-process run and the PLC run the same order (`test_typed_formulas.py`). Group `math_order` (`test_math_order.py`) uses it.
+pyrung's exporter brackets every operation of a `math()`, so a CLICK that runs the export never chooses an order. A case that asks about CLICK's order passes `formulas=`, one CLICK formula for each `math()` of the case, in rung order. The CLICK export (`ConformanceProgram.export()`, and the group hash) writes each formula in place of the bracketed one. Every other target runs the case's pyrung rungs as before. The build refuses a typed formula whose parse differs from the parse of the formula that the export writes for the case's `math()`. So the PLC runs the same operations as the in-process case (`test_typed_formulas.py`). Group `math_order` (`test_math_order.py`) uses it.
 
 ## One-shot pattern
 

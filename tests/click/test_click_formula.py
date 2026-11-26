@@ -18,13 +18,13 @@ import pytest
 from pyrung import LiteralExpr
 from pyrung.click import ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.codegen.formula import (
-    BINARY_TIERS,
-    NEGATE,
-    UNCONFIRMED_PAIRS,
+    _TIER_OF,
+    CONFIRMED_PAIRS,
+    NEGATE_ADDRESS,
+    NEGATE_GROUP,
     Address,
     BinaryOp,
     Call,
-    Formula,
     Negate,
     Number,
     Pi,
@@ -39,6 +39,8 @@ from pyrung.core import PLC, Int, Program, Word, copy, rung
 from pyrung.core import math as math_instruction
 from tests.circuitpy.test_codegen import _on_every_backend
 from tests.click.helpers import exec_with_source
+from tests.conformance.math.formula_values import click_value as _click_value
+from tests.conformance.math.formula_values import regroupings
 
 #: (case, formula as CLICK displays it, hex mode, register values, value the PLC read).
 #: A hex value is the 16 bits a DH holds.
@@ -107,47 +109,6 @@ READINGS: list[tuple[str, str, bool, dict[str, int], float]] = [
 ]
 
 
-def _click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
-    """Return what a CLICK computes for *node*, by the rules the readings show.
-
-    A decimal Math computes in doubles, and its MOD keeps the dividend's sign. A hex Math
-    holds each step as 16 bits, unsigned, and its ``/`` drops the fraction.
-    """
-    if isinstance(node, Number):
-        return int(node.value) & 0xFFFF if hex_mode else float(node.value)
-    if isinstance(node, Address):
-        value = registers[f"{node.bank}{node.index}"]
-        return value & 0xFFFF if hex_mode else float(value)
-    if isinstance(node, Negate):
-        value = -_click_value(node.operand, hex_mode, registers)
-        return int(value) & 0xFFFF if hex_mode else value
-    assert isinstance(node, BinaryOp)
-    a = _click_value(node.left, hex_mode, registers)
-    b = _click_value(node.right, hex_mode, registers)
-    if hex_mode:
-        a, b = int(a), int(b)
-        steps = {
-            "+": a + b,
-            "-": a - b,
-            "*": a * b,
-            "/": a // b,
-            "MOD": a % b,
-            "AND": a & b,
-            "OR": a | b,
-            "XOR": a ^ b,
-        }
-        return steps[node.op] & 0xFFFF
-    steps_d = {
-        "+": a + b,
-        "-": a - b,
-        "*": a * b,
-        "/": a / b,
-        "^": a**b,
-        "MOD": math.fmod(a, b),
-    }
-    return steps_d[node.op]
-
-
 # ---------------------------------------------------------------------------
 # The parse
 # ---------------------------------------------------------------------------
@@ -161,7 +122,9 @@ def _click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> fl
 def test_click_formula_parse_gives_what_the_plc_read(
     text: str, hex_mode: bool, registers: dict[str, int], value: float
 ) -> None:
-    tree = parse_click_formula(text, hex_mode=hex_mode)
+    # A reading may leave its pair unsettled, as - DS1 MOD 3 does, so this takes the parse
+    # that applies such a pair in pyrung's order.
+    tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     assert tree is not None
     assert _click_value(tree, hex_mode, registers) == value
 
@@ -227,28 +190,104 @@ def test_click_formula_parse_refuses_what_is_not_a_formula(text: str) -> None:
         parse_click_formula(text)
 
 
-def test_unconfirmed_pairs_each_sit_in_one_tier() -> None:
-    tier = {op: index for index, ops in enumerate(BINARY_TIERS) for op in ops}
-    for first, second in UNCONFIRMED_PAIRS:
-        assert NEGATE not in (first, second)
-        assert tier[first] == tier[second]
-    # A CLICK was read running these pairs on 2026-11-26.
-    for confirmed in ((NEGATE, "OR"), (NEGATE, "XOR"), ("MOD", "AND"), ("/", "OR")):
-        assert confirmed not in UNCONFIRMED_PAIRS
+def _settled_pairs() -> dict[frozenset[str], set[str]]:
+    """Return each pair of operators that the readings settle, with the rounds of those readings.
+
+    Two operators could apply in three orders. Either one applies first, or both apply from
+    the left. A reading rules an order out when the formula, grouped in that order, gives another
+    value. A pair is settled when the readings rule out each order but the parse's. So a pair
+    from two levels needs a reading with the tighter operator on the right, and a pair from
+    one level needs a reading of each order. Applying - before + never changes the value.
+    """
+    ruled_out: dict[frozenset[str], set[str]] = {}
+    rounds: dict[frozenset[str], set[str]] = {}
+    for case, text, hex_mode, registers, value in READINGS:
+        tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
+        for parent, child, child_is_left, regrouped in regroupings(tree):
+            try:
+                if _click_value(regrouped, hex_mode, registers) == value:
+                    continue
+            except ZeroDivisionError:
+                # This model of a CLICK has no value for a division by zero.
+                continue
+            pair = frozenset((parent, child))
+            # With the child on the right, the regrouping also stands for both from the left.
+            orders = {parent} if child_is_left else {parent, "left"}
+            ruled_out.setdefault(pair, set()).update(orders)
+            rounds.setdefault(pair, set()).add(case.split("-")[0])
+    settled = {}
+    for pair, orders in ruled_out.items():
+        if len(pair) == 1:
+            needed = set(pair)
+        elif pair & {NEGATE_ADDRESS, NEGATE_GROUP}:
+            needed = set(pair - {NEGATE_ADDRESS, NEGATE_GROUP})
+        else:
+            first, second = sorted(pair)
+            needed = {first, second, "left"}
+            if _TIER_OF[first] != _TIER_OF[second]:
+                needed.discard(min(pair, key=_TIER_OF.__getitem__))
+            else:
+                needed.discard("left")
+            if pair == {"+", "-"}:
+                needed.discard("-")
+        if needed <= orders:
+            settled[pair] = rounds[pair]
+    return settled
 
 
-@pytest.mark.parametrize("pair", UNCONFIRMED_PAIRS, ids="-".join)
-def test_click_formula_parse_is_none_for_an_unconfirmed_pair(pair: tuple[str, str]) -> None:
-    first, second = pair
-    for text in (f"DH1 {first} DH2 {second} DH3", f"DH1 {second} DH2 {first} DH3"):
-        assert parse_click_formula(text, hex_mode=True) is None
-        tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=True)
-        assert pairs == (pair,)
-        # The best guess applies the two from the left.
-        assert isinstance(tree, BinaryOp) and isinstance(tree.left, BinaryOp)
-    # Brackets give the order, so the pair no longer matters.
-    assert parse_click_formula(f"( DH1 {first} DH2 ) {second} DH3", hex_mode=True) is not None
-    assert parse_click_formula(f"DH1 {first} ( DH2 {second} DH3 )", hex_mode=True) is not None
+def test_confirmed_pairs_are_the_pairs_that_the_readings_settle() -> None:
+    listed = {frozenset((a, b)): set(rounds.split(", ")) for a, b, rounds in CONFIRMED_PAIRS}
+    assert len(listed) == len(CONFIRMED_PAIRS)
+    assert listed == _settled_pairs()
+
+
+@pytest.mark.parametrize(
+    ("text", "hex_mode", "pair"),
+    [
+        ("DS1 - DS2 * 3", False, ("-", "*")),
+        ("DS1 * 3 - DS2", False, ("*", "-")),
+        ("DH1 - DH2 AND 3h", True, ("-", "AND")),
+        ("DH1 OR DH2 - 1h", True, ("OR", "-")),
+        ("DH1 - DH2 XOR 3h", True, ("-", "XOR")),
+        ("SQRT ( DS1 - DS2 * 3 )", False, ("-", "*")),
+        ("- ( DS1 ) ^ 2", False, (NEGATE_GROUP, "^")),
+        ("- SQRT ( DS1 ) ^ 2", False, (NEGATE_GROUP, "^")),
+        ("- ( DS1 ) + 2", False, (NEGATE_GROUP, "+")),
+        ("- DH[DS1] AND 3h", True, (NEGATE_GROUP, "AND")),
+        ("- DS1 / 2", False, (NEGATE_ADDRESS, "/")),
+        ("- DS1 MOD 3", False, (NEGATE_ADDRESS, "MOD")),
+        ("DS1 MOD DS2 MOD 3", False, ("MOD", "MOD")),
+        ("DH1 / DH2 MOD 3h", True, ("/", "MOD")),
+        ("DH1 XOR DH2 * 3h", True, ("XOR", "*")),
+    ],
+)
+def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
+    text: str, hex_mode: bool, pair: tuple[str, str]
+) -> None:
+    assert parse_click_formula(text, hex_mode=hex_mode) is None
+    assert parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[1] == (pair,)
+
+
+@pytest.mark.parametrize(
+    ("text", "hex_mode"),
+    [
+        # Brackets give the order.
+        ("( DS1 - DS2 ) * 3", False),
+        ("DS1 - ( DS2 * 3 )", False),
+        ("( - DS1 ) ^ 2", False),
+        ("- ( DS1 ^ 2 )", False),
+        ("SQRT ( DS1 - DS2 ) * 3", False),
+        # The order of these pairs never changes the value.
+        ("DS1 + DS2 + DS3", False),
+        ("DH1 AND DH2 AND DH3", True),
+        ("- ( DS1 ) * 3", False),
+        ("- - DS1", False),
+    ],
+)
+def test_click_formula_parse_needs_no_reading_for_a_pair_that_cannot_change_the_value(
+    text: str, hex_mode: bool
+) -> None:
+    assert parse_click_formula(text, hex_mode=hex_mode) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -363,22 +402,27 @@ def test_imported_constants_compute_what_math_computes(
     assert got["fault.division_error"] is (token == "math(5 / 0,DS2)")
 
 
-@pytest.mark.parametrize("pair", UNCONFIRMED_PAIRS, ids="-".join)
-def test_imported_formula_with_an_unconfirmed_pair_warns(pair: tuple[str, str]) -> None:
-    first, second = pair
-    text = f"DH1 {first} DH2 {second} DH3"
+@pytest.mark.parametrize(
+    ("text", "dest", "uses", "guess"),
+    [
+        ("DH1 / DH2 MOD DH3", "DH4,mode=hex", "/ and MOD", "them from the left"),
+        ("DS1 - DS2 * 3", "DF1", "- and *", "* first"),
+        ("- ( DS1 ) ^ 2", "DF1", f"{NEGATE_GROUP} and ^", "the minus sign first"),
+        ("DS1 MOD DS2 MOD 3", "DS3", "MOD twice", "them from the left"),
+    ],
+)
+def test_imported_formula_with_an_unconfirmed_pair_warns(
+    text: str, dest: str, uses: str, guess: str
+) -> None:
     with pytest.warns(UserWarning) as caught:
-        code = ladder_to_pyrung(_bundle(f"math({text},DH4,mode=hex)"))
+        ladder_to_pyrung(_bundle(f"math({text},{dest})"))
     messages = [str(w.message) for w in caught]
     assert messages == [
-        f"The Math formula {text!r} uses {first} and {second}. No CLICK reading has shown "
-        "their order yet, so pyrung applies the two from the left."
+        f"The Math formula {text!r} uses {uses} with no brackets between them. pyrung applies "
+        f"{guess}, but no one has checked that order on a CLICK yet. Add brackets to the "
+        "formula in CLICK to fix the order."
     ]
     assert all(m.isascii() for m in messages)
-    # The guess is the tier order: the two apply from the left.
-    tree = parse_with_unconfirmed_pairs(text, hex_mode=True)[0]
-    assert _math_line(code).startswith("math(")
-    assert isinstance(tree, BinaryOp) and isinstance(tree.left, BinaryOp)
 
 
 # ---------------------------------------------------------------------------
@@ -480,13 +524,26 @@ def test_imported_formula_exports_what_click_reads_the_same(confirmed) -> None:
 
 
 def test_imported_formula_with_an_unconfirmed_pair_imports_with_a_warning() -> None:
-    from tests.conformance.math.test_math_order import PROBES
+    from tests.conformance.math.test_math_order import PROBES, _registers
 
-    readings = [
-        (case_id, formula, True, {}, level)
-        for case_id, pairs in PROBES.items()
-        for formula, level, _ in pairs
-    ]
-    with pytest.warns(UserWarning, match="No CLICK reading has shown their order yet") as caught:
-        _program(readings)
+    readings = []
+    for case_id, (hex_mode, formulas) in PROBES.items():
+        prefix = "DH" if hex_mode else "DS"
+        for formula, value, _ in formulas:
+            typed, staged = _registers([formula], prefix, 1)
+            registers = {f"{prefix}{address}": number for address, number in staged.items()}
+            readings.append((case_id, typed[0], hex_mode, registers, value))
+    with pytest.warns(UserWarning, match="no one has checked that order on a CLICK yet") as caught:
+        logic, _mapping, _formulas, dests = _program(readings)
     assert len(caught) == len(readings)
+
+    # The import applies the order that the warning names.
+    plc = PLC(logic)
+    plc.step()
+    tags = plc.current_state.tags
+    wrong = [
+        (reading[0], tags[dest.name], reading[4])
+        for reading, dest in zip(readings, dests, strict=True)
+        if not _close(tags[dest.name], reading[4] & 0xFFFF if reading[2] else reading[4])
+    ]
+    assert wrong == []

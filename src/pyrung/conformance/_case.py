@@ -244,8 +244,9 @@ def case(
         formulas: For a case that asks about the order in which a CLICK reads a Math
             formula.  The exporter brackets every operation, so the CLICK export writes
             these formulas instead, one for each ``math()`` of the case, in rung order.
-            The build refuses a formula that the importer reads to other operations
-            than the case's ``math()``.
+            The build refuses a typed formula whose parse differs from the parse of
+            the formula that the export writes for the case's ``math()``. So the PLC runs
+            the same operations as the in-process case.
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:

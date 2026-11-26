@@ -1179,20 +1179,21 @@ finds a path, but its failure to find one is not a failed verification.
 ### Math formulas
 
     math((dh[1] | dh[2]) & 0x8, dh[3])   # CLICK's DH1 OR DH2 AND 8h
+    math((-ds[1]) ** 2, df[1])           # CLICK's - DS1 ^ 2, which is 4 for DS1 = 2
 
 Python reads a formula in Python's order. CLICK reads a Math formula in its own
 order, tightest first:
 
-1. a minus sign before a value
+1. a minus sign before a constant or an address
 2. `^`
 3. `*`, `/`, MOD, AND, OR and XOR, all at one level
 4. `+` and `-`
 
-CLICK works from the left within each level. Imported code already has the
-brackets this needs, and the export brackets every operation. Add the brackets
-yourself when you copy a CLICK formula by hand. `DH1 OR DH2 AND 8h` is
-`(dh[1] | dh[2]) & 0x8`, not `dh[1] | dh[2] & 0x8`. `^` is power in CLICK and
-XOR in Python, so write CLICK's `^` as `**`. CLICK applies `^` from the left as
+CLICK works from the left within each level. The importer writes the brackets
+that keep CLICK's grouping, and the export to CLICK brackets every operation.
+Add the brackets yourself when you copy a CLICK formula by hand.
+`DH1 OR DH2 AND 8h` is `(dh[1] | dh[2]) & 0x8`, not `dh[1] | dh[2] & 0x8`. `^`
+is power in CLICK and XOR in Python, so write CLICK's `^` as `**`. CLICK applies `^` from the left as
 well, so `2 ^ 3 ^ 2` is 64, which Python writes `(2**3)**2`.
 
 Python computes an operation between two plain numbers when it loads the file,

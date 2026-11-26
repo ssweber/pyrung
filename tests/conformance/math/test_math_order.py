@@ -8,27 +8,24 @@ importer reads from the same text.
 
 A CLICK reads a minus sign before an address first. Then it reads ``^``, then ``*``, ``/``,
 MOD, AND, OR and XOR at one level, then ``+`` and ``-``. It applies each level from the left.
-A CLICK 4.00 on a C2-03CPU was read running the formulas of the confirmed cases on 2026-11-25
-and 2026-11-26. Each case expects the values read then. The cases put each constant of a reading in a
-register of its own, so pyrung's source keeps the operation. A decimal case writes into the
-Results. A hex case writes into a DH and copies the DH into a Result, so FFFFh reads -1.
+Each case runs formulas that a CLICK 4.00 on a C2-03CPU was read running on 2026-11-25 and
+2026-11-26. It expects the values read then. Most cases move each constant into a register of
+its own, so that pyrung's source keeps the operation. ``-2 ^ 2`` and ``-7 MOD 3`` keep their
+constants, because they test a minus sign written against a constant. A decimal case writes
+into the Results. A hex case writes into a DH and copies the DH into a Result, so FFFFh reads
+-1.
 
-CLICK's tiers put seven pairs of operators at one level, but no PLC has run a formula that
-uses both operators of such a pair. The ``probe`` cases ask about them. Each case runs a
-formula and its reverse. Each expects the value
-with the two operators at one level, applied from the left. The other value is the one with
-the right-hand operator read first.
+The ``probe`` cases ask about pairs of operators that no reading has settled
+(``formula.CONFIRMED_PAIRS`` lists the settled ones). Each probe expects the value of the order
+that pyrung applies, which follows CLICK's levels. ``PROBES`` lists each formula with that
+value and the value of the other order. ``test_each_probe_tells_the_two_orders_apart``
+computes both. When a probe case passes on a CLICK, add its pair to
+``formula.CONFIRMED_PAIRS`` with the round, and add the readings to the ``READINGS`` of
+``tests/click/test_click_formula.py``.
 
-- ``div_mod``: ``8h / 2h MOD 3h`` gives 1 (or 4), and ``9h MOD 6h / 2h`` gives 1 (or 0).
-- ``div_and``: ``8h / 2h AND 3h`` gives 0 (or 4), and ``6h AND 7h / 2h`` gives 3 (or 2).
-- ``div_xor``: ``8h / 2h XOR 1h`` gives 5 (or 2), and ``1h XOR 6h / 2h`` gives 3 (or 2).
-- ``mod_or``: ``7h MOD 4h OR 1h`` gives 3 (or 2), and ``4h OR 7h MOD 5h`` gives 2 (or 6).
-- ``mod_xor``: ``8h MOD 5h XOR 1h`` gives 2 (or 0), and ``1h XOR 7h MOD 5h`` gives 1 (or 3).
-- ``mul_or``: ``2h * 3h OR 1h`` gives 7 (or 6), and ``1h OR 2h * 3h`` gives 9 (or 7).
-- ``mul_xor``: ``2h * 3h XOR 1h`` gives 7 (or 4), and ``1h XOR 2h * 3h`` gives 9 (or 7).
-
-``test_each_probe_tells_the_two_readings_apart`` computes both values. When a probe case
-passes on a CLICK, remove its pair from ``formula.UNCONFIRMED_PAIRS``.
+No probe asks about a minus sign before ``/`` or MOD. In decimal mode the two orders give the
+same value. In hex mode the value turns on whether a CLICK divides the 16-bit form of the
+negative value, and no reading has shown that yet.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -42,15 +39,19 @@ from typing import Any
 
 import pytest
 
+from pyrung import LiteralExpr
 from pyrung.click.codegen.formula import (
     Address,
     BinaryOp,
     Formula,
     Negate,
+    Number,
     parse_with_unconfirmed_pairs,
 )
+from pyrung.click.codegen.utils import _guessed_order
 from pyrung.conformance import Case, Group, assert_all_passed, case, run
 from pyrung.core import copy, fill, math, rung
+from tests.conformance.math.formula_values import click_value, regroupings
 from tests.conformance.memory import dh, ds
 from tests.conformance.probe_kit import finish, once
 
@@ -72,6 +73,10 @@ _OPERATORS: dict[str, Callable[[Any, Any], Any]] = {
 _RESULTS = ("Result1", "Result2", "Result3", "Result4")
 
 
+class _KeepConstants(str):
+    """A formula whose constants stay in the typed formula."""
+
+
 def _value(token: str) -> int:
     return int(token[:-1], 16) if token.endswith("h") else int(token)
 
@@ -85,7 +90,10 @@ def _registers(formulas: Sequence[str], prefix: str, first: int) -> tuple[list[s
         addresses.setdefault(value, first + len(addresses))
         return f"{prefix}{addresses[value]}"
 
-    typed = [_CONSTANT.sub(register, formula) for formula in formulas]
+    typed = [
+        formula if isinstance(formula, _KeepConstants) else _CONSTANT.sub(register, formula)
+        for formula in formulas
+    ]
     return typed, {address: value for value, address in addresses.items()}
 
 
@@ -93,6 +101,8 @@ def _expression(node: Formula, bank: Any) -> Any:
     """Return the pyrung expression of *node*, in the order of the tree."""
     if isinstance(node, Address):
         return bank[node.index]
+    if isinstance(node, Number):
+        return LiteralExpr(node.value)
     if isinstance(node, Negate):
         return -_expression(node.operand, bank)
     assert isinstance(node, BinaryOp)
@@ -156,41 +166,63 @@ def _hex(case_id: str, sentence: str, first: int, *readings: tuple[str, int]) ->
     return _order_case(sentence, case_id, readings, hex_mode=True, first=first)
 
 
-def _probe(case_id: str, pair: str, first: int, *readings: tuple[str, int]) -> Case:
-    sentence = f"{pair} sit at one level and apply from the left: " + " and ".join(
-        f"{formula} gives {value}" for formula, value in readings
+def _hex_text(value: int) -> str:
+    return f"{value & 0xFFFF:X}h"
+
+
+def _probe(case_id: str, hex_mode: bool, first: int, readings: Sequence[tuple[str, int]]) -> Case:
+    typed = _registers([readings[0][0]], "DH" if hex_mode else "DS", 1)[0][0]
+    [(left, right)] = parse_with_unconfirmed_pairs(typed, hex_mode=hex_mode)[1]
+    uses = f"two {left}s" if left == right else f"{left} and {right}"
+    order = _guessed_order(left, right)
+    show = _hex_text if hex_mode else str
+    sentence = f"For {uses}, a CLICK applies {order}. " + " and ".join(
+        f"{formula} gives {show(value)}" for formula, value in readings
     )
     return _order_case(
         sentence,
         case_id,
         readings,
-        hex_mode=True,
+        hex_mode=hex_mode,
         first=first,
-        probe=f"whether {pair} sit at one level",
+        probe=f"whether a CLICK applies {order} for {uses}",
     )
 
 
-#: Each probe case's formulas, with the value of each reading: the two operators at one level,
-#: and the right-hand one first.
-PROBES: dict[str, tuple[tuple[str, int, int], ...]] = {
-    "div_mod": (("8h / 2h MOD 3h", 1, 4), ("9h MOD 6h / 2h", 1, 0)),
-    "div_and": (("8h / 2h AND 3h", 0, 4), ("6h AND 7h / 2h", 3, 2)),
-    "div_xor": (("8h / 2h XOR 1h", 5, 2), ("1h XOR 6h / 2h", 3, 2)),
-    "mod_or": (("7h MOD 4h OR 1h", 3, 2), ("4h OR 7h MOD 5h", 2, 6)),
-    "mod_xor": (("8h MOD 5h XOR 1h", 2, 0), ("1h XOR 7h MOD 5h", 1, 3)),
-    "mul_or": (("2h * 3h OR 1h", 7, 6), ("1h OR 2h * 3h", 9, 7)),
-    "mul_xor": (("2h * 3h XOR 1h", 7, 4), ("1h XOR 2h * 3h", 9, 7)),
+#: Each probe case's mode and formulas, with the value of each formula in the order that
+#: pyrung applies, and in the other order.
+PROBES: dict[str, tuple[bool, tuple[tuple[str, int, int], ...]]] = {
+    "div_mod": (True, (("8h / 2h MOD 3h", 1, 4), ("9h MOD 6h / 2h", 1, 0))),
+    "div_and": (True, (("8h / 2h AND 3h", 0, 4), ("6h AND 7h / 2h", 3, 2))),
+    "div_xor": (True, (("8h / 2h XOR 1h", 5, 2), ("1h XOR 6h / 2h", 3, 2))),
+    "mod_or": (True, (("7h MOD 4h OR 1h", 3, 2), ("4h OR 7h MOD 5h", 2, 6))),
+    "mod_xor": (True, (("8h MOD 5h XOR 1h", 2, 0), ("1h XOR 7h MOD 5h", 1, 3))),
+    "mul_or": (True, (("2h * 3h OR 1h", 7, 6), ("1h OR 2h * 3h", 9, 7))),
+    "mul_xor": (True, (("2h * 3h XOR 1h", 7, 4), ("1h XOR 2h * 3h", 9, 7))),
+    "sub_mul": (False, (("10 - 2 * 3", 4, 24), ("2 * 3 - 1", 5, 4))),
+    "mod_mod": (False, (("7 MOD 5 MOD 3", 2, 1),)),
+    "negb_power": (False, (("- ( 2 ) ^ 2", 4, -4),)),
+    "negb_add": (False, (("- ( 2 ) + 5", 3, -7),)),
+    "negb_sub": (False, (("- ( 2 ) - 1", -3, -1),)),
+    "sub_and": (True, (("7h - 1h AND 3h", 6, 2), ("6h AND 7h - 1h", 5, 6))),
+    "sub_or": (True, (("5h - 1h OR 2h", 2, 6), ("1h OR 4h - 1h", 4, 3))),
+    "sub_xor": (True, (("5h - 1h XOR 3h", 3, 7), ("1h XOR 3h - 1h", 1, 3))),
+    "negb_and": (True, (("- ( 2h ) AND 3h", 2, -2),)),
+    "negb_or": (True, (("- ( 2h ) OR 1h", -1, -3),)),
+    "negb_xor": (True, (("- ( 3h ) XOR 1h", -4, -2),)),
 }
 
-_PAIR_WORDS = {
-    "div_mod": "/ and MOD",
-    "div_and": "/ and AND",
-    "div_xor": "/ and XOR",
-    "mod_or": "MOD and OR",
-    "mod_xor": "MOD and XOR",
-    "mul_or": "* and OR",
-    "mul_xor": "* and XOR",
-}
+
+def _probes() -> list[Case]:
+    """Return the probe cases, each on ten registers of its own after the other cases'."""
+    first = {False: 4231, True: 271}
+    cases = []
+    for case_id, (hex_mode, readings) in PROBES.items():
+        values = [(formula, value) for formula, value, _ in readings]
+        cases.append(_probe(case_id, hex_mode, first[hex_mode], values))
+        first[hex_mode] += 10
+    return cases
+
 
 group = Group(
     "math_order",
@@ -206,10 +238,10 @@ group = Group(
         ),
         _decimal(
             "dec_power",
-            "100 / 10 / 5 is 2, (-2) ^ 2 is 4, 2 * 3 ^ 2 is 18 and 3 ^ 2 * 2 is 18",
+            "100 / 10 / 5 is 2, -2 ^ 2 is 4, 2 * 3 ^ 2 is 18 and 3 ^ 2 * 2 is 18",
             4111,
             ("100 / 10 / 5", 2),
-            ("-2 ^ 2", 4),
+            (_KeepConstants("-2 ^ 2"), 4),
             ("2 * 3 ^ 2", 18),
             ("3 ^ 2 * 2", 18),
         ),
@@ -276,7 +308,7 @@ group = Group(
             "MOD keeps the sign of the dividend: -7 MOD 3 is -1. With DS = 2, - DS + 5 is 3 and "
             "- DS - 1 is -3",
             4181,
-            ("-7 MOD 3", -1),
+            (_KeepConstants("-7 MOD 3"), -1),
             ("- 2 + 5", 3),
             ("- 2 - 1", -3),
         ),
@@ -348,53 +380,32 @@ group = Group(
             ("6h / 2h OR 1h", 3),
             ("4h OR 6h / 2h", 3),
         ),
-        *(
-            _probe(
-                case_id,
-                _PAIR_WORDS[case_id],
-                271 + 10 * index,
-                *((formula, level) for formula, level, _ in readings),
-            )
-            for index, (case_id, readings) in enumerate(PROBES.items())
-        ),
+        *_probes(),
     ],
 )
 
 
-def _click_hex(node: Formula, registers: dict[int, int]) -> int:
-    """Return what a CLICK computes for *node* in hex mode, with each step cut to 16 bits."""
-    if isinstance(node, Address):
-        return registers[node.index]
-    if isinstance(node, Negate):
-        return -_click_hex(node.operand, registers) & 0xFFFF
-    assert isinstance(node, BinaryOp)
-    left, right = _click_hex(node.left, registers), _click_hex(node.right, registers)
-    steps = {
-        "+": left + right,
-        "-": left - right,
-        "*": left * right,
-        "/": left // right if right else 0,
-        "MOD": left % right if right else 0,
-        "AND": left & right,
-        "OR": left | right,
-        "XOR": left ^ right,
-    }
-    return steps[node.op] & 0xFFFF
-
-
 @pytest.mark.parametrize("case_id", PROBES)
-def test_each_probe_tells_the_two_readings_apart(case_id: str) -> None:
-    for formula, level, right_first in PROBES[case_id]:
-        typed, staged = _registers([formula], "DH", 1)
-        tree = parse_with_unconfirmed_pairs(typed[0], hex_mode=True)[0]
-        assert isinstance(tree, BinaryOp)
-        assert isinstance(tree.left, BinaryOp)
-        regrouped = BinaryOp(
-            tree.left.op, tree.left.left, BinaryOp(tree.op, tree.left.right, tree.right)
-        )
-        assert _click_hex(tree, staged) == level
-        assert _click_hex(regrouped, staged) == right_first
-        assert level != right_first
+def test_each_probe_tells_the_two_orders_apart(case_id: str) -> None:
+    hex_mode, readings = PROBES[case_id]
+    prefix = "DH" if hex_mode else "DS"
+    pairs = set()
+    for formula, value, other in readings:
+        typed, staged = _registers([formula], prefix, 1)
+        registers = {f"{prefix}{address}": number for address, number in staged.items()}
+        tree, unconfirmed = parse_with_unconfirmed_pairs(typed[0], hex_mode=hex_mode)
+        [pair] = unconfirmed
+        pairs.add(frozenset(pair))
+        [regrouped] = [
+            regrouped
+            for parent, child, _, regrouped in regroupings(tree)
+            if {parent, child} == set(pair)
+        ]
+        cut = 0xFFFF if hex_mode else -1
+        assert click_value(tree, hex_mode, registers) == value & cut
+        assert click_value(regrouped, hex_mode, registers) == other & cut
+        assert value != other
+    assert len(pairs) == 1
 
 
 def test_math_order():

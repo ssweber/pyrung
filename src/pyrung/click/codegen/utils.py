@@ -24,8 +24,8 @@ from pyrung.click.codegen.constants import (
 from pyrung.click.codegen.formula import (
     _CLICK_FUNC_TO_PYTHON,
     _RANGE_AGG_TO_METHOD,
-    BINARY_TIERS,
-    NEGATE,
+    _TIER_OF,
+    _WORD_OPS,
     Address,
     BinaryOp,
     Call,
@@ -66,7 +66,7 @@ _MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
 
 # CLICK's operators that Python spells differently.  Python would read ^ as XOR, so the
 # importer refuses these operators in any operand that is not a formula.
-_CLICK_ONLY_OPERATOR_RE = re.compile(r"\^|\b(?:MOD|AND|OR|XOR)\b")
+_CLICK_ONLY_OPERATOR_RE = re.compile(r"\^|\b(?:" + "|".join(sorted(_WORD_OPS)) + r")\b")
 
 
 _MODBUS_984_RE = re.compile(r"\d+")
@@ -539,9 +539,11 @@ def _render_parsed_formula(
 ) -> str:
     """Render the parsed *formula* of *text*, and warn once for each unconfirmed pair in it."""
     for first, second in pairs:
+        uses = f"{first} twice" if first == second else f"{first} and {second}"
         warnings.warn(
-            f"The Math formula {text!r} uses {first} and {second}. No CLICK reading has "
-            f"shown their order yet, so pyrung {_guessed_order(first, second)}.",
+            f"The Math formula {text!r} uses {uses} with no brackets between them. pyrung "
+            f"applies {_guessed_order(first, second)}, but no one has checked that order on a "
+            "CLICK yet. Add brackets to the formula in CLICK to fix the order.",
             stacklevel=2,
         )
 
@@ -655,13 +657,11 @@ def _token_needs_literal_expr(token: str) -> bool:
 
 def _guessed_order(first: str, second: str) -> str:
     """Return the words that say how pyrung orders two operators that no reading has ordered."""
-    if NEGATE in (first, second):
-        return "applies the minus sign first"
-    tier = {op: index for index, ops in enumerate(BINARY_TIERS) for op in ops}
-    if tier[first] == tier[second]:
-        return "applies the two from the left"
-    tighter = first if tier[first] < tier[second] else second
-    return f"applies {tighter} first"
+    if first not in _TIER_OF or second not in _TIER_OF:
+        return "the minus sign first"
+    if _TIER_OF[first] == _TIER_OF[second]:
+        return "them from the left"
+    return f"{first if _TIER_OF[first] < _TIER_OF[second] else second} first"
 
 
 def _sub_range(
