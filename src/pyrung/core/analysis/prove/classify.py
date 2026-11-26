@@ -1145,11 +1145,12 @@ def _interval_bounds(
     # _WIDEST_SHIFT would build a huge int, and the result is past a double anyway.
     if node.symbol == "<<" and b_hi > _WIDEST_SHIFT:
         return None
-    # When the base is 0 or more, a power only rises or only falls as one operand rises.
-    # With A in -2..2, both corners of A ** 2 are 4, but 1 ** 2 is 1.  An exponent past
-    # _WIDEST_SHIFT would build a huge int.
-    if node.symbol == "**" and (a_lo < 0 or max(abs(b_lo), abs(b_hi)) > _WIDEST_SHIFT):
-        return None
+    if node.symbol == "**":
+        if max(abs(b_lo), abs(b_hi)) > _WIDEST_SHIFT:
+            # The corner would build a huge int.
+            return None
+        if a_lo < 0:
+            return _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
 
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
@@ -1164,13 +1165,37 @@ def _interval_bounds(
 
 
 #: The operations whose extremes over two intervals lie at the four corners.  Hold one
-#: operand, and the result only rises or only falls as the other operand rises.
-#: ``_interval_bounds`` first sets aside a divisor that can be 0 and a negative base.
+#: operand, and the result only rises or only falls as the other operand rises.  A power
+#: does that only for a base of 0 or more.  ``_interval_bounds`` first sets aside a
+#: negative base and a divisor that can be 0.
 _CORNER_SYMBOLS = frozenset({"+", "-", "*", "/", "//", "**", "<<", ">>"})
 
 #: The widest left shift, and the largest exponent, that ``_interval_bounds`` computes.
 #: 2 ** 1024 is past a double.
 _WIDEST_SHIFT = 1024
+
+
+def _negative_base_power_bounds(
+    a_lo: float, a_hi: float, b_lo: float, b_hi: float
+) -> tuple[float, float] | None:
+    """Return bounds for a power whose base can be negative, or None.
+
+    Only one whole exponent of 1 or more gives a bound.  An odd exponent keeps the order
+    of the bases, so the ends bound the power.  An even exponent turns at 0.  With A in
+    -2..2, both ends of ``A ** 2`` give 4, but ``1 ** 2`` is 1.
+    """
+    if b_lo != b_hi or b_lo < 1 or b_lo != int(b_lo):
+        return None
+    exponent = int(b_lo)
+    try:
+        ends = (a_lo**exponent, a_hi**exponent)
+        if exponent % 2 == 0 and a_hi > 0:
+            ends = (0, max(ends))
+        if not all(math.isfinite(end) for end in ends):
+            return None
+    except (ArithmeticError, ValueError):
+        return None
+    return (min(ends), max(ends))
 
 
 def _bitwise_bounds(

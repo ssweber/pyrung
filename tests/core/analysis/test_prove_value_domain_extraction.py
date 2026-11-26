@@ -564,6 +564,16 @@ def _power_of_a_negative() -> Program:
     return logic
 
 
+def _odd_power_of_a_negative() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, d3 = Int("A"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, -2, 1, 2)
+        with rung():
+            math(a**3, d3)
+    return logic
+
+
 def _floor_division_by_a_span_through_zero() -> Program:
     go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
     d, d3 = Int("D"), Int("D3")
@@ -582,6 +592,7 @@ _STORED_VALUE_PROGRAMS = {
     "wide_shift": _wide_shift,
     "wide_power": _wide_power,
     "power_of_a_negative": _power_of_a_negative,
+    "odd_power_of_a_negative": _odd_power_of_a_negative,
     "floor_division_by_a_span_through_zero": _floor_division_by_a_span_through_zero,
 }
 
@@ -661,3 +672,17 @@ def test_a_hex_or_of_values_that_fit_keeps_a_small_domain():
 
     domains = collect_produced_value_domains(logic, build_program_graph(logic))
     assert domains["D3"] == (0, 1, 2, 3)
+
+
+def test_a_whole_power_of_a_negative_keeps_a_domain():
+    """List -8..8 for ``A ** 3`` and 0..4 for ``A ** 2``, with A in -2..2."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import collect_produced_value_domains
+
+    for build, values in (
+        (_odd_power_of_a_negative, range(-8, 9)),
+        (_power_of_a_negative, range(5)),
+    ):
+        logic = build()
+        domains = collect_produced_value_domains(logic, build_program_graph(logic))
+        assert domains["D3"] == tuple(values)
