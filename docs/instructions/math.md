@@ -30,6 +30,15 @@ Python groups a pyrung formula in Python's order. CLICK reads a formula in its o
 
 CLICK works from the left within each level. The importer and the export add the brackets that keep CLICK's grouping. Add them yourself when you copy a CLICK formula by hand. `^` is power in CLICK and XOR in Python, so write CLICK's `^` as `**`.
 
+## An operation between two constants
+
+```python
+math(LiteralExpr(5) / 0, DS[1])        # stores 0 and sets the division-error flag
+math((LiteralExpr(2) - 9) % 3, DS[2])  # stores -1, as a CLICK does
+```
+
+Python computes an operation between two plain numbers when it loads the file, in Python's arithmetic. `math(5 / 0, DS[1])` raises `ZeroDivisionError` then, and `(2 - 9) % 3` is 2. Wrap the first constant in `LiteralExpr` and the Math runs the operation at scan time. The importer writes such a constant this way.
+
 ## Overflow behavior
 
 **Math wraps.** Overflow truncates to the destination type's bit width (modular arithmetic). This differs from `copy()`, which clamps.

@@ -1195,6 +1195,11 @@ yourself when you copy a CLICK formula by hand. `DH1 OR DH2 AND 8h` is
 XOR in Python, so write CLICK's `^` as `**`. CLICK applies `^` from the left as
 well, so `2 ^ 3 ^ 2` is 64, which Python writes `(2**3)**2`.
 
+Python computes an operation between two plain numbers when it loads the file,
+in Python's arithmetic. `LiteralExpr(5) / 0` leaves the division for the Math to
+run at scan time, so it stores 0 and sets the division-error flag. Imported code
+writes such a constant this way. Keep the `LiteralExpr` when you edit the formula.
+
 ## Reference
 
 - `src/plc/` — importable pyrung model of this machine's logic

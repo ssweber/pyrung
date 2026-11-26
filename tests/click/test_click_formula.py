@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from pyrung import LiteralExpr
 from pyrung.click import ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.codegen.formula import (
     BINARY_TIERS,
@@ -34,7 +35,8 @@ from pyrung.click.codegen.formula import (
 )
 from pyrung.click.ladder.types import LadderBundle
 from pyrung.conformance._formula import _as_subtraction
-from pyrung.core import PLC
+from pyrung.core import PLC, Int, Program, Word, copy, rung
+from pyrung.core import math as math_instruction
 from tests.circuitpy.test_codegen import _on_every_backend
 from tests.click.helpers import exec_with_source
 
@@ -271,22 +273,28 @@ def _math_line(code: str) -> str:
 @pytest.mark.parametrize(
     ("token", "line"),
     [
-        ("math(6h OR 3h AND 8h,DH1,mode=hex)", "math((0x6 | 0x3) & 0x8, DH1)"),
-        ("math(6h AND 3h OR 8h,DH1,mode=hex)", "math(0x6 & 0x3 | 0x8, DH1)"),
-        ("math(1h + 2h AND 2h,DH1,mode=hex)", "math(0x1 + (0x2 & 0x2), DH1)"),
+        (
+            "math(6h OR 3h AND 8h,DH1,mode=hex)",
+            "math((LiteralExpr(0x6) | 0x3) & 0x8, DH1)",
+        ),
+        ("math(6h AND 3h OR 8h,DH1,mode=hex)", "math(LiteralExpr(0x6) & 0x3 | 0x8, DH1)"),
+        (
+            "math(1h + 2h AND 2h,DH1,mode=hex)",
+            "math(0x1 + (LiteralExpr(0x2) & 0x2), DH1)",
+        ),
         ("math(DH1 AND DH2 * 3h,DH3,mode=hex)", "math((DH1 & DH2) * 0x3, DH3)"),
-        ("math(2 ^ 3 ^ 2,DF1)", "math((2**3)**2, DF1)"),
+        ("math(2 ^ 3 ^ 2,DF1)", "math((LiteralExpr(2)**3)**2, DF1)"),
         ("math(DS1 ^ 2,DS3)", "math(DS1**2, DS3)"),
         ("math(- DS1 ^ 2,DF1)", "math((-DS1)**2, DF1)"),
-        ("math(-2 ^ 2,DF1)", "math((-2)**2, DF1)"),
+        ("math(-2 ^ 2,DF1)", "math(LiteralExpr(-2)**2, DF1)"),
         ("math(DS1 * - ( DS2 + 1 ),DS3)", "math(DS1 * -(DS2 + 1), DS3)"),
         ("math(DS1 - ( DS2 - DS3 ),DS4)", "math(DS1 - (DS2 - DS3), DS4)"),
         ("math(DH1 + 255,DH2,mode=hex)", "math(DH1 + 0x255, DH2)"),
         ("math(DH001 AND 00FFh,DH002,mode=hex)", "math(DH001 & 0x00FF, DH002)"),
-        # Python reads -7 % 3 as 2, so the import writes the MOD's value (CLICK gives -1).
-        ("math(-7 MOD 3,DF1)", "math(-1, DF1)"),
-        ("math(7 MOD 0,DF1)", "math(0, DF1)"),
-        ("math(7 MOD 3,DF1)", "math(7 % 3, DF1)"),
+        # Python would compute -7 % 3 as 2 when it loads the file. CLICK gives -1.
+        ("math(-7 MOD 3,DF1)", "math(LiteralExpr(-7) % 3, DF1)"),
+        ("math(5 / 0 + DS1,DF1)", "math(LiteralExpr(5) / 0 + DS1, DF1)"),
+        ("math(ABS ( 2 - 3 ),DS1)", "math(abs(LiteralExpr(2) - 3), DS1)"),
         ("math(DS1 MOD 3,DS2)", "math(DS1 % 3, DS2)"),
     ],
 )
@@ -299,6 +307,60 @@ def test_click_operators_outside_a_formula_are_refused(operand: str) -> None:
     """Python would read ^ as XOR, so a CLICK operator outside a Math formula stops the import."""
     with pytest.raises(ValueError, match="Unsupported CSV operand expression"):
         ladder_to_pyrung(_bundle(f"copy({operand},DS10)"))
+
+
+_FAULTS = ("fault.division_error", "fault.out_of_range", "fault.math_operation_error")
+
+
+def _hand_written(build, dest_type, operand_type) -> Program:
+    dest = dest_type("Dest")
+    operand = operand_type("Operand")
+    with Program() as logic:
+        with rung():
+            copy(1, operand)
+            math_instruction(build(operand), dest)
+    return logic
+
+
+@pytest.mark.parametrize(
+    ("token", "dest", "build", "dest_type", "operand_type", "value"),
+    [
+        ("math(5 / 0,DS2)", "DS2", lambda _: LiteralExpr(5) / 0, Int, Int, 0),
+        ("math(0 ^ 0,DS2)", "DS2", lambda _: LiteralExpr(0) ** 0, Int, Int, 0),
+        ("math(( 2 - 9 ) MOD 3,DS2)", "DS2", lambda _: (LiteralExpr(2) - 9) % 3, Int, Int, -1),
+        (
+            "math(( FFFFh + 2h ) * DH1 / 2h,DH2,mode=hex)",
+            "DH2",
+            lambda dh1: (LiteralExpr(0xFFFF) + 0x2) * dh1 / 0x2,
+            Word,
+            Word,
+            0x8000,
+        ),
+    ],
+    ids=["divide-by-0", "0-to-the-0", "mod-of-a-difference", "hex-wraps-at-the-scan"],
+)
+def test_imported_constants_compute_what_math_computes(
+    token, dest, build, dest_type, operand_type, value, runner_factory, monkeypatch
+) -> None:
+    """Python must not compute an operation between two constants when it loads the file."""
+    operand = "DH1" if dest == "DH2" else "DS1"
+    ns = exec_with_source(ladder_to_pyrung(_bundle(f"copy(1,{operand})", token)))
+    results = _on_every_backend(ns["logic"], monkeypatch, [ns[dest]], scans=1)
+    assert set(results.values()) == {(value,)}
+    exported = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    again = exec_with_source(ladder_to_pyrung(exported))
+    plc = PLC(again["logic"])
+    plc.step()
+    assert plc.current_state.tags[ns[dest].name] == value
+    imported = runner_factory(ns["logic"])
+    imported.step()
+    hand = runner_factory(_hand_written(build, dest_type, operand_type))
+    hand.step()
+    got = imported.current_state.tags
+    want = hand.current_state.tags
+    assert got[ns[dest].name] == want["Dest"] == value
+    assert [got[f] for f in _FAULTS] == [want[f] for f in _FAULTS]
+    assert got["fault.division_error"] is (token == "math(5 / 0,DS2)")
 
 
 @pytest.mark.parametrize("pair", UNCONFIRMED_PAIRS, ids="-".join)

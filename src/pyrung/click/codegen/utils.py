@@ -39,7 +39,6 @@ from pyrung.click.codegen.formula import (
 )
 from pyrung.click.codegen.models import _OperandCollection
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
-from pyrung.core.expression import _op_mod
 
 if TYPE_CHECKING:
     from pyrung.click.codegen.models import _SubroutineInfo
@@ -108,7 +107,10 @@ _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
 _PREFIX_TO_BLOCK: dict[str, str] = {p: bv for p, _, bv in _OPERAND_PREFIXES}
 
 # The expression function names that generated code imports from pyrung
-_EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {"PI"}
+_EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {
+    "PI",
+    "LiteralExpr",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +373,7 @@ def _sub_operand(
     else:
         if isinstance(formula, (BinaryOp, Negate, Call, RangeCall, Pi)):
             return _render_parsed_formula(
-                text, formula, pairs, False, collection, nicknames, structured_map
+                text, formula, pairs, collection, nicknames, structured_map
             )
     expression = _validate_operand(text)
 
@@ -524,16 +526,13 @@ def _render_math_formula(
         formula, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     except ValueError as error:
         raise ValueError(f"Unsupported CSV operand expression: {text!r}") from error
-    return _render_parsed_formula(
-        text, formula, pairs, hex_mode, collection, nicknames, structured_map
-    )
+    return _render_parsed_formula(text, formula, pairs, collection, nicknames, structured_map)
 
 
 def _render_parsed_formula(
     text: str,
     formula: Formula,
     pairs: tuple[tuple[str, str], ...],
-    hex_mode: bool,
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
     structured_map: TagMap | None,
@@ -581,12 +580,15 @@ def _render_parsed_formula(
             if strength < _UNARY_STRENGTH:
                 operand = f"({operand})"
             return f"-{operand}", _UNARY_STRENGTH
-        folded = _fold_constant_mod(node, hex_mode)
-        if folded is not None:
-            return folded
         symbol, strength = _PYTHON_BINARY_OPS[node.op]
         left, left_strength = render(node.left)
         right, right_strength = render(node.right)
+        if _is_python_number(node.left) and _is_python_number(node.right):
+            # Python would compute an operation between two numbers when it loads the
+            # file, in its own arithmetic.  A LiteralExpr keeps the operation for the scan,
+            # so ``5 / 0`` stores 0 and sets the division-error flag, as math() does.
+            left, left_strength = f"LiteralExpr({left})", _ATOM_STRENGTH
+            collection.used_expr_funcs.add("LiteralExpr")
         # Python applies ** from the right and every other operator from the left.
         if left_strength < strength or (left_strength == strength and symbol == "**"):
             left = f"({left})"
@@ -611,25 +613,44 @@ def _render_number(value: int | float, is_hex: bool, text: str) -> tuple[str, in
     return source, _UNARY_STRENGTH if sign else _ATOM_STRENGTH
 
 
-def _fold_constant_mod(node: BinaryOp, hex_mode: bool) -> tuple[str, int] | None:
-    """Render a MOD of two constants as its value when Python's ``%`` computes another value.
+def _is_python_number(node: Formula) -> bool:
+    """Return whether *node* renders as a plain Python number."""
+    if isinstance(node, Negate):
+        return _is_python_number(node.operand)
+    return isinstance(node, Number)
 
-    Python computes ``-7 % 3`` when it runs the generated source, before pyrung sees the MOD.
-    Python's result is 2, and a CLICK's is -1. For a MOD by 0, Python raises
-    ``ZeroDivisionError``. A CLICK gives 0.
-    """
-    if node.op != "MOD" or not (isinstance(node.left, Number) and isinstance(node.right, Number)):
-        return None
-    left, right = node.left.value, node.right.value
-    if hex_mode:
-        # A hex Math holds each constant as 16 bits, unsigned.
-        left, right = int(left) & 0xFFFF, int(right) & 0xFFFF
-    value = 0 if right == 0 else _op_mod(left, right)
-    if node.right.value != 0 and value == node.left.value % node.right.value:
-        return None
-    if hex_mode:
-        return f"0x{int(value):X}", _ATOM_STRENGTH
-    return _render_number(value, False, repr(value))
+
+def _has_constant_operation(node: Formula) -> bool:
+    """Return whether the rendered *node* has an operation between two plain numbers."""
+    if isinstance(node, BinaryOp):
+        if _is_python_number(node.left) and _is_python_number(node.right):
+            return True
+        return _has_constant_operation(node.left) or _has_constant_operation(node.right)
+    if isinstance(node, Negate):
+        return _has_constant_operation(node.operand)
+    if isinstance(node, Call):
+        return any(_has_constant_operation(arg) for arg in node.args)
+    return False
+
+
+def _token_needs_literal_expr(token: str) -> bool:
+    """Return whether the rendered AF *token* holds ``LiteralExpr``, so its file imports it."""
+    open_paren = token.find("(")
+    if open_paren <= 0 or not token.endswith(")"):
+        return False
+    try:
+        args, kwargs = _parse_af_args(token[open_paren + 1 : -1])
+    except ValueError:
+        return False
+    hex_mode = token.startswith("math(") and ("mode", "hex") in kwargs
+    for arg in args:
+        try:
+            formula, _ = parse_with_unconfirmed_pairs(arg, hex_mode=hex_mode)
+        except ValueError:
+            continue
+        if _has_constant_operation(formula):
+            return True
+    return False
 
 
 def _guessed_order(first: str, second: str) -> str:

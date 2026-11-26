@@ -56,6 +56,7 @@ from pyrung.click.codegen.utils import (
     _sub_operand,
     _sub_operand_kwarg,
     _text_code_value,
+    _token_needs_literal_expr,
 )
 from pyrung.core._messages import internal_error
 from pyrung.core.structure import AutoDefault
@@ -95,6 +96,8 @@ def _prescan_expr_funcs(
                 collection.used_expr_funcs.add(py_name)
         if _CLICK_PI_RE.search(token):
             collection.used_expr_funcs.add("PI")
+        if _token_needs_literal_expr(token):
+            collection.used_expr_funcs.add("LiteralExpr")
 
     for rung in rungs:
         for instr in rung.instructions:
