@@ -12,6 +12,8 @@ from __future__ import annotations
 import itertools
 import math
 import re
+import struct
+import warnings
 from typing import Any
 
 import pytest
@@ -23,6 +25,7 @@ from pyrung.click.codegen.formula import (
     _CLICK_FUNC_TO_PYTHON,
     _RANGE_AGG_TO_METHOD,
     _TIER_OF,
+    CONFIRMED_ORDERS,
     CONFIRMED_PAIRS,
     NEGATE_ADDRESS,
     NEGATE_BRACKET,
@@ -54,7 +57,9 @@ from tests.circuitpy.test_codegen import _on_every_backend
 from tests.click.helpers import exec_with_source
 from tests.conformance.math.formula_values import (
     Unread,
-    click_result,
+    click_steps,
+    click_store,
+    float32,
     pyrung_expression,
     regroupings,
 )
@@ -253,15 +258,46 @@ _MINUS_SIGNS = {
 }
 
 
-def _settled_pairs() -> dict[frozenset[str], set[str]]:
-    """Return each pair of operators that the readings settle, with the rounds of those readings.
+def _written_orders(pair: frozenset[str]) -> list[tuple[str, str]]:
+    """Return each order in which a formula can write the two operators of *pair*.
+
+    A minus sign pairs only with an operator to its right.
+    """
+    if len(pair) == 1:
+        [op] = pair
+        return [(op, op)]
+    if pair & _MINUS_SIGNS:
+        [minus] = pair & _MINUS_SIGNS
+        [other] = pair - _MINUS_SIGNS
+        return [(minus, other)]
+    first, second = sorted(pair)
+    return [(first, second), (second, first)]
+
+
+def _settles(ruled_out: set[str], first: str, second: str) -> bool:
+    """Return whether ruling out the orders *ruled_out* settles *first* written before *second*.
 
     Two operators could apply in three orders. Either one applies first, or both apply from
-    the left. Only two operators that meet have one other grouping, so only they are tested.
-    A reading rules an order out when the formula, grouped in that order, gives another
-    value. A pair is settled when the readings rule out each order but the parse's. So a pair
-    from two levels needs a reading with the tighter operator on the right, and a pair from
-    one level needs a reading of each order.
+    the left. When the formula writes one operator twice, the order named after that operator
+    applies the right one first.
+    The parse groups the formula in one of these orders. The order is settled when the readings
+    rule out each order that groups the formula another way.
+    """
+    if first == second or first in _MINUS_SIGNS:
+        return second in ruled_out
+    if _TIER_OF[second] < _TIER_OF[first]:
+        # The parse applies the second first. Applying the first first, or both from the left,
+        # groups it another way.
+        return {first, "left"} <= ruled_out
+    return second in ruled_out
+
+
+def _settled_orders() -> dict[tuple[str, str], set[str]]:
+    """Return each order of two operators that the readings settle, with the rounds of those
+    readings.
+
+    Only two operators that meet have one other grouping, so only they are tested. A reading
+    rules an order out when the formula, grouped in that order, gives another value.
     """
     ruled_out: dict[frozenset[str], set[str]] = {}
     rounds: dict[frozenset[str], set[str]] = {}
@@ -279,28 +315,26 @@ def _settled_pairs() -> dict[frozenset[str], set[str]]:
             orders = {parent} if child_is_left else {parent, "left"}
             ruled_out.setdefault(pair, set()).update(orders)
             rounds.setdefault(pair, set()).add(case.split("-")[0])
-    settled = {}
-    for pair, orders in ruled_out.items():
-        if len(pair) == 1:
-            needed = set(pair)
-        elif pair & _MINUS_SIGNS:
-            needed = set(pair - _MINUS_SIGNS)
-        else:
-            first, second = sorted(pair)
-            needed = {first, second, "left"}
-            if _TIER_OF[first] != _TIER_OF[second]:
-                needed.discard(min(pair, key=_TIER_OF.__getitem__))
-            else:
-                needed.discard("left")
-        if needed <= orders:
-            settled[pair] = rounds[pair]
-    return settled
+    return {
+        (first, second): rounds[pair]
+        for pair, orders in ruled_out.items()
+        for first, second in _written_orders(pair)
+        if _settles(orders, first, second)
+    }
 
 
 def test_confirmed_pairs_are_the_pairs_that_the_readings_settle() -> None:
+    settled = _settled_orders()
+    both = {
+        pair: settled[_written_orders(pair)[0]]
+        for pair in {frozenset(order) for order in settled}
+        if all(order in settled for order in _written_orders(pair))
+    }
     listed = {frozenset((a, b)): set(rounds.split(", ")) for a, b, rounds in CONFIRMED_PAIRS}
     assert len(listed) == len(CONFIRMED_PAIRS)
-    assert listed == _settled_pairs()
+    assert listed == both
+    one_way = {order: rounds for order, rounds in settled.items() if frozenset(order) not in both}
+    assert {(a, b): set(rounds.split(", ")) for a, b, rounds in CONFIRMED_ORDERS} == one_way
 
 
 def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypatch) -> None:
@@ -314,10 +348,21 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 
 
 #: The values that each pair of operators runs over. The whole numbers reach the ends of the
-#: Int and Dint ranges. Sam accepted that a Real formula may round differently in its last bit
-#: (2026-11-26). So each Real is exact in a double, and the sum of any two stays exact.
-_WHOLE_GRID = (0, 1, -1, 2, -2, 3, 7, 32767, -32768, 2147483647, -2147483648)
-_REAL_GRID = (*_WHOLE_GRID, 1.5, -2.5, 0.25, 2.0**40, -(2.0**40))
+#: Int and Dint ranges. 164999119 * 114975250 * 58 passes 2^53, so a double rounds its
+#: product, and the two groupings round it to different values. Each Real is a float32, as a DF
+#: holds it. In one grouping, 1.0 + 1.0E+17 - 1.0E+17 loses the 1.0 before the large Reals cancel.
+_WHOLE_GRID = (
+    *(0, 1, -1, 2, -2, 3, 7, 32767, -32768, 2147483647, -2147483648),
+    *(164999119, 114975250, 58),
+)
+_REAL_GRID = tuple(
+    float32(value)
+    for value in (
+        *_WHOLE_GRID,
+        *(1.5, -2.5, 0.25, 2.0**40, -(2.0**40)),
+        *(1.0e17, -1.0e17, 1.0e30, -1.0e30),
+    )
+)
 _HEX_GRID = (0, 1, 2, 3, 7, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF)
 
 #: Each destination of a mode, with its type, the type of the operands and their values.
@@ -326,6 +371,8 @@ _DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] =
         ("Int", Int, Dint, _WHOLE_GRID),
         ("Dint", Dint, Dint, _WHOLE_GRID),
         ("Real", Real, Real, _REAL_GRID),
+        ("Int", Int, Real, _REAL_GRID),
+        ("Dint", Dint, Real, _REAL_GRID),
     ),
     True: (("Word", Word, Word, _HEX_GRID),),
 }
@@ -360,6 +407,7 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
     each function.
     """
     confirmed = {frozenset((a, b)) for a, b, _ in CONFIRMED_PAIRS}
+    confirmed_orders = {(a, b) for a, b, _ in CONFIRMED_ORDERS}
     pairs = []
     for hex_mode, ops in _MODE_OPERATORS.items():
         bank = "DH" if hex_mode else "DS"
@@ -370,8 +418,9 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
         for text in texts:
             tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
             [(first, _), (second, _)] = next(formula_module._scopes(tree))
-            if frozenset((first, second)) not in confirmed:
-                pairs.append((first, second, hex_mode, text))
+            if frozenset((first, second)) in confirmed or (first, second) in confirmed_orders:
+                continue
+            pairs.append((first, second, hex_mode, text))
     return pairs
 
 
@@ -391,13 +440,29 @@ class _PyrungRun:
         return context.get_tag("Dest")
 
 
+def _same_bits(first: tuple[float, frozenset[str]], second: tuple[float, frozenset[str]]) -> bool:
+    """Return whether two values and their flags, before the store, are the same bit for bit."""
+    (a, a_flags), (b, b_flags) = first, second
+    if a_flags != b_flags:
+        return False
+    if isinstance(a, int) and isinstance(b, int):
+        return a == b
+    return struct.pack("<d", a) == struct.pack("<d", b)
+
+
 def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
     """Return how the two groupings of *text* differ, or None where they agree.
 
-    At each point of the grid, both groupings must give the same value and flags in the model
-    of a CLICK, and pyrung's ``math()`` must store that value. A point where the model has no
-    reading counts as a difference. pyrung's flags are not compared, because a flag that pyrung
-    gets wrong under both groupings is a flag bug, not a question of order (ruled 2026-11-26).
+    At each point of the grid, the model of a CLICK computes both groupings up to the store.
+    Where the two values and their flags are the same bit for bit, a CLICK can't tell the
+    groupings apart, so the model leaves out the store. Otherwise both stores must give the
+    same value and flags, and pyrung's ``math()`` must store that value. A point where the model
+    has no reading counts as a difference. pyrung's two groupings must store the same value
+    everywhere.
+
+    pyrung's flags are not compared, because a flag that pyrung gets wrong under both groupings
+    is a flag bug, not a question of order (ruled 2026-11-26). A store that pyrung gets wrong
+    under both groupings is a store bug in the same way (ruled 2026-11-26).
     """
     tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
@@ -410,17 +475,20 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
         context = ScanContext(SystemState())
         for values in itertools.product(grid, repeat=count):
             registers = {f"{bank}{index}": value for index, value in enumerate(values, 1)}
+            where = f"for {values} into a {dest}"
             try:
-                click = [click_result(t, hex_mode, registers, dest) for t in (tree, regrouped)]
+                steps = [click_steps(t, hex_mode, registers) for t in (tree, regrouped)]
+                click = None if _same_bits(*steps) else [click_store(*s, dest) for s in steps]
             except Unread as unread:
-                return f"no reading shows {unread} for {values} into a {dest}"
-            if click[0] != click[1]:
-                return f"the model of a CLICK gives {click} for {values} into a {dest}"
+                return f"no reading shows {unread} {where}"
+            if click is not None and click[0] != click[1]:
+                return f"the model of a CLICK stores {click} {where}"
             if not runs:
                 runs = [_PyrungRun(t, bank, operand_type, dest_type) for t in (tree, regrouped)]
             pyrung = [run(context, values) for run in runs]
-            if pyrung != [click[0][0]] * 2:
-                return f"pyrung stores {pyrung} for {values} into a {dest}, a CLICK {click[0][0]}"
+            if pyrung[0] != pyrung[1] or (click is not None and pyrung[0] != click[0][0]):
+                stored = "" if click is None else f", a CLICK {click[0][0]}"
+                return f"pyrung stores {pyrung} {where}{stored}"
     return None
 
 
@@ -467,6 +535,13 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
         ("- DS[DS1] ^ 2", False, [(NEGATE_POINTER, "^")]),
         ("- - DS1 ^ 2", False, [(NEGATE_MINUS, "^")]),
         ("- - DS1 + 2", False, [(NEGATE_MINUS, "+")]),
+        # In doubles, 1.0 + 1.0E+17 - 1.0E+17 is 0.0 from the left and 1.0 with the - first.
+        # 1.0 + 1.0E+17 + -1.0E+17 gives the same two values.
+        ("DS1 + DS2 - DS3", False, [("+", "-")]),
+        ("DS1 + DS2 + DS3", False, [("+", "+")]),
+        # In doubles, 164999119 * 114975250 * 58 rounds to one value from the left, and to
+        # another with the second * first.
+        ("DS1 * DS2 * DS3", False, [("*", "*")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
@@ -494,6 +569,7 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("DS1 * - ( DS2 + 1 )", False),
         # A CLICK was read running these.
         ("5 - 3 + 1", False),
+        ("DS1 - DS2 + DS3", False),
         ("- DS1 * 3", False),
         ("- DS1 MOD 3", False),
         # Readings settled these pairs.
@@ -507,9 +583,6 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("DH1 AND DH2 AND DH3", True),
         ("DH1 OR DH2 OR DH3", True),
         ("DH1 XOR DH2 XOR DH3", True),
-        ("DS1 + DS2 + DS3", False),
-        ("DS1 * DS2 * DS3", False),
-        ("DS1 + DS2 - DS3", False),
         ("- DS2 * 4", False),
         ("- DS1 / 2", False),
         ("- DS2 MOD 3", False),
@@ -661,6 +734,7 @@ def test_imported_constants_compute_what_math_computes(
         ("- ( DS1 ) - 2", "DF1", f"{NEGATE_BRACKET} and '-'", "the minus sign first"),
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
+        ("DS1 + DS2 - DS3", "DF1", "'+' and '-'", "the two from the left"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(
@@ -744,7 +818,8 @@ def _close(got: Any, want: float) -> bool:
 def confirmed() -> tuple[Any, ...]:
     # The program moves each reading onto registers of its own, so the formulas of
     # READ_FORMULAS no longer match a reading's tree, and each warns once.
-    with pytest.warns(UserWarning) as caught:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         program = _program(READINGS)
     assert len(caught) == len(READ_FORMULAS)
     return program

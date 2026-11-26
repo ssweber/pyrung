@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import operator
+import struct
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from typing import Any
@@ -48,6 +49,27 @@ _RANGES = {"Int": (-32768, 32767), "Dint": (-(2**31), 2**31 - 1), "Word": (0, 0x
 _REAL_MAX = 3.4028234663852886e38
 
 
+def float32(value: float) -> float:
+    """Return *value* rounded to a float32, as a DF holds it."""
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+#: The lowest and the highest value that a reading shows a CLICK storing in each destination.
+#: The store of a value past them is unread.
+_STORES_READ: dict[str, tuple[float, float]] = {
+    # -1.0E10 stores 7168 (``math_more/real_past_int``). 2 ^ 40 stores 0
+    # (``math_more/power_edges``).
+    "Int": (-1.0e10, 2.0**40),
+    # 1.0E10 stores 1410065408 (``math_more/real_past_int``). No reading stores a value below
+    # a Dint's range.
+    "Dint": (-(2.0**31), 1.0e10),
+    # -3 stores FFFDh (b15 m1b). 10000h stores 0h (b18 d5x).
+    "Word": (-3, 0x10000),
+    # 3.0E+38 * 10 and * -10 store +Inf and -Inf (``numeric/real_overflow_stays_finite``).
+    "Real": (-10 * float32(3.0e38), 10 * float32(3.0e38)),
+}
+
+
 class Unread(Exception):
     """No reading shows what a CLICK does at this step of a formula."""
 
@@ -64,13 +86,12 @@ def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> flo
     return int(value) & 0xFFFF if hex_mode else value
 
 
-def click_result(
-    node: Formula, hex_mode: bool, registers: dict[str, int], dest: str
+def click_steps(
+    node: Formula, hex_mode: bool, registers: dict[str, int]
 ) -> tuple[float, frozenset[str]]:
-    """Return what a CLICK stores in a *dest* for *node*, and the fault flags it raises.
+    """Return what a CLICK computes for *node* before the store, and the fault flags it raises.
 
-    *dest* is ``Int``, ``Dint``, ``Real`` or ``Word``. Raise :class:`Unread` at each step that
-    no reading shows. These steps are:
+    Raise :class:`Unread` at each step that no reading shows. These steps are:
 
     - a hex AND, OR or XOR of a value above FFFFh or below -FFFFh
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
@@ -78,19 +99,48 @@ def click_result(
     - an error or Inf from ``^``
     - every function but SQRT, and SQRT in hex mode
 
-    A row such as b17 c1 is case c1 of reading round b17. A CLICK 4.00 on a C2-03CPU was read
-    running it on 2026-11-26.
+    A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
+    fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
+    keeps the dividend's sign (``math_more/mod_signs``).
+
+    A row such as b17 c1 is case c1 of reading round b17. Each round ran on a C2-03CPU with
+    firmware 4.00, on 2026-11-25 or 2026-11-26.
     """
-    guard = _Guard(hex_mode, dest)
-    return guard.store(_value(node, hex_mode, registers, guard))
+    guard = _Guard(hex_mode)
+    return _value(node, hex_mode, registers, guard), frozenset(guard.flags)
+
+
+def click_store(value: float, flags: frozenset[str], dest: str) -> tuple[float, frozenset[str]]:
+    """Return what a CLICK stores in a *dest* for the formula *value*, and the fault flags.
+
+    *flags* are the flags of the formula's steps. *dest* is ``Int``, ``Dint``, ``Real`` or
+    ``Word``. Raise :class:`Unread` for a value past the values that a reading shows a CLICK
+    storing in a *dest*.
+    """
+    low, high = _STORES_READ[dest]
+    if not low <= value <= high:
+        raise Unread(f"a store of {value} into a {dest}")
+    if dest == "Real":
+        # A Real result past a float32 is Inf with SC43 (``numeric/real_overflow_stays_finite``).
+        if abs(value) > _REAL_MAX:
+            return math.copysign(math.inf, value), flags | {"out_of_range"}
+        return value, flags
+    # The store truncates and wraps, with SC43 (``numeric/real_to_int_truncates``,
+    # ``faults/math_store_out_of_range``, ``math_more/real_past_int``, ``math_more/power_edges``,
+    # ``hex_math/shifts``). A hex result of 10000h stores 0h with SC43 (b18 d5x).
+    whole = int(value)
+    low, high = _RANGES[dest]
+    if not low <= whole <= high:
+        flags |= {"out_of_range"}
+    span = high - low + 1
+    return (whole - low) % span + low, flags
 
 
 class _Guard:
     """Collect the flags of one formula, and refuse each step that no reading shows."""
 
-    def __init__(self, hex_mode: bool, dest: str) -> None:
+    def __init__(self, hex_mode: bool) -> None:
         self.hex_mode = hex_mode
-        self.dest = dest
         self.flags: set[str] = set()
 
     def by_zero(self, op: str) -> float:
@@ -114,30 +164,11 @@ class _Guard:
         return math.sqrt(x)
 
     def intermediate(self, value: float) -> None:
-        # A CLICK keeps each intermediate whole and checks only the value that it stores. No
-        # intermediate raises SC43 (b17 b1 to b4, b1x, b2x and a11,
+        # A CLICK does not cut an intermediate value to the destination's size. It raises SC43
+        # only for the value that it stores (b17 b1 to b4, b1x, b2x and a11,
         # ``faults/real_intermediate_range``).
         if not math.isfinite(value):
             raise Unread(f"intermediate {value}")
-
-    def store(self, value: float) -> tuple[float, frozenset[str]]:
-        if not math.isfinite(value):
-            raise Unread(f"result {value}")
-        if self.dest == "Real":
-            # A Real result past a float32 is Inf with SC43 (``numeric/real_overflow_stays_finite``).
-            if abs(value) > _REAL_MAX:
-                self.flags.add("out_of_range")
-                value = math.copysign(math.inf, value)
-            return value, frozenset(self.flags)
-        # The store truncates and wraps, with SC43 (``numeric/real_to_int_truncates``,
-        # ``faults/math_store_out_of_range``, ``hex_math/shifts``). A hex result of 10000h
-        # stores 0h with SC43 (b18 d5x).
-        whole = int(value)
-        low, high = _RANGES[self.dest]
-        if not low <= whole <= high:
-            self.flags.add("out_of_range")
-        span = high - low + 1
-        return (whole - low) % span + low, frozenset(self.flags)
 
 
 def _value(

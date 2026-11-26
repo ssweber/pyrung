@@ -51,8 +51,8 @@ NEGATE_MINUS = "a minus sign before another minus sign"
 #: brackets of its own. Only two operators that meet have one other grouping to test, so a
 #: reading settles nothing about the rest. A reading rules out an order of two operators that
 #: meet when the formula, grouped in that order, gives another value. A pair is settled once
-#: its readings rule out every order but CLICK's. ``tests/click/test_click_formula.py``
-#: checks this list against its readings.
+#: its readings rule out every order but CLICK's, whichever operator the formula writes first.
+#: ``tests/click/test_click_formula.py`` checks this list against its readings.
 CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "^", "b10"),
     ("^", "*", "b11"),
@@ -95,11 +95,19 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_FUNCTION, "+", "b15"),
 )
 
+#: Each pair of operators whose order a reading of a CLICK settled only when the formula
+#: writes them in this order, as (first operator, second operator, rounds). ``5 - 3 + 1`` (b11)
+#: is 3, so a CLICK does not apply ``+`` first there. That settles ``DS1 - DS2 + DS3``. No
+#: reading settles ``DS1 + DS2 - DS3``, whose other grouping applies ``-`` first. A pair in
+#: :data:`CONFIRMED_PAIRS` is settled in either order. ``tests/click/test_click_formula.py``
+#: checks this list against its readings.
+CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = (("-", "+", "b11"),)
+
 #: Formulas that a CLICK was read running, as (text, hex mode), whose pairs of operators the
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
 #: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
 #: readings.
-READ_FORMULAS: tuple[tuple[str, bool], ...] = (("5 - 3 + 1", False),)
+READ_FORMULAS: tuple[tuple[str, bool], ...] = ()
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
 #: CLICK, as (first operator, second operator, hex mode) in the order that the formula writes
@@ -109,9 +117,6 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (("5 - 3 + 1", False),)
 #: groupings agree there, and whose value pyrung's ``math()`` stores. A pair agrees only if a
 #: reading shows each step of both groupings.
 SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
-    ("+", "+", False),
-    ("+", "-", False),
-    ("*", "*", False),
     (NEGATE_ADDRESS, "*", False),
     (NEGATE_ADDRESS, "/", False),
     (NEGATE_ADDRESS, "MOD", False),
@@ -178,6 +183,7 @@ _TOKEN_RE = re.compile(
 _TIER_OF = {op: index for index, ops in enumerate(BINARY_TIERS) for op in ops}
 _WORD_OPS = frozenset(op for ops in BINARY_TIERS for op in ops if op.isalpha())
 _CONFIRMED = frozenset(frozenset((first, second)) for first, second, _ in CONFIRMED_PAIRS)
+_CONFIRMED_ORDERS = frozenset((first, second) for first, second, _ in CONFIRMED_ORDERS)
 _SAME_VALUE = frozenset(SAME_VALUE_PAIRS)
 
 
@@ -281,8 +287,8 @@ def parse_with_unconfirmed_pairs(
 ) -> tuple[Formula, tuple[tuple[str, str], ...]]:
     """Return the tree of *text* in :data:`BINARY_TIERS` order, and its unconfirmed pairs.
 
-    Each pair is one that :func:`parse_click_formula` needs. No reading in
-    :data:`CONFIRMED_PAIRS` settled it, and :data:`SAME_VALUE_PAIRS` does not list it. Each
+    Each pair is one that :func:`parse_click_formula` needs, and that none of
+    :data:`CONFIRMED_PAIRS`, :data:`CONFIRMED_ORDERS` and :data:`SAME_VALUE_PAIRS` lists. Each
     pair lists its operators in the order that the formula writes them. Raise ValueError for
     text that is not a formula.
     """
@@ -296,6 +302,8 @@ def parse_with_unconfirmed_pairs(
                 if second_is_minus:
                     continue
                 if (first, second, hex_mode) in _SAME_VALUE:
+                    continue
+                if (first, second) in _CONFIRMED_ORDERS:
                     continue
                 if frozenset((first, second)) not in _CONFIRMED:
                     pairs.setdefault(frozenset((first, second)), (first, second))

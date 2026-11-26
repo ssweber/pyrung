@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import laddercodec
 import pytest
 
 from pyrung.conformance._formula import draw_formulas
+from tests.conformance import suite
 
 _HEADER = tuple(["R"] + [str(i) for i in range(1, 32)] + ["AF"])
 
@@ -48,3 +52,24 @@ def test_each_math_needs_a_formula() -> None:
         draw_formulas(rows, "g/a", ["DH1 + DH2", "DH1 + DH2"])
     with pytest.raises(ValueError, match="No case 'g/b'"):
         draw_formulas(rows, "g/b", ["DH1 + DH2"])
+
+
+#: Each part that holds a case with ``formulas=``.
+_TYPED_PARTS = [
+    part
+    for part in (*suite.PARTS, *suite.APART_PARTS)
+    if any(c.formulas for group in suite.groups(part) for c in group.cases)
+]
+
+
+@pytest.mark.parametrize("part", _TYPED_PARTS)
+def test_laddercodec_reads_each_typed_formula(part: str, tmp_path: Path) -> None:
+    """ClickNick pastes the export through laddercodec, which refuses what CLICK's dialog refuses.
+
+    One refused formula, such as ``- - DS1`` (OBJ-1001), keeps the whole part off the PLC.
+    """
+    out = suite.build(part).export(tmp_path)
+    ladders = [path for path in out.rglob("*.csv") if path.name != "nicknames.csv"]
+    assert ladders
+    for path in ladders:
+        laddercodec.read_csv(path)

@@ -1200,7 +1200,8 @@ applies `^` from the left as well, so `2 ^ 3 ^ 2` is 64, which Python writes
 Python computes an operation between two plain numbers when it loads the file,
 in Python's arithmetic. `LiteralExpr(5) / 0` leaves the division for `math()`
 to run at scan time, so it stores 0 and sets the division-error flag. The
-importer writes such a constant this way. Keep the `LiteralExpr` when you edit the formula.
+importer writes such a constant this way. Keep the `LiteralExpr` when you edit
+the formula.
 
 ## Reference
 

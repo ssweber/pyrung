@@ -31,8 +31,8 @@ pyrung and in the model of a CLICK (``formula_values.py``), so no value tells th
 The ``WIDTHS`` cases each bracket their formulas, so the order is fixed and only one step is
 read. They run formulas that a CLICK was read running on 2026-11-26, and expect the values read
 then. ``width_int`` and ``width_word`` run reading round b17's cases b1 to b4, b1x and b2x.
-``hex_by_zero`` runs reading round b18's cases d1 and d2.
-A CLICK keeps each intermediate whole and raises SC43 only for the value that it stores.
+``hex_by_zero`` runs reading round b18's cases d1 and d2. A CLICK does not cut an
+intermediate value to the destination's size. It raises SC43 only for the value that it stores.
 
 - ``width_int``: ``( DS 32767 + DS 1 ) - DS 1`` (Result1) and ``( DS 300 * DS 300 ) / DS 400``
   (Result2) into an Int. Result3 is 1 when ``( DD 2147483647 + DD 1 ) - DD 1`` into a DD is
@@ -48,8 +48,25 @@ A CLICK keeps each intermediate whole and raises SC43 only for the value that it
   SC40 after each, and reads 1. The MOD raises SC46 on a CLICK. The case does not read SC46,
   which pyrung does not raise yet.
 
-CLICK's dialog refused ``5 - - DS1``, so it may refuse ``negneg_power`` too. The case then
-never runs on the PLC.
+The ``doubles`` case is a probe. It types its formulas without brackets, as the order cases
+do, and expects what pyrung gives.
+
+- Result1 is ``DF 1.0 + DF 1.0E+17 - DF 1.0E+17`` into an Int. A double drops the 1.0 from
+  1.0 + 1.0E+17, so the formula is 0 from the left and 1 with the ``-`` first.
+- Result2 is 1 when ``DD 164999119 * DD 114975250 * DD 58`` into a DD is 1322058880, the
+  product of the doubles from the left. It is 2 for 1322058752, the product with the second
+  ``*`` first, and 3 for 1322058796, the whole product. Each wraps to 32 bits.
+- Result3 is 1 when ``DD 2147483647 * DD 2147483647`` into a DD is 0, 2 for 1 and 3 for
+  2147483647. Result4 is the same formula into an Int. As a double the product is
+  2^62 - 2^32, whose low 32 bits are 0. The low bits of the whole product are 1.
+
+When the case passes on a CLICK, add its readings to ``READINGS``, and widen the stores that
+``formula_values._STORES_READ`` reads.
+
+No probe asks about a minus sign before another minus sign. laddercodec refuses ``- - DS1``
+(OBJ-1001), as CLICK's dialog refused ``5 - - DS1``. One formula that laddercodec refuses keeps
+the whole group off the PLC, so ``test_typed_formulas.py`` reads the export back through
+laddercodec.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -70,8 +87,13 @@ from pyrung.click.codegen.formula import (
 from pyrung.click.codegen.utils import _guessed_order, _operator_words
 from pyrung.conformance import Case, Group, assert_all_passed, case, run
 from pyrung.core import copy, fill, math, rung, system
-from tests.conformance.math.formula_values import click_value, pyrung_expression, regroupings
-from tests.conformance.memory import dd, dh, ds
+from tests.conformance.math.formula_values import (
+    click_value,
+    float32,
+    pyrung_expression,
+    regroupings,
+)
+from tests.conformance.memory import dd, df, dh, ds
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
 
 #: A constant of a formula. A minus sign written against it is part of it (``-7``).
@@ -221,14 +243,13 @@ PROBES: dict[str, tuple[bool, tuple[tuple[str, int, int], ...]]] = {
     "negb_or": (True, (("- ( 2h ) OR 1h", -1, -3),)),
     "negb_xor": (True, (("- ( 3h ) XOR 1h", -4, -2),)),
     "negpi_power": (False, (("- PI ^ 2", 9, -9),)),
-    "negneg_power": (False, (("- - 2 ^ 2", 4, -4),)),
 }
 
 
 #: The first register of each probe case, in the order of ``PROBES``. A decimal case takes ten
 #: DS registers, and a hex case ten DH registers.
 _PROBE_REGISTERS = {
-    False: (*range(4231, 4281, 10), *range(4441, 4461, 10)),
+    False: (*range(4231, 4281, 10), 4441),
     True: tuple(range(271, 401, 10)),
 }
 
@@ -320,6 +341,41 @@ def init_hex_by_zero(slot: Any) -> None:
     fill(0x99, dh.select(42, 43))
 
 
+def prove_doubles(slot: Any) -> None:
+    one, big, big_again = df[170], df[171], df[172]
+    a, b, c, product = dd[178], dd[179], dd[180], dd[181]
+    top, top_again, square = dd[182], dd[183], dd[184]
+    with rung(*once(slot)):
+        math(one + big - big_again, slot.Result1)
+        math(a * b * c, product)
+        math(top * top_again, square)
+        math(top * top_again, slot.Result4)
+    class_of(slot, product, DOUBLES_PRODUCTS, slot.Result2)
+    class_of(slot, square, [0, 1, 2147483647], slot.Result3)
+    finish(slot)
+
+
+def init_doubles(slot: Any) -> None:
+    copy(1.0, df[170])
+    fill(1.0e17, df.select(171, 172))
+    copy(164999119, dd[178])
+    copy(114975250, dd[179])
+    copy(58, dd[180])
+    fill(2147483647, dd.select(182, 183))
+    copy(0, dd[181])
+    copy(0, dd[184])
+
+
+#: The formulas of the ``doubles`` case that read an order, with their register values.
+DOUBLES: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("DF170 + DF171 - DF172", {"DF170": 1.0, "DF171": float32(1.0e17), "DF172": float32(1.0e17)}),
+    ("DD178 * DD179 * DD180", {"DD178": 164999119, "DD179": 114975250, "DD180": 58}),
+)
+
+#: What a DD stores for 164999119 * 114975250 * 58: the product of the doubles from the left,
+#: with the second ``*`` first, and the whole product. Each wraps to 32 bits.
+DOUBLES_PRODUCTS = [1322058880, 1322058752, 1322058796]
+
 #: The cases that bracket their formulas to read one step, in the order of the manifest.
 WIDTHS = [
     case(
@@ -351,6 +407,26 @@ WIDTHS = [
         expect={"Result1": 1, "Result2": 1, "ErrorCode": 1},
     ),
 ]
+
+#: A case that reads the order of two operators in doubles, and a store past 2^53.
+DOUBLES_CASE = case(
+    "A Math applies + and - from the left in doubles. 1.0 + 1.0E+17 - 1.0E+17 is 0 into an "
+    "Int (Result1), and 1 with the - first. A Math applies two * from the left. 164999119 * "
+    "114975250 * 58 into a DD is 1322058880 (Result2 = 1), and 1322058752 with the second * "
+    "first (2). 2147483647 * 2147483647 is 0 into a DD (Result3 = 1) and into an Int (Result4)",
+    ladder=prove_doubles,
+    init=init_doubles,
+    id="doubles",
+    expect={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": 0},
+    formulas=[
+        "DF170 + DF171 - DF172",
+        "DD178 * DD179 * DD180",
+        "DD182 * DD183",
+        "DD182 * DD183",
+    ],
+    probe="whether a CLICK applies + and -, and * twice, from the left where a double rounds, "
+    "and what it stores for a value past 2^53",
+)
 
 
 group = Group(
@@ -510,6 +586,7 @@ group = Group(
             ("4h OR 6h / 2h", 3),
         ),
         *_probes(),
+        DOUBLES_CASE,
         *WIDTHS,
     ],
 )
@@ -541,3 +618,18 @@ def test_each_probe_tells_the_two_orders_apart(case_id: str) -> None:
 
 def test_math_order():
     assert_all_passed(run(group))
+
+
+@pytest.mark.parametrize(("text", "registers"), DOUBLES)
+def test_doubles_tells_the_two_orders_apart(text: str, registers: dict[str, Any]) -> None:
+    tree = parse_with_unconfirmed_pairs(text)[0]
+    [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
+    left, other = (click_value(t, False, registers) for t in (tree, regrouped))
+    if text.startswith("DF"):
+        assert (left, other) == (0.0, 1.0)
+    else:
+        # A DD keeps the low 32 bits.
+        stored = [(int(value) + 2**31) % 2**32 - 2**31 for value in (left, other)]
+        assert stored == DOUBLES_PRODUCTS[:2]
+        a, b, c = registers.values()
+        assert a * b * c % 2**32 == DOUBLES_PRODUCTS[2]
