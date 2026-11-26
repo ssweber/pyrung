@@ -6,17 +6,18 @@ what a CLICK stored on 2026-11-26, each in a program of its own.  Each case runs
 (``probe_kit``).  A Copy of a DH into a slot keeps its 16 bits, so FFFDh reads -3.  Each
 DH result starts at BEEFh, so a Math that writes nothing reads -16657.
 
-- ``division_truncates``: ``DH / DH * DH`` with 7, 2 and 2 (Result1) is 6 if each ``/``
-  truncates, and 7 if the formula keeps the half.  The same with ``+ 0`` at the end
-  (Result2) is 6 or 7.  With 1, 2 and 4 (Result3) it is 0, or 2 for a kept half.  A CLICK
-  reads 6, 6 and 0.
-- ``mod_truncates``: ``- DH MOD DH``.  With F0h and 3h (Result1) every reading is 0, and a
-  16-bit cut of the negated DH reads 1.  With F1h and 7h (Result2) a MOD that truncates
-  reads -3 (FFFDh).  A MOD that floors reads 4, and a 16-bit cut reads 6.  ErrorCode bit 1
-  is SC43 after the first Math, and bit 2 after the second.  A CLICK reads 0, -3 and 2.
+- ``division_truncates``: ``DH / DH * DH`` with 7, 2 and 2 (Result1) gives 6 if each
+  ``/`` truncates, and 7 if the formula keeps the fraction.  The same with ``+ 0`` at the
+  end (Result2) gives 6 or 7.  With 1, 2 and 4 (Result3) it gives 0, or 2 for a kept
+  fraction.  A CLICK reads 6, 6 and 0.
+- ``mod_truncates``: ``- DH MOD DH``.  With F0h and 3h (Result1) every rule gives 0, except
+  a 16-bit cut of the negated DH, which gives 1.  With F1h and 7h (Result2) a MOD that
+  truncates gives -3 (FFFDh).  A MOD that floors gives 4, and a 16-bit cut gives 6.
+  ErrorCode bit 1 is SC43 after the first Math, and bit 2 after the second.  A CLICK reads
+  0, -3 and 2.
 - ``product_not_cut``: ``DH * DH MOD DH``.  With 100h, 101h and 7h (Result1) the whole
-  product reads 6, and a product cut to 16 bits reads 4.  With FF38h, FE70h and 7h
-  (Result2) unsigned operands read 5.  A cut product reads 2, a signed 32-bit product
+  product gives 6, and a product cut to 16 bits gives 4.  With FF38h, FE70h and 7h
+  (Result2) unsigned operands give 5.  A cut product gives 2, a signed 32-bit product
   -6 (FFFAh), and signed operands 4.  ErrorCode bits 1 and 2 are SC43 after each.  A CLICK
   reads 6, 5 and 0.
 

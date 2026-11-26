@@ -512,7 +512,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] Math WORD-only infers hex mode (`numeric/word_math_unsigned`, `numeric/hex_literal_is_decimal`)
 - [ ] Math mixing WORD and non-WORD: validator finding math-operand-bank (a static finding, not a ladder case)
 - [x] Math intermediates are wider than 32 bits, on a CLICK too (`numeric/intermediate_exceeds_32_bits`, `numeric/intermediate_fits_32_bits`)
-- [x] a hex Math truncates each division (`hex_divmod/division_truncates`). Its MOD truncates a negative dividend and sets SC43 (`hex_divmod/mod_truncates`). It reads each DH unsigned and does not cut a product to 16 bits before a MOD (`hex_divmod/product_not_cut`)
+- [x] a hex Math truncates each division (`hex_divmod/division_truncates`). A hex MOD truncates, and a negative result sets SC43 (`hex_divmod/mod_truncates`). It reads each DH unsigned and does not cut a product to 16 bits before a MOD (`hex_divmod/product_not_cut`)
 
 ### Per instruction
 #### Conditions

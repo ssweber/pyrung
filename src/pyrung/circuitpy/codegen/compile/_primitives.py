@@ -179,9 +179,10 @@ def _compile_expression_impl(
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         flags = CALC_FLAGS if strict else None
         if expr.op is _op_hex_div:
-            # A hex Math's / truncates toward zero (core _op_hex_div).  A dividend of 0
-            # or more and a positive constant divisor give the same quotient with //.
-            if _non_negative(expr.left) and _positive_literal(expr.right):
+            # A hex Math's / truncates toward zero (core _op_hex_div).  // gives the same
+            # quotient only for whole operands.  A float constant would floor the exact
+            # quotient, and 3 // 0.1 is 29 where the rule gives 30.
+            if _non_negative_int(expr.left) and _positive_int_literal(expr.right):
                 return f"({left} // {right})"
             ctx.mark_helper("_hex_div")
             return f"_hex_div({left}, {right}, {flags})"
@@ -510,6 +511,13 @@ def _non_negative(expr: Any) -> bool:
     """Return whether *expr* is a non-negative constant or a Bool or Word tag."""
     if isinstance(expr, LiteralExpr):
         return expr.value >= 0
+    return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
+
+
+def _non_negative_int(expr: Any) -> bool:
+    """Return whether *expr* is an int constant of 0 or more or a Bool or Word tag."""
+    if isinstance(expr, LiteralExpr):
+        return _non_negative_int_literal(expr)
     return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
 
 

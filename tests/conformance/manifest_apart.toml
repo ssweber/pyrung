@@ -312,7 +312,7 @@ copy_binary_df_dd = 2
 copy_binary_constants = 3
 
 [groups.hex_divmod]
-base = 1801 # Conf_HexDivmod: DS1801..DS1840
+base = 2201 # Conf_HexDivmod: DS2201..DS2240
 slots = 3
 
 [groups.hex_divmod.cases]

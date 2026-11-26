@@ -124,8 +124,9 @@ def _op_hex_div(a: Numeric, b: Numeric) -> Numeric:
     is 0 (hardware, 2026-11-26).  ``calc_form`` runs ``/`` as this function in a hex
     Math.  A division by 0 is 0 and sets SC40, as in :func:`_op_div`.
 
-    An operand is a float only after a ``**`` or a step past 2 ** 53.  The function then
-    truncates the quotient to a whole double.  No CLICK reading had a negative quotient.
+    A float operand comes from a float constant, a ``**``, ``sqrt()`` or another math
+    function, or a step past 2 ** 53.  The function then truncates the rounded quotient
+    to a whole double, so ``3 / 0.1`` is 30.  No CLICK reading had a negative quotient.
     Truncation toward zero there is pyrung's assumption, based on the hex MOD, which
     truncates.
     """
