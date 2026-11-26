@@ -671,7 +671,9 @@ def _resolve_remote_start(
                 "because they are read-only. Use a HOLDING or COIL address."
             )
         tag_types = _preview_operand_tag_types(operand, effective_count)
-        register_count = _register_count(tag_types, remote_start.register_type)
+        register_count = _register_count(
+            tag_types, remote_start.register_type, "send" if is_send else "receive"
+        )
         start_addr = remote_start.address
         addresses = tuple(range(start_addr, start_addr + register_count))
         return (None, start_addr, addresses, remote_start, register_count)

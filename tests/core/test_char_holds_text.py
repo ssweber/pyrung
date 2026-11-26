@@ -517,13 +517,13 @@ def test_a_receive_into_char_tags_reads_only_text(remote_start: str) -> None:
 def test_a_raw_receive_reads_two_characters_from_each_register(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Three characters read two registers.  Each register holds its first character in the
-    low byte, as pyrung's Modbus server stores TXT.  The last high byte is left unread.
+    """Four characters read two registers.  Each register holds its first character in the
+    low byte, as pyrung's Modbus server stores TXT.
 
     The compiled kernel sends no Modbus request, so the core half runs only on ``PLC``.
     """
-    registers = (0x4241, 0x5843)
-    txt = Block("T", TagType.CHAR, 1, 3)
+    registers = (0x4241, 0x4443)
+    txt = Block("T", TagType.CHAR, 1, 4)
     status = {
         "receiving": Bool("Receiving"),
         "success": Bool("Success"),
@@ -535,7 +535,7 @@ def test_a_raw_receive_reads_two_characters_from_each_register(
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
-                dest=txt.select(1, 3),
+                dest=txt.select(1, 4),
                 **status,
             )
 
@@ -551,7 +551,7 @@ def test_a_raw_receive_reads_two_characters_from_each_register(
     plc = PLC(program)
     plc.step()
     plc.step()
-    assert [plc.current_state.tags[f"T{i}"] for i in (1, 2, 3)] == ["A", "B", "C"]
+    assert [plc.current_state.tags[f"T{i}"] for i in (1, 2, 3, 4)] == ["A", "B", "C", "D"]
     assert [request["count"] for request in requests] == [2]
 
     namespace, sockets = _run_raw_client_job(monkeypatch, program)
@@ -564,7 +564,49 @@ def test_a_raw_receive_reads_two_characters_from_each_register(
     sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBHH", 3, 4, *registers), uid=17))
     namespace["service_modbus_client"]()
     ctx = _context_for_program(program, _hardware())
-    assert [eval(ctx.symbol_for_tag(txt[i]), namespace) for i in (1, 2, 3)] == ["A", "B", "C"]
+    assert [eval(ctx.symbol_for_tag(txt[i]), namespace) for i in (1, 2, 3, 4)] == [
+        "A",
+        "B",
+        "C",
+        "D",
+    ]
+
+
+@pytest.mark.parametrize("verb", ["send", "receive"])
+@pytest.mark.parametrize("count", [1, 3])
+@pytest.mark.parametrize("kind", [RegisterType.HOLDING, RegisterType.INPUT], ids=repr)
+def test_a_raw_send_or_receive_of_an_odd_count_of_char_tags_is_refused(
+    verb: str, count: int, kind: RegisterType
+) -> None:
+    """CLICK's dialogs refuse an odd TXT count (OBJ-010 and OBJ-029).  Its Send of one
+    register, FC06, always sends two characters, so one Char tag has no form either."""
+    if verb == "send" and kind is RegisterType.INPUT:
+        pytest.skip("send() refuses an INPUT register for any tag")
+    txt = Block("T", TagType.CHAR, 1, 4)
+    call = send if verb == "send" else receive
+    local = "source" if verb == "send" else "dest"
+    with pytest.raises(ValueError, match="Use an even number of Char tags"):
+        with Program(strict=False):
+            with rung():
+                call(
+                    target="peer",
+                    remote_start=ModbusAddress(0x100, kind),
+                    **{local: txt.select(1, count)},
+                )
+
+
+@pytest.mark.parametrize("verb", ["send", "receive"])
+def test_a_raw_send_or_receive_of_one_char_tag_is_refused(verb: str) -> None:
+    call = send if verb == "send" else receive
+    local = "source" if verb == "send" else "dest"
+    with pytest.raises(ValueError, match="Use an even number of Char tags"):
+        with Program(strict=False):
+            with rung():
+                call(
+                    target="peer",
+                    remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+                    **{local: Char("One")},
+                )
 
 
 # --- Send -------------------------------------------------------------------------------
@@ -590,16 +632,16 @@ def test_a_raw_send_of_char_tags_goes_only_to_a_register(kind: RegisterType) -> 
 def test_a_raw_send_packs_two_characters_into_each_register(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Three characters write two registers, the first character in each low byte.  The
-    last high byte is 0.  The core half runs only on ``PLC``, as for a receive."""
-    txt = Block("T", TagType.CHAR, 1, 3, default_factory=lambda addr: "ABC"[addr - 1])
-    registers = [0x4241, 0x0043]
+    """Four characters write two registers, the first character in each low byte.  The
+    core half runs only on ``PLC``, as for a receive."""
+    txt = Block("T", TagType.CHAR, 1, 4, default_factory=lambda addr: "ABCD"[addr - 1])
+    registers = [0x4241, 0x4443]
     with Program(strict=False) as program:
         with rung():
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
-                source=txt.select(1, 3),
+                source=txt.select(1, 4),
                 success=Bool("Success"),
             )
 
@@ -650,28 +692,27 @@ def soft_plc() -> Iterator[tuple[int, MemoryDataProvider]]:
 def test_text_sent_to_a_soft_plc_receives_back(
     soft_plc: tuple[int, MemoryDataProvider],
 ) -> None:
-    """A raw send of three characters to TXT1 lands in TXT1..TXT3, and a raw receive reads
-    them back.  The odd count writes a blank into TXT4, the high byte of the last register."""
+    """A raw send of four characters to TXT1 lands in TXT1..TXT4, and a raw receive reads
+    them back."""
     port, provider = soft_plc
-    provider.write("TXT4", "Z")
     peer = ModbusTcpTarget(name="soft", ip="127.0.0.1", port=port)
     txt1 = ModbusAddress(36864, RegisterType.HOLDING)
-    sent = Block("S", TagType.CHAR, 1, 3, default_factory=lambda addr: "AB\xe9"[addr - 1])
-    back = Block("R", TagType.CHAR, 1, 3)
+    sent = Block("S", TagType.CHAR, 1, 4, default_factory=lambda addr: "AB\xe9Z"[addr - 1])
+    back = Block("R", TagType.CHAR, 1, 4)
     sent_ok, back_ok = Bool("SentOk"), Bool("BackOk")
     with Program(strict=False) as program:
         with rung(~sent_ok):
-            send(target=peer, remote_start=txt1, source=sent.select(1, 3), success=sent_ok)
+            send(target=peer, remote_start=txt1, source=sent.select(1, 4), success=sent_ok)
         with rung(sent_ok):
-            receive(target=peer, remote_start=txt1, dest=back.select(1, 3), success=back_ok)
+            receive(target=peer, remote_start=txt1, dest=back.select(1, 4), success=back_ok)
 
     plc = PLC(program)
     deadline = time.monotonic() + 10
     while not plc.current_state.tags.get("BackOk") and time.monotonic() < deadline:
         plc.step()
         time.sleep(0.005)
-    assert [provider.read(f"TXT{i}") for i in (1, 2, 3, 4)] == ["A", "B", "\xe9", "\x00"]
-    assert [plc.current_state.tags[f"R{i}"] for i in (1, 2, 3)] == ["A", "B", "\xe9"]
+    assert [provider.read(f"TXT{i}") for i in (1, 2, 3, 4)] == ["A", "B", "\xe9", "Z"]
+    assert [plc.current_state.tags[f"R{i}"] for i in (1, 2, 3, 4)] == ["A", "B", "\xe9", "Z"]
 
 
 # --- run_function -----------------------------------------------------------------------

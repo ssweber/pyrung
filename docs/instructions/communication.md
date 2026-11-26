@@ -125,6 +125,6 @@ receive(
 )
 ```
 
-From a raw holding or input register, `receive()` reads two characters into TXT tags. `send()` of TXT tags to a raw holding register writes two characters into each register. The low byte holds the first character. Both refuse a coil or a discrete input with TXT tags.
+From a raw holding or input register, `receive()` reads two characters into TXT tags. `send()` of TXT tags to a raw holding register writes two characters into each register. The low byte holds the first character. Both refuse a coil or a discrete input with TXT tags. Both need an even number of TXT tags, as CLICK does.
 
 For more on the soft-PLC Modbus setup, see [CLICK PLC — ClickDataProvider](../dialects/click.md).
