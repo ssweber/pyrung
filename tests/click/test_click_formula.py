@@ -763,14 +763,53 @@ def _unread_zero_signs_on_grid(text: str, *, plain: bool) -> set[str]:
     return rows
 
 
+#: The pairs that another difference keeps out of a list whatever their zero signs read. Each
+#: comes with a formula and a point where the model of a CLICK computes a different value in
+#: each order. Reals that cancel keep ``+ +`` and ``+ -`` out of SAME_VALUE_PAIRS.
+_KEPT_OUT_WHATEVER_THE_ZERO_SIGNS: dict[
+    str, dict[tuple[str, str], tuple[str, tuple[float, ...]]]
+] = {
+    "SAME_VALUE_ON_PLAIN_OPERANDS": {},
+    "SAME_VALUE_PAIRS": {
+        ("+", "+"): ("DS1 + DS2 + DS3", (1.0, 1.0e17, -9.9e16)),
+        ("+", "-"): ("DS1 + DS2 - DS3", (1.0, 1.0e17, 9.9e16)),
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("pair", "text", "values"),
+    [
+        (pair, text, values)
+        for kept_out in _KEPT_OUT_WHATEVER_THE_ZERO_SIGNS.values()
+        for pair, (text, values) in kept_out.items()
+    ],
+)
+def test_each_pair_kept_out_whatever_the_zero_signs_has_orders_that_differ(
+    pair: tuple[str, str], text: str, values: tuple[float, ...]
+) -> None:
+    tree = parse_with_unconfirmed_pairs(text, hex_mode=False)[0]
+    [(first, _), (second, _)] = next(formula_module._scopes(tree))
+    assert (first, second) == pair
+    [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
+    registers = {f"DS{index}": float32(value) for index, value in enumerate(values, start=1)}
+    first_order, second_order = (click_steps(t, False, registers)[0] for t in (tree, regrouped))
+    assert first_order != second_order
+
+
 @pytest.mark.parametrize("listed", list(PENDING_ZERO_SIGNS))
 def test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets(listed: str) -> None:
-    pending = PENDING_ZERO_SIGNS[listed]
-    met: dict[tuple[str, str], set[str]] = {}
+    # Each list takes the pairs that only zero signs keep out on plain operands. The next test
+    # checks those. A pair that another difference keeps out of the list has no entry, because
+    # no reading of its zero signs brings it back.
+    pairs = set(PENDING_ZERO_SIGNS["SAME_VALUE_ON_PLAIN_OPERANDS"])
+    pairs -= set(_KEPT_OUT_WHATEVER_THE_ZERO_SIGNS[listed])
+    met: dict[tuple[str, str], set[str]] = {pair: set() for pair in pairs}
     for first, second, hex_mode, text in _unconfirmed_pairs():
-        if not hex_mode and (first, second) in pending:
+        if not hex_mode and (first, second) in pairs:
             rows = _unread_zero_signs_on_grid(text, plain=listed == "SAME_VALUE_ON_PLAIN_OPERANDS")
-            met.setdefault((first, second), set()).update(rows)
+            met[(first, second)].update(rows)
+    pending = PENDING_ZERO_SIGNS[listed]
     assert {pair: set(rows) for pair, rows in pending.items()} == met
 
 

@@ -78,7 +78,8 @@ A pair joins a list again only when a reading shows every row of its entry in
 
 - each step gives the zero sign that a double gives;
 - a minus sign flips the sign bit;
-- the 0 of a division or MOD by zero has the dividend's sign.
+- the 0 of a division or MOD by zero has the dividend's sign;
+- SQRT of a negative value gives +0.0.
 
 ``test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets`` in
 ``tests/click/test_click_formula.py`` generates the rows that each pair meets, and checks the
@@ -88,7 +89,7 @@ reads it yet. Those rows wait for a part of their own, after reading round b16.
 A plain decimal operand is a whole number inside a Dint, so a double holds each sum of three
 exactly. ``DS1 + DS2 + DS3`` and ``DS1 + DS2 - DS3`` then differ only in the sign of a 0. Over
 a DF, Reals that cancel give the two orders different values, so these two pairs never join
-``formula.SAME_VALUE_PAIRS``.
+``formula.SAME_VALUE_PAIRS``. ``PENDING_ZERO_SIGNS`` has no entry for them under that list.
 
 The pairs of a minus sign with ``*``, ``/`` and MOD also depend on these:
 
@@ -101,9 +102,14 @@ The pairs of a minus sign with ``*``, ``/`` and MOD also depend on these:
   none of them. That reading settles the pairs in ``formula.CONFIRMED_PAIRS``.
 - The pairs over a DF also need ``double_overflow``. Its Result3 must read 1 or 2, and its
   Scratch 1 or 2. With 2, the model must also say which sign the 0 keeps.
-- pyrung stores +0.0 for ``- DS1 / DS2`` at (0, 1) when it applies the minus sign first, and
-  -0.0 when it applies it last. So the ``/`` pairs also wait for pyrung to store the same 0
-  in both orders.
+- pyrung stores a different 0 into a DF in each order of four formulas. It stores +0.0 when
+  it applies the minus sign first, and -0.0 when it applies it last. The formulas are:
+
+  - ``- DS1 / DS2`` and ``- ( DS1 ) / DS2``, with whole numbers at (0, 1).
+  - ``- DS1 MOD DS2`` and ``- ( DS1 ) MOD DS2``, with Reals at (0.0, 1.0).
+
+  So the ``/`` pairs, and the MOD pairs over a DF, also wait for pyrung to store the same 0 in
+  both orders.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

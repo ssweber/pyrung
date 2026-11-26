@@ -285,7 +285,8 @@ def unread_zero_signs(node: Formula, registers: dict[str, float]) -> set[str]:
 
     - each step computes as a double does;
     - a minus sign flips the sign bit;
-    - the 0 of a division or MOD by zero has the dividend's sign.
+    - the 0 of a division or MOD by zero has the dividend's sign;
+    - SQRT of a negative value gives +0.0.
 
     Any other step that no reading shows, such as a step on Inf, ends the formula there.
     """
@@ -313,15 +314,6 @@ _DIFFERENCES = {
     "+0.0 - +0.0": NO_PROBE,
     "+x - +x": "zero_sum Result2 bit 2 and Result3 bit 1 (5 - 5 only)",
     "-x - -x": NO_PROBE,
-}
-_SUMS_WITH_MINUS_ZERO = {
-    "+0.0 + -0.0": NO_PROBE,
-    "-0.0 + +0.0": "zero_sum Result4 bit 2",
-    "-0.0 + -0.0": NO_PROBE,
-}
-_DIFFERENCES_WITH_MINUS_ZERO = {
-    "+0.0 - -0.0": NO_PROBE,
-    "-0.0 - +0.0": NO_PROBE,
 }
 _PRODUCTS = {
     "+0.0 * +0.0": NO_PROBE,
@@ -383,6 +375,10 @@ _SQRT_OF_A_NEGATIVE = {"SQRT ( -x )": NO_PROBE}
 #: entry. ``tests/click/test_click_formula.py`` generates the rows of each pair over the grid
 #: of that list, and checks that this table holds exactly those rows.
 #:
+#: A pair has no entry for a list that another difference keeps it out of. Reals that cancel
+#: give the two orders of ``+ +`` and ``+ -`` different values, so neither pair has an entry
+#: for ``SAME_VALUE_PAIRS``.
+#:
 #: A row is a step that gives 0, with a class for each operand:
 #:
 #: - ``+0.0`` and ``-0.0`` are the two zeros;
@@ -412,14 +408,6 @@ PENDING_ZERO_SIGNS: dict[str, dict[tuple[str, str], dict[str, str]]] = {
         (NEGATE_BRACKET, "MOD"): {**_MINUS_SIGNS, **_REMAINDERS},
     },
     "SAME_VALUE_PAIRS": {
-        ("+", "+"): {**_SUMS, **_SUMS_WITH_MINUS_ZERO, **_SQRT_OF_A_NEGATIVE},
-        ("+", "-"): {
-            **_SUMS,
-            **_DIFFERENCES,
-            **_SUMS_WITH_MINUS_ZERO,
-            **_DIFFERENCES_WITH_MINUS_ZERO,
-            **_SQRT_OF_A_NEGATIVE,
-        },
         **{
             (minus_sign, op): {**_MINUS_SIGNS, **rows, **by_minus_zero, **_SQRT_OF_A_NEGATIVE}
             for minus_sign in (NEGATE_ADDRESS, NEGATE_BRACKET)
