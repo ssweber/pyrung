@@ -18,6 +18,8 @@ from typing import Any
 from pyrung import PI, LiteralExpr
 from pyrung.click.codegen.formula import (
     _CLICK_FUNC_TO_PYTHON,
+    NEGATE_ADDRESS,
+    NEGATE_BRACKET,
     Address,
     BinaryOp,
     Call,
@@ -159,17 +161,20 @@ class _Guard:
         self.hex_mode = hex_mode
         self.flags: set[str] = set()
 
-    def by_zero(self, op: str, dividend: float) -> float:
+    def by_zero(self, op: str, dividend: float, divisor: float) -> float:
         # A division or MOD by zero is 0, and the rest of the formula runs. The division raises
         # SC40 (b17 c1, b18 d1 and d3, ``math_terms/error_terms``, ``hex_math/rotates_and_bits``).
         # The MOD raises SC46 (b17 c2 and c3, b18 d2). b18 d1 and d2 read each in hex mode
         # inside a longer formula. No reading shows the sign of a decimal 0 of this kind, so
         # the model leaves each decimal division or MOD by zero unread. ``by_zero`` in
         # ``test_math_range.py`` asks for it.
+        zero = 0
         if not self.hex_mode:
-            raise Unread(f"the sign of the 0 of {dividend} {op} 0")
+            self.unread_zero(op, dividend, divisor)
+            # The rejoin rules suppose that this 0 has the dividend's sign.
+            zero = math.copysign(0.0, dividend)
         self.flags.add("division_error" if op == "/" else "math_operation_error")
-        return 0
+        return zero
 
     def function(self, name: str, args: list[float]) -> float:
         # SQRT(4) is 2 (b15 u2 and u4). SQRT of a negative is 0 with SC46, and the rest of the
@@ -180,7 +185,11 @@ class _Guard:
             raise Unread(f"{name} in a formula")
         (x,) = args
         if x <= 0:
-            raise Unread(f"the sign of the 0 of SQRT ( {x} )")
+            self.unread_zero("SQRT", x)
+            # The rejoin rules suppose that SQRT of a negative value is +0.0, as pyrung's is.
+            if x < 0:
+                self.flags.add("math_operation_error")
+                return 0.0
         return math.sqrt(x)
 
     def operands(self, *values: float) -> None:
@@ -197,7 +206,7 @@ class _Guard:
         # 0 that a minus sign gives. Flipping the sign bit gives -0.0, and 0 - x gives +0.0.
         # This also leaves unread a minus sign before the 0 of a division or MOD by zero.
         if not self.hex_mode and value == 0:
-            raise Unread("a minus sign before 0")
+            self.unread_zero("-", value)
 
     def result(self, op: str, a: float, b: float, value: float) -> None:
         # A CLICK does not cut an intermediate value to the destination's size. It raises SC43
@@ -213,7 +222,11 @@ class _Guard:
         if underflow or 0 < abs(value) < sys.float_info.min:
             raise Unread(f"{a} {op} {b} falls below the smallest normal double")
         if value == 0 and not _zero_sign_is_read(op, a, b):
-            raise Unread(f"the sign of the 0 of {a} {op} {b}")
+            self.unread_zero(op, a, b)
+
+    def unread_zero(self, op: str, *operands: float) -> None:
+        """Raise :class:`Unread` for the 0 of *op* on *operands*, whose sign no reading shows."""
+        raise Unread(f"the sign of the 0 of {zero_sign_row(op, *operands)}")
 
 
 def _sign_bit(value: float) -> bool:
@@ -238,6 +251,186 @@ def _zero_sign_is_read(op: str, a: float, b: float) -> bool:
         return plus_zero[0] and b == -1.0
     # -0.0 - -0.0 gives +0.0 (``real_bits/minus_zero_shapes``).
     return op == "-" and a == 0 and b == 0 and _sign_bit(a) and _sign_bit(b)
+
+
+def zero_sign_row(op: str, *operands: float) -> str:
+    """Return the row of :data:`PENDING_ZERO_SIGNS` that the 0 of *op* on *operands* falls in.
+
+    *op* is a binary operator, ``-`` for a minus sign, or ``SQRT``.
+    """
+    classes = [
+        ("-0.0" if _sign_bit(value) else "+0.0") if value == 0 else ("+x" if value > 0 else "-x")
+        for value in operands
+    ]
+    if len(classes) == 2:
+        return f"{classes[0]} {op} {classes[1]}"
+    return f"{op} ( {classes[0]} )"
+
+
+class _Recorder(_Guard):
+    """A decimal guard that records each zero sign that no reading shows, instead of raising."""
+
+    def __init__(self) -> None:
+        super().__init__(hex_mode=False)
+        self.rows: set[str] = set()
+
+    def unread_zero(self, op: str, *operands: float) -> None:
+        self.rows.add(zero_sign_row(op, *operands))
+
+
+def unread_zero_signs(node: Formula, registers: dict[str, float]) -> set[str]:
+    """Return the row of each zero sign in the decimal formula *node* that no reading shows.
+
+    After each such 0, the model goes on as the rejoin rules of ``test_math_range.py`` suppose:
+
+    - each step computes as a double does;
+    - a minus sign flips the sign bit;
+    - the 0 of a division or MOD by zero has the dividend's sign.
+
+    Any other step that no reading shows, such as a step on Inf, ends the formula there.
+    """
+    recorder = _Recorder()
+    try:
+        _value(node, False, registers, recorder)
+    except Unread:
+        pass
+    return recorder.rows
+
+
+#: The probe of a row of :data:`PENDING_ZERO_SIGNS` that no case of ``test_math_range.py`` reads.
+NO_PROBE = "no probe yet"
+
+_MINUS_SIGNS = {
+    "- ( +0.0 )": "minus_sign Result2 bit 1 and ErrorCode bit 1",
+    "- ( -0.0 )": NO_PROBE,
+}
+_SUMS = {
+    "+0.0 + +0.0": "zero_sum Result1 and Result4 bit 1",
+    "+x + -x": "zero_sum Result2 bit 1 (5 + -5 only)",
+    "-x + +x": "zero_sum Result3 bit 2 (-5.0 + 5.0 only)",
+}
+_DIFFERENCES = {
+    "+0.0 - +0.0": NO_PROBE,
+    "+x - +x": "zero_sum Result2 bit 2 and Result3 bit 1 (5 - 5 only)",
+    "-x - -x": NO_PROBE,
+}
+_SUMS_WITH_MINUS_ZERO = {
+    "+0.0 + -0.0": NO_PROBE,
+    "-0.0 + +0.0": "zero_sum Result4 bit 2",
+    "-0.0 + -0.0": NO_PROBE,
+}
+_DIFFERENCES_WITH_MINUS_ZERO = {
+    "+0.0 - -0.0": NO_PROBE,
+    "-0.0 - +0.0": NO_PROBE,
+}
+_PRODUCTS = {
+    "+0.0 * +0.0": NO_PROBE,
+    "+0.0 * +x": NO_PROBE,
+    "+0.0 * -x": "minus_sign ErrorCode bit 4 (0 * -5 only)",
+    "+x * +0.0": NO_PROBE,
+    "-0.0 * +0.0": NO_PROBE,
+    "-0.0 * +x": NO_PROBE,
+    "-0.0 * -x": "zero_sum ErrorCode bit 1 (-0.0 * -5.0 only)",
+    "-x * +0.0": NO_PROBE,
+}
+_PRODUCTS_BY_MINUS_ZERO = {
+    "+0.0 * -0.0": NO_PROBE,
+    "+x * -0.0": NO_PROBE,
+    "-0.0 * -0.0": NO_PROBE,
+    "-x * -0.0": NO_PROBE,
+}
+_QUOTIENTS = {
+    "+0.0 / +x": NO_PROBE,
+    "+0.0 / -x": NO_PROBE,
+    "-0.0 / +x": NO_PROBE,
+    "-0.0 / -x": "zero_sum ErrorCode bit 2 (-0.0 / -5.0 only)",
+    "+0.0 / +0.0": "by_zero Result2 bit 1",
+    "-0.0 / +0.0": "by_zero Result2 bit 2",
+    "+x / +0.0": "by_zero Result1 bit 1 (5.0 / 0.0 only)",
+    "-x / +0.0": "by_zero Result1 bit 2 (-5.0 / 0.0 only)",
+}
+_DIVISIONS_BY_MINUS_ZERO = {
+    "+0.0 / -0.0": NO_PROBE,
+    "+x / -0.0": NO_PROBE,
+    "-0.0 / -0.0": NO_PROBE,
+    "-x / -0.0": NO_PROBE,
+}
+_REMAINDERS = {
+    "+0.0 MOD +x": "zero_sum Scratch bit 2 (0.0 MOD 5.0 only)",
+    "+0.0 MOD -x": NO_PROBE,
+    "+x MOD +x": "minus_sign Result3 bit 4 (5.0 MOD 5.0 only)",
+    "+x MOD -x": "minus_sign Result4 bit 1 (5.0 MOD -5.0 only)",
+    "-0.0 MOD +x": "zero_sum Scratch bit 1 (-0.0 MOD 5.0 only)",
+    "-0.0 MOD -x": NO_PROBE,
+    "-x MOD +x": "minus_sign Result3 bit 2 (-5.0 MOD 5.0 only)",
+    "-x MOD -x": "minus_sign Result4 bit 2 (-5.0 MOD -5.0 only)",
+    "+0.0 MOD +0.0": "by_zero Result4 bit 1",
+    "-0.0 MOD +0.0": "by_zero Result4 bit 2",
+    "+x MOD +0.0": "by_zero Result3 bit 1 (5.0 MOD 0.0 only)",
+    "-x MOD +0.0": "by_zero Result3 bit 2 (-5.0 MOD 0.0 only)",
+}
+_REMAINDERS_BY_MINUS_ZERO = {
+    "+0.0 MOD -0.0": NO_PROBE,
+    "+x MOD -0.0": NO_PROBE,
+    "-0.0 MOD -0.0": NO_PROBE,
+    "-x MOD -0.0": NO_PROBE,
+}
+#: The stand-in SQRT ( DS4 ) at -1 meets this row.
+_SQRT_OF_A_NEGATIVE = {"SQRT ( -x )": NO_PROBE}
+
+#: The zero signs that a decimal pair meets and that no reading shows, by the list that the
+#: pair would join again. A pair joins that list only when a reading shows every row of its
+#: entry. ``tests/click/test_click_formula.py`` generates the rows of each pair over the grid
+#: of that list, and checks that this table holds exactly those rows.
+#:
+#: A row is a step that gives 0, with a class for each operand:
+#:
+#: - ``+0.0`` and ``-0.0`` are the two zeros;
+#: - ``+x`` is a value above 0, and ``-x`` is a value below 0;
+#: - ``- ( +0.0 )`` is a minus sign before +0.0;
+#: - ``+x / +0.0`` is a division by zero.
+#:
+#: The readings show +0.0 * -1.0, -1.0 * +0.0 and +0.0 / -1.0 (``real_bits/minus_zero_math``,
+#: ``real_bits/minus_zero_shapes``). So in ``+0.0 * -x``, ``-x * +0.0`` and ``+0.0 / -x``, -x is
+#: a value below 0 other than -1.0.
+#:
+#: Each row names the probe in ``test_math_range.py`` that reads it, or :data:`NO_PROBE`. A
+#: probe that reads one value of ``+x`` or ``-x`` says which, such as ``(5.0 / 0.0 only)``.
+#: That row is read only when a reading or a ruling shows that every value of the class gives
+#: the same sign.
+#:
+#: The rejoin rules in ``test_math_range.py`` name what else some pairs need.
+PENDING_ZERO_SIGNS: dict[str, dict[tuple[str, str], dict[str, str]]] = {
+    "SAME_VALUE_ON_PLAIN_OPERANDS": {
+        ("+", "+"): _SUMS,
+        ("+", "-"): {**_SUMS, **_DIFFERENCES},
+        (NEGATE_ADDRESS, "*"): {**_MINUS_SIGNS, **_PRODUCTS},
+        (NEGATE_ADDRESS, "/"): {**_MINUS_SIGNS, **_QUOTIENTS},
+        (NEGATE_ADDRESS, "MOD"): {**_MINUS_SIGNS, **_REMAINDERS},
+        (NEGATE_BRACKET, "*"): {**_MINUS_SIGNS, **_PRODUCTS},
+        (NEGATE_BRACKET, "/"): {**_MINUS_SIGNS, **_QUOTIENTS},
+        (NEGATE_BRACKET, "MOD"): {**_MINUS_SIGNS, **_REMAINDERS},
+    },
+    "SAME_VALUE_PAIRS": {
+        ("+", "+"): {**_SUMS, **_SUMS_WITH_MINUS_ZERO, **_SQRT_OF_A_NEGATIVE},
+        ("+", "-"): {
+            **_SUMS,
+            **_DIFFERENCES,
+            **_SUMS_WITH_MINUS_ZERO,
+            **_DIFFERENCES_WITH_MINUS_ZERO,
+            **_SQRT_OF_A_NEGATIVE,
+        },
+        **{
+            (minus_sign, op): {**_MINUS_SIGNS, **rows, **by_minus_zero, **_SQRT_OF_A_NEGATIVE}
+            for minus_sign in (NEGATE_ADDRESS, NEGATE_BRACKET)
+            for op, rows, by_minus_zero in (
+                ("*", _PRODUCTS, _PRODUCTS_BY_MINUS_ZERO),
+                ("/", _QUOTIENTS, _DIVISIONS_BY_MINUS_ZERO),
+                ("MOD", _REMAINDERS, _REMAINDERS_BY_MINUS_ZERO),
+            )
+        },
+    },
+}
 
 
 def _value(
@@ -283,7 +476,7 @@ def _value(
         return _step(node.op, a, b, hex_mode, guard)
     guard.operands(a, b)
     if node.op in ("/", "MOD") and b == 0:
-        return guard.by_zero(node.op, a)
+        return guard.by_zero(node.op, a, b)
     result = _step(node.op, a, b, hex_mode, guard)
     guard.result(node.op, a, b, result)
     return result

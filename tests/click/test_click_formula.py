@@ -14,6 +14,7 @@ import math
 import re
 import struct
 import warnings
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -57,13 +58,16 @@ from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.state import SystemState
 from tests.circuitpy.test_codegen import _on_every_backend
 from tests.click.helpers import exec_with_source
+from tests.conformance.math import formula_values
 from tests.conformance.math.formula_values import (
+    PENDING_ZERO_SIGNS,
     Unread,
     click_steps,
     click_store,
     float32,
     pyrung_expression,
     regroupings,
+    unread_zero_signs,
 )
 from tests.conformance.math.formula_values import click_value as _click_value
 from tests.conftest import execute
@@ -628,11 +632,49 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
     is a flag bug, not a question of order (ruled 2026-11-26). A store that pyrung gets wrong
     under both groupings is a store bug in the same way (ruled 2026-11-26).
     """
-    for formula, values in ((text, None), *_with_a_stand_in(text, hex_mode)):
+    for formula, values in _grid_formulas(text, hex_mode, plain=False):
         how = _how_one_formula_differs(formula, hex_mode, values)
         if how is not None:
             return f"{formula}: {how}"
     return None
+
+
+def _grid_formulas(
+    text: str, hex_mode: bool, *, plain: bool
+) -> list[tuple[str, _StandInValues | None]]:
+    """Return *text*, and *text* with each stand-in in turn, each with its stand-in's values.
+
+    With *plain*, return only the formulas whose pair has plain operands. A constant is a plain
+    operand too, so its stand-in runs on the grid of plain operands.
+    """
+    formulas = [(text, None), *_with_a_stand_in(text, hex_mode)]
+    if not plain:
+        return formulas
+    return [
+        (formula, values)
+        for formula, values in formulas
+        if formula_module.plain_operands(
+            *next(_scope_steps(parse_with_unconfirmed_pairs(formula, hex_mode=hex_mode)[0])),
+            hex_mode=hex_mode,
+        )
+    ]
+
+
+def _grid_points(
+    text: str, hex_mode: bool, stand_in: _StandInValues | None, operand_type: Any, grid: Any
+) -> Iterator[tuple[tuple[float, ...], dict[str, float]]]:
+    """Yield the values of the registers of *text* at each point of *grid*, and by name.
+
+    The registers DS1 to DS3 (or DH1 to DH3) take each value of *grid*. A stand-in's own
+    registers, from DS4 (or DH4) on, take the values that *stand_in* lists for *operand_type*.
+    """
+    bank = "DH" if hex_mode else "DS"
+    indexes = _registers(text, bank)
+    outer = [index for index in indexes if index < 4]
+    inner = stand_in[operand_type] if stand_in else [()]
+    for point in itertools.product(itertools.product(grid, repeat=len(outer)), inner):
+        values: tuple[float, ...] = (*point[0], *point[1])
+        yield values, dict(zip((f"{bank}{index}" for index in indexes), values, strict=True))
 
 
 def _how_one_formula_differs(
@@ -649,16 +691,12 @@ def _how_one_formula_differs(
     tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
     indexes = _registers(text, bank)
-    outer = [index for index in indexes if index < 4]
     for dest, dest_type, operand_type, grid in destinations or _DESTINATIONS[hex_mode]:
         # pyrung_expression builds no range function, so the runs wait for a point that the
         # model reads.
         runs: list[_PyrungRun] = []
         context = ScanContext(SystemState())
-        inner = stand_in[operand_type] if stand_in else [()]
-        for point in itertools.product(itertools.product(grid, repeat=len(outer)), inner):
-            values: tuple[float, ...] = (*point[0], *point[1])
-            registers = dict(zip((f"{bank}{index}" for index in indexes), values, strict=True))
+        for values, registers in _grid_points(text, hex_mode, stand_in, operand_type, grid):
             where = f"for {values} into a {dest}"
             try:
                 steps = [click_steps(t, hex_mode, registers) for t in (tree, regrouped)]
@@ -690,20 +728,62 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
     assert set(SAME_VALUE_PAIRS) == agree, differ
 
 
-def test_same_value_on_plain_operands_is_the_pairs_whose_groupings_agree_there() -> None:
+def _how_pairs_differ_on_plain_operands() -> dict[tuple[str, str, bool], list[str]]:
+    """Return how the groupings of each pair differ on plain operands, empty where they agree."""
     differ: dict[tuple[str, str, bool], list[str]] = {}
     for first, second, hex_mode, text in _unconfirmed_pairs():
-        # A constant is a plain operand too, so its stand-in runs on the same grid.
-        for formula, values in ((text, None), *_with_a_stand_in(text, hex_mode)):
-            tree = parse_with_unconfirmed_pairs(formula, hex_mode=hex_mode)[0]
-            steps = next(_scope_steps(tree))
-            if not formula_module.plain_operands(*steps, hex_mode=hex_mode):
-                continue
+        for formula, values in _grid_formulas(text, hex_mode, plain=True):
             how = _how_one_formula_differs(formula, hex_mode, values, _PLAIN_DESTINATIONS[hex_mode])
             differ.setdefault((first, second, hex_mode), []).extend([] if how is None else [how])
+    return differ
+
+
+def test_same_value_on_plain_operands_is_the_pairs_whose_groupings_agree_there() -> None:
+    differ = _how_pairs_differ_on_plain_operands()
     agree = {pair for pair, hows in differ.items() if not hows}
     assert len(set(SAME_VALUE_ON_PLAIN_OPERANDS)) == len(SAME_VALUE_ON_PLAIN_OPERANDS)
     assert set(SAME_VALUE_ON_PLAIN_OPERANDS) == agree, differ
+
+
+def _unread_zero_signs_on_grid(text: str, *, plain: bool) -> set[str]:
+    """Return the row of each zero sign that the decimal formula *text* meets and no reading shows.
+
+    The rows come from both groupings of *text*, and of *text* with each stand-in, at each point
+    of the grid that the list's derivation runs over.
+    """
+    destinations = (_PLAIN_DESTINATIONS if plain else _DESTINATIONS)[False]
+    grids = {(operand_type, grid) for _, _, operand_type, grid in destinations}
+    rows: set[str] = set()
+    for formula, values in _grid_formulas(text, False, plain=plain):
+        tree = parse_with_unconfirmed_pairs(formula, hex_mode=False)[0]
+        [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
+        for operand_type, grid in grids:
+            for _, registers in _grid_points(formula, False, values, operand_type, grid):
+                rows |= unread_zero_signs(tree, registers) | unread_zero_signs(regrouped, registers)
+    return rows
+
+
+@pytest.mark.parametrize("listed", list(PENDING_ZERO_SIGNS))
+def test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets(listed: str) -> None:
+    pending = PENDING_ZERO_SIGNS[listed]
+    met: dict[tuple[str, str], set[str]] = {}
+    for first, second, hex_mode, text in _unconfirmed_pairs():
+        if not hex_mode and (first, second) in pending:
+            rows = _unread_zero_signs_on_grid(text, plain=listed == "SAME_VALUE_ON_PLAIN_OPERANDS")
+            met.setdefault((first, second), set()).update(rows)
+    assert {pair: set(rows) for pair, rows in pending.items()} == met
+
+
+def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeypatch) -> None:
+    # With unread_zero doing nothing, the model reads each zero sign as the rejoin rules suppose.
+    monkeypatch.setattr(formula_values._Guard, "unread_zero", lambda self, op, *operands: None)
+    differ = _how_pairs_differ_on_plain_operands()
+    agree = {
+        (first, second)
+        for (first, second, hex_mode), hows in differ.items()
+        if not hex_mode and not hows
+    }
+    assert agree <= set(PENDING_ZERO_SIGNS["SAME_VALUE_ON_PLAIN_OPERANDS"]), agree
 
 
 @pytest.mark.parametrize(

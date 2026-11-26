@@ -73,23 +73,24 @@ gives. It stages -0.0 the same way. Each 0 is stored in a DF.
 pyrung gives +0.0 for each of these, and reads 0 in each field. The part has no rung to spare,
 so this case does not check the staged -0.0. ``by_zero`` checks it.
 
-A pair joins a list again only when a reading shows every row that its rule below names.
-The rows that no case reads yet wait for a part of their own, after reading round b16.
+A pair joins a list again only when a reading shows every row of its entry in
+``formula_values.PENDING_ZERO_SIGNS``. Each reading must agree with these rules:
 
-What the readings settle for ``DS1 + DS2 + DS3`` and ``DS1 + DS2 - DS3``:
+- each step gives the zero sign that a double gives;
+- a minus sign flips the sign bit;
+- the 0 of a division or MOD by zero has the dividend's sign.
 
-- A plain decimal operand is a whole number inside a Dint, so a double holds each sum of
-  three exactly. The two orders differ only in the sign of a 0.
-- Both pairs can join ``formula.SAME_VALUE_ON_PLAIN_OPERANDS`` again only when each sum of
-  whole numbers to 0 gives +0.0. ``zero_sum`` reads ``DS 0 + DS 0`` (Result1 = 0), and
-  ``DS 5 + DS -5`` and ``DS 5 - DS 5`` (Result2 = 0).
-- These rows are still unread:
+``test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets`` in
+``tests/click/test_click_formula.py`` generates the rows that each pair meets, and checks the
+table against them. Each row names the case and field that reads it, or says that no case
+reads it yet. Those rows wait for a part of their own, after reading round b16.
 
-  - ``DS 0 - DS 0``;
-  - -x + x and -x - -x on DS values, such as ``DS -5 + DS 5`` and ``DS -5 - DS -5``;
-  - the step from the single value 5 to every whole number.
+A plain decimal operand is a whole number inside a Dint, so a double holds each sum of three
+exactly. ``DS1 + DS2 + DS3`` and ``DS1 + DS2 - DS3`` then differ only in the sign of a 0. Over
+a DF, Reals that cancel give the two orders different values, so these two pairs never join
+``formula.SAME_VALUE_PAIRS``.
 
-What the readings settle for the pairs of a minus sign with ``*``, ``/`` and MOD:
+The pairs of a minus sign with ``*``, ``/`` and MOD also depend on these:
 
 - No value of Inf or NaN tells the two orders apart. A CLICK's Math stores one NaN, whatever
   its sign (``real_bits/non_finite_raw_bits``), and a minus sign before Inf gives -Inf in
@@ -98,34 +99,11 @@ What the readings settle for the pairs of a minus sign with ``*``, ``/`` and MOD
 - If a minus sign computes 0 - x, the orders differ. A CLICK that applies the minus sign
   first sets ``minus_sign`` Result2 bits 2 and 4 and ErrorCode bit 2. Applied last, it sets
   none of them. That reading settles the pairs in ``formula.CONFIRMED_PAIRS``.
-- If a minus sign flips the sign bit, ``minus_sign`` Result2 bit 1 and ErrorCode bit 1 are
-  set. Each pair then also needs a minus sign before -0.0 to give +0.0. No row reads that
-  yet.
-- With a flip, ``*`` and ``/`` by a value other than 0 give the same bits in both orders only
-  when each of their zeros keeps the sign that IEEE arithmetic gives. ``zero_sum`` reads
-  ``DF -0.0 * DF -5.0`` and ``DF -0.0 / DF -5.0`` (ErrorCode = 0). These rows are still
-  unread:
-
-  - +0.0 * 5.0, 5.0 * +0.0 and +0.0 / 5.0 giving +0.0;
-  - -0.0 * 5.0, 5.0 * -0.0 and -0.0 / 5.0 giving -0.0;
-  - -5.0 * -0.0 giving +0.0;
-  - the step from 5.0, -5.0 and the readings' -1.0 to every value.
-
-- With a flip, MOD by a value other than 0 gives the same bits in both orders only when the 0
-  of each exact multiple takes the dividend's sign. That needs ``minus_sign`` Result3 to read
-  3 and Result4 to read 2, and ``zero_sum`` Scratch to read 1. These rows are still unread:
-
-  - -0.0 MOD -5.0 and 0.0 MOD -5.0;
-  - the step from 5.0 to every value.
-
-- With a flip, a ``/`` by zero gives the same bits in both orders only when its 0 has the
-  dividend's sign. That needs ``by_zero`` Result1 to read 6 and Result2 to read 2. MOD by
-  zero needs Result3 to read 6 and Result4 to read 2. The model can then read the 0 of a
-  division by zero.
-- The pairs over DS and DD registers can join ``formula.SAME_VALUE_ON_PLAIN_OPERANDS`` once
-  every row above is read.
 - The pairs over a DF also need ``double_overflow``. Its Result3 must read 1 or 2, and its
   Scratch 1 or 2. With 2, the model must also say which sign the 0 keeps.
+- pyrung stores +0.0 for ``- DS1 / DS2`` at (0, 1) when it applies the minus sign first, and
+  -0.0 when it applies it last. So the ``/`` pairs also wait for pyrung to store the same 0
+  in both orders.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
