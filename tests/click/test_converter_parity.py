@@ -9,7 +9,8 @@ it builds the same ``copy()`` in pyrung and notes whether it raises a converter 
 The two answers must agree, except for the pairs that ``ONLY_LADDERCODEC_REFUSES`` and
 ``ONLY_PYRUNG_REFUSES`` list.
 
-A second test checks a Bool source into TXT the same way, for Copy and for Fill.
+A second test checks a Bool source into TXT the same way, for Copy and for Fill.  The last
+three tests check which Block Copy, Fill and Receive into TXT each side refuses.
 """
 
 from __future__ import annotations
@@ -17,11 +18,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from laddercodec import Code, Copy, FieldError, Fill
+import pytest
+from laddercodec import BlockCopy, Code, Copy, FieldError, Fill, Receive
+from laddercodec.instructions import send_receive as laddercodec_modbus
 
-from pyrung import Program, copy, fill, rung
+from pyrung import Program, blockcopy, copy, fill, rung
 from pyrung.click import ClickBlocks
 from pyrung.core import to_ascii, to_binary, to_text, to_value
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType, receive
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -196,3 +200,131 @@ def test_copy_and_fill_refuse_a_bool_source_into_txt_as_laddercodec_does() -> No
         if _refuses_a_bool(_pyrung_fill, source()) != theirs:
             differ.append((source_text, "TXT2..TXT4", "fill"))
     assert differ == []
+
+
+# --- Block Copy, Fill and Receive into TXT ----------------------------------------------
+
+#: Every CLICK bank as laddercodec's first two addresses and pyrung's block.
+_ALL_BANKS = {
+    "X": (("X1", "X2"), x, 1),
+    "Y": (("Y1", "Y2"), y, 1),
+    "C": (("C1", "C2"), c, 1),
+    "T": (("T1", "T2"), t, 1),
+    "CT": (("CT1", "CT2"), ct, 1),
+    "SC": (("SC1", "SC2"), sc, 1),
+    "DS": (("DS1", "DS2"), ds, 1),
+    "DD": (("DD1", "DD2"), dd, 1),
+    "DH": (("DH1", "DH2"), dh, 1),
+    "DF": (("DF1", "DF2"), df, 1),
+    "XD": (("XD0", "XD1"), xd, 0),
+    "YD": (("YD0", "YD1"), yd, 0),
+    "TD": (("TD1", "TD2"), td, 1),
+    "CTD": (("CTD1", "CTD2"), ctd, 1),
+    "SD": (("SD1", "SD2"), sd, 1),
+    "TXT": (("TXT1", "TXT2"), txt, 1),
+}
+
+
+def _laddercodec_refuses_any(build: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
+    try:
+        build(*args, **kwargs)
+    except FieldError:
+        return True
+    return False
+
+
+def _pyrung_refuses_any(write: Callable[[], Any]) -> bool:
+    try:
+        with Program(strict=False):
+            with rung(x[3]):
+                write()
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def test_blockcopy_into_txt_refuses_what_laddercodec_refuses() -> None:
+    differ: list[tuple[str, str]] = []
+    for bank, ((first, second), block, start) in _ALL_BANKS.items():
+        for name, convert in (("none", None), ("to_value", to_value), ("to_ascii", to_ascii)):
+            theirs = _laddercodec_refuses_any(
+                BlockCopy,
+                first,
+                second,
+                "TXT11",
+                "TXT12",
+                convert=None if convert is None else name,
+            )
+            ours = _pyrung_refuses_any(
+                lambda block=block, start=start, convert=convert: blockcopy(
+                    block.select(start, start + 1), txt.select(11, 12), convert=convert
+                )
+            )
+            if ours != theirs:
+                differ.append((bank, name))
+    assert differ == []
+
+
+#: The values of a Fill into TXT that only one side refuses.  pyrung refuses a Real
+#: constant, because a CLICK writes its text past the end of the range.  laddercodec
+#: refuses a value that is too long for one TXT (OBJ-023).  pyrung builds that Fill, and
+#: the scan sets the out-of-range flag.
+ONLY_PYRUNG_REFUSES_FILL = frozenset({"1.5"})
+ONLY_LADDERCODEC_REFUSES_FILL = frozenset({"12", '"AB"'})
+
+
+def test_fill_into_txt_refuses_what_laddercodec_refuses() -> None:
+    values: list[tuple[str, Any]] = [
+        (first, lambda block=block, start=start: block[start])
+        for (first, _), block, start in _ALL_BANKS.values()
+    ]
+    values += [
+        ("5", lambda: 5),
+        ("12", lambda: 12),
+        ("1.5", lambda: 1.5),
+        ('"A"', lambda: "A"),
+        ('"AB"', lambda: "AB"),
+        ("1", lambda: True),
+        ("0", lambda: False),
+    ]
+    only_laddercodec: set[str] = set()
+    only_pyrung: set[str] = set()
+    for text, value in values:
+        theirs = _laddercodec_refuses_any(Fill, text, "TXT11", "TXT13")
+        ours = _pyrung_refuses_any(lambda value=value: fill(value(), txt.select(11, 13)))
+        if theirs and not ours:
+            only_laddercodec.add(text)
+        elif ours and not theirs:
+            only_pyrung.add(text)
+    assert only_pyrung == ONLY_PYRUNG_REFUSES_FILL
+    assert only_laddercodec == ONLY_LADDERCODEC_REFUSES_FILL
+
+
+_LADDERCODEC_PEER = laddercodec_modbus.ModbusTcpTarget(
+    name="peer", ip="192.168.1.5", port=502, device_id=1
+)
+#: Each raw register type as laddercodec's 984 address and pyrung's ``ModbusAddress``.
+_RAW_STARTS = {
+    "holding": ("400001", ModbusAddress(0, RegisterType.HOLDING)),
+    "input": ("300001", ModbusAddress(0, RegisterType.INPUT)),
+    "coil": ("000001", ModbusAddress(0, RegisterType.COIL)),
+    "discrete input": ("100001", ModbusAddress(0, RegisterType.DISCRETE_INPUT)),
+}
+
+
+@pytest.mark.parametrize(
+    "remote", [*(pair[0] for pair in _ALL_BANKS.values()), *_RAW_STARTS], ids=str
+)
+def test_receive_into_txt_refuses_what_laddercodec_refuses(remote: Any) -> None:
+    if isinstance(remote, tuple):
+        theirs_start, ours_start = remote[0], remote[0]
+    else:
+        theirs_start = laddercodec_modbus.ModbusAddress(_RAW_STARTS[remote][0])
+        ours_start = _RAW_STARTS[remote][1]
+    theirs = _laddercodec_refuses_any(
+        Receive, _LADDERCODEC_PEER, theirs_start, "TXT11", 2, "C1", "C2", "C3", "DS1"
+    )
+    ours = _pyrung_refuses_any(
+        lambda: receive(target="peer", remote_start=ours_start, dest=txt.select(11, 12))
+    )
+    assert ours == theirs
