@@ -681,8 +681,7 @@ class NumberInto:
         dest: The field that holds the destination.
         text: Whether the rule refuses text that does not parse as the destination's
             number.  ``math("A", ds[3])`` raises on every scan.  ``copy()`` and
-            ``fill()`` check text themselves.  ``copy("A", ds[3], convert=to_ascii)``
-            writes 65 into DS3, so ``copy()`` leaves this False.
+            ``fill()`` check text themselves, so they leave this False.
     """
 
     value: str

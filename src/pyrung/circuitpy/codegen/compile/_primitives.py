@@ -19,6 +19,7 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
+    _optional_value_type_name,
 )
 from pyrung.circuitpy.codegen.context import (
     CodegenContext,
@@ -924,6 +925,27 @@ def _kernel_following_store_lines(values_var: str, following_names: list[str]) -
         f"    _seq_names = {renamed!r}",
         f"    for _seq_i in range(1, {stop}):",
         f"        tags[_seq_names.get(_seq_i) or {name_expr}] = {values_var}[_seq_i]",
+    ]
+
+
+def _number_text_lines(
+    text_var: str, value_expr: str, source: Any, converter: Any, ctx: CodegenContext
+) -> list[str]:
+    """Return the lines that set *text_var* to a ``to_text()`` rendering of *value_expr*.
+
+    ``copy()`` and ``fill()`` into Char share these lines, as the core shares ``_number_text``.
+    """
+    ctx.mark_helper("_render_text_from_numeric")
+    ctx.mark_helper("_termination_char")
+    return [
+        f"{text_var} = _render_text_from_numeric(",
+        f"    {value_expr},",
+        f"    source_type={_optional_value_type_name(source)!r},",
+        f"    suppress_zero={converter.suppress_zero!r},",
+        "    pad=None,",
+        f"    exponential={converter.exponential!r},",
+        ")",
+        f"{text_var} += _termination_char({converter.termination_code!r})",
     ]
 
 

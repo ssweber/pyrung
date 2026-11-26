@@ -1839,19 +1839,41 @@ class TestBoardPeripheralsAndRunStop:
             assert flag is False
 
     @pytest.mark.parametrize(
-        "source,convert", [(7, to_text()), (55, to_binary)], ids=["to_text", "to_binary"]
+        "value,dest_tag,stored",
+        [
+            (1.5, Dint, 1),
+            (-1.5, Dint, -1),
+            (2.0, Dint, 2),
+            (40000, Real, 40000.0),
+            (-40000, Real, -40000.0),
+        ],
     )
-    def test_a_conversion_to_text_into_an_int_flags_and_writes_nothing_on_every_backend(
-        self, monkeypatch, source, convert
+    def test_to_binary_of_a_constant_into_a_number_stores_its_value_on_every_backend(
+        self, monkeypatch, value, dest_tag, stored
     ):
-        """Each source makes the text "7", which an Int could hold."""
-        dest = Int("Dest", default=9)
+        """A CLICK was read storing 1 for 1.5 into a DD, and 40000.0 for 40000 into a DF.
+
+        Reading b9 saw a CLICK store 2 for 2.0 into a DD, with no flag.
+        """
+        dest = dest_tag("Dest", default=9)
         with Program(strict=False) as prog:
             with rung():
-                copy(source, dest, convert=convert)
+                copy(value, dest, convert=to_binary)
 
         results = _on_every_backend(prog, monkeypatch, (dest, system.fault.out_of_range), scans=1)
-        assert results == {name: (9, True) for name in results}
+        assert {name: (repr(v), flag) for name, (v, flag) in results.items()} == {
+            name: (repr(stored), False) for name in results
+        }
+
+    @pytest.mark.parametrize("dest_tag", [Dint, Real], ids=["dint", "real"])
+    def test_to_binary_of_55_into_a_number_is_refused(self, dest_tag):
+        """CLICK's Copy dialog offers no Copy Binary from 55 into a DD or a DF."""
+        with pytest.raises(
+            ValueError, match=r"^copy\(\) got convert=to_binary with the constant 55"
+        ):
+            with Program(strict=False):
+                with rung():
+                    copy(55, dest_tag("Dest"), convert=to_binary)
 
     @pytest.mark.parametrize(
         "build,lo,hi,at,flagged",
@@ -2053,6 +2075,121 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (first, second, seen), scans=1)
         assert results == {name: (32767, 32767, True) for name in results}
 
+    @staticmethod
+    def _fill_into_text(value) -> tuple[Program, tuple]:
+        """Return a program that fills *value* into TXT 1..3 of four, and the tags to watch.
+
+        Scan 0 writes "Z" into each TXT. Scan 1 runs the Fill. The watched codes are the
+        ASCII codes of the four TXT, then whether the Fill set the out-of-range flag.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 4)
+        codes = [Int(f"Code{i}") for i in range(1, 5)]
+        seen = Bool("Seen")
+        with Program(strict=False) as prog:
+            with rung(system.sys.first_scan):
+                fill("Z", chars.select(1, 4))
+            with rung(~system.sys.first_scan):
+                fill(value, chars.select(1, 3))
+            with rung(system.fault.out_of_range):
+                out(seen)
+            with rung(~system.sys.first_scan):
+                for i, code in enumerate(codes, start=1):
+                    copy(chars[i], code, convert=to_ascii)
+        return prog, (*codes, seen)
+
+    @pytest.mark.parametrize(
+        "value,digit",
+        [
+            pytest.param(5, "5", id="5"),
+            pytest.param(0, "0", id="0"),
+            pytest.param(True, "1", id="True"),
+            pytest.param(False, "0", id="False"),
+        ],
+    )
+    def test_fill_of_a_digit_into_txt_writes_its_character_on_every_backend(
+        self, monkeypatch, value, digit
+    ):
+        """A CLICK was read filling 5 into TXT1..TXT3 as the character "5", with no flag.
+
+        The export writes True and False as 1 and 0.
+        """
+        prog, watch = self._fill_into_text(value)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
+        assert results == {name: (*[ord(digit)] * 3, ord("Z"), False) for name in results}
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(12, id="12"),
+            pytest.param(-5, id="-5"),
+        ],
+    )
+    def test_fill_of_text_longer_than_a_character_flags_on_every_backend(self, monkeypatch, value):
+        """Each TXT holds one character, so the Fill writes nothing and sets the flag.
+
+        A CLICK's editor refuses a Fill of 12 or -5 into a TXT.
+        """
+        prog, watch = self._fill_into_text(value)
+        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
+        assert results == {name: (*[ord("Z")] * 4, True) for name in results}
+
+    @pytest.mark.parametrize(
+        "seed,source_type,target_type,stored",
+        [
+            (2.5, Real, Dint, 1075838976),
+            (-2.5, Real, Dint, -1071644672),
+            (1075838976, Dint, Real, 2.5),
+            (-1071644672, Dint, Real, -2.5),
+        ],
+    )
+    def test_copy_binary_between_a_real_and_a_dint_moves_the_bits_on_every_backend(
+        self, monkeypatch, seed, source_type, target_type, stored
+    ):
+        """A CLICK was read moving DF 2.5 into DD as 1075838976 and back, with no flag."""
+        source = source_type("Source")
+        target = target_type("Target")
+        seen = Bool("Seen")
+        with Program(strict=False) as prog:
+            with rung(system.sys.first_scan):
+                copy(seed, source)
+            with rung(~system.sys.first_scan):
+                copy(source, target, convert=to_binary)
+            with rung(system.fault.out_of_range):
+                out(seen)
+
+        results = _on_every_backend(prog, monkeypatch, (target, seen), scans=2)
+        assert results == {name: (stored, False) for name in results}
+
+    @pytest.mark.parametrize(
+        "seed,source_type,target_type,stored",
+        [
+            (2.5, TagType.REAL, TagType.DINT, 1075838976),
+            (-1071644672, TagType.DINT, TagType.REAL, -2.5),
+        ],
+        ids=["df-to-dd", "dd-to-df"],
+    )
+    def test_copy_binary_between_pointers_moves_the_bits_on_every_backend(
+        self, monkeypatch, seed, source_type, target_type, stored
+    ):
+        """CLICK's dialog offers Copy Binary for DF[DS1] -> DD[DS1], so a pointer form builds."""
+        sources = Block("Sources", source_type, 1, 3)
+        targets = Block("Targets", target_type, 1, 3)
+        ptr = Int("Ptr", default=2)
+        stored_tag = (Dint if target_type is TagType.DINT else Real)("Stored")
+        seen = Bool("Seen")
+        with Program(strict=False) as prog:
+            with rung(system.sys.first_scan):
+                copy(seed, sources[2])
+            with rung(~system.sys.first_scan):
+                copy(sources[ptr], targets[ptr], convert=to_binary)
+            with rung(system.fault.out_of_range):
+                out(seen)
+            with rung(~system.sys.first_scan):
+                copy(targets[2], stored_tag)
+
+        results = _on_every_backend(prog, monkeypatch, (stored_tag, seen), scans=2)
+        assert results == {name: (stored, False) for name in results}
+
     @pytest.mark.parametrize("exponential", [False, True])
     @pytest.mark.parametrize("operand,text", [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")])
     def test_copy_non_finite_to_text_on_every_backend(
@@ -2081,7 +2218,6 @@ class TestBoardPeripheralsAndRunStop:
         "store",
         [
             pytest.param(lambda r, chars, reals: copy(r, chars[1]), id="copy"),
-            pytest.param(lambda r, chars, reals: fill(r, chars.select(1, 2)), id="fill"),
             pytest.param(
                 lambda r, chars, reals: blockcopy(reals.select(1, 2), chars.select(1, 2)),
                 id="blockcopy",
@@ -2315,26 +2451,14 @@ class TestBoardPeripheralsAndRunStop:
                 with rung():
                     blockcopy(sensor.instance(2), working.select(1, 3))
 
-    @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
-    def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
-        """A code needs an integer, so the TXT stays as it was and SC43 is set.
-
-        The rung runs on.
-        """
-        r, setup = self._non_finite_real(operand)
-        ch = Char("Ch", default="A")
-        after = Bool("After")
-        with Program(strict=False) as prog:
-            with rung(system.sys.first_scan):
-                for expr, target in setup:
-                    math(expr, target)
-            with rung(~system.sys.first_scan):
-                copy(r, ch, convert=to_binary)
-                out(after)
-
-        results = _on_every_backend(prog, monkeypatch, (ch, *self._FAULTS, after), scans=2)
-        faults = tuple(flag.name.endswith("out_of_range") for flag in self._FAULTS)
-        assert results == {name: ("A", *faults, True) for name in results}
+    def test_a_real_to_binary_into_a_char_is_refused_at_build(self):
+        """CLICK's Copy dialog hides Copy Binary from a DF into a TXT."""
+        with pytest.raises(
+            ValueError, match=r"^copy\(\) got convert=to_binary with the Real tag R"
+        ):
+            with Program(strict=False):
+                with rung():
+                    copy(Real("R"), Char("Ch"), convert=to_binary)
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):
@@ -3412,49 +3536,13 @@ class TestCopyConverterCodegen:
 
         assert eval(_load_cast_expr("saved", "CHAR"), {"saved": saved}) == expected
 
-    def test_scalar_multi_char_copy_converter_faults_and_skips_write(self, monkeypatch):
-        hw = P1AM()
-        hw.slot(1, "P1-08SIM")
-        source_value = Int("SourceValue", default=123)
-        target = Int("Target", default=9)
-        fault_seen = Bool("FaultSeen")
-        enable = Bool("Enable", default=True)
-
-        with Program(strict=False) as prog:
-            with rung(enable):
-                copy(source_value, target, convert=to_text(suppress_zero=False))
-            with rung(system.fault.out_of_range):
-                out(fault_seen)
-
-        ctx = _context_for_program(prog, hw)
-        target_symbol = ctx.symbol_for_tag(target)
-        fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
-        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
-
-        class StubBase:
-            def rollCall(self, modules):
-                return None
-
-            def readDiscrete(self, slot):
-                return 0
-
-            def writeDiscrete(self, value, slot):
-                return None
-
-            def readAnalog(self, slot, ch_num):
-                return 0
-
-            def writeAnalog(self, value, slot, ch_num):
-                return None
-
-            def readTemperature(self, slot, ch_num):
-                return 0.0
-
-        namespace = _run_single_scan_source(
-            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
-        )
-        assert namespace[target_symbol] == 9
-        assert namespace[fault_seen_symbol] is True
+    def test_scalar_copy_binary_from_an_int_into_a_number_is_refused(self):
+        """CLICK's Copy dialog offers no Copy Binary from a DS into a DD or a DF."""
+        for target in (Dint("Target"), Real("Target")):
+            with pytest.raises(ValueError, match=r"^copy\(\) got convert=to_binary with the Int"):
+                with Program(strict=False):
+                    with rung():
+                        copy(Int("SourceValue"), target, convert=to_binary)
 
 
 class TestGeneratedSourceSmoke:

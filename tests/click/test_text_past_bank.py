@@ -21,7 +21,7 @@ from laddercodec import Code
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK, validate_click_program
-from pyrung.core import Block, Program, Real, TagType, rung, to_text, to_value
+from pyrung.core import Block, Program, Real, TagType, rung, to_text
 from pyrung.core.program import copy
 
 _blocks = ClickBlocks()
@@ -84,13 +84,6 @@ _AT = "at main.rung[1].instruction[0](CopyInstruction).instruction.target"
             "past TXT1000 at the end of the bank: all but the first 11 are dropped.",
             "Start it at TXT988 or lower to keep the first 13.",
             id="exponential",
-        ),
-        pytest.param(
-            lambda level: copy("1234", ds[4499], convert=to_value),
-            f"copy() into DS4499 {_AT} writes 4 elements, "
-            "past DS4500 at the end of the bank: the last 2 are dropped.",
-            "Start it at DS4497 or lower to keep every one.",
-            id="digits",
         ),
     ],
 )

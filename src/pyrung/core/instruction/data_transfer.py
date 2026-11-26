@@ -18,14 +18,18 @@ from pyrung.core.tag import Tag, TagType
 from .base import Instruction, OneShotMixin
 from .conversions import (
     _NUMBER_TYPES,
+    BINARY_BITS,
+    BINARY_VALUE,
     LITERAL,
     _as_single_ascii_char,
     _ascii_char_from_code,
+    _binary_bits_into,
     _copy_clamps,
     _render_text_from_numeric,
     _store_copy_value_to_tag_type,
     _store_numeric_text_digits,
     _text_from_source_value,
+    copy_binary_store,
     copy_source_kind,
     copy_store_transform,
 )
@@ -43,7 +47,9 @@ from .operands import (
     Span,
     TagArg,
     Value,
+    _is_expression,
     check_rules,
+    describe,
 )
 from .resolvers import (
     _sequential_tags,
@@ -125,12 +131,13 @@ def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
     does.  CLICK's dialog has no Copy there without a conversion, and it starts on Copy
     Value with Suppress zero.  CLICK stores the digits of a constant too.  A TXT into a
     number reads its digit, as ``to_value`` does.  Return ``None`` for any other Copy.
+    *dest* may also be the range of a Fill, which converts a number into a TXT the same way.
     """
     from pyrung.core.copy_converters import to_text, to_value
     from pyrung.core.tag import TagType
 
     source_type = copy_source_kind(source)
-    dest_type = copy_source_kind(dest)
+    dest_type = _range_type(dest) or copy_source_kind(dest)
     if dest_type is TagType.CHAR and (source_type in _NUMBER_TYPES or _is_number_constant(source)):
         return to_text()
     if source_type is TagType.CHAR and dest_type in _NUMBER_TYPES:
@@ -138,9 +145,30 @@ def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
     return None
 
 
+def _number_text(value: Any, source_tag: Tag | None, converter: CopyConverter) -> str:
+    """Return the text that the ``to_text()`` *converter* writes for the number *value*.
+
+    A Copy writes this text from its target on.  A Fill of an integer constant writes it
+    into each element of its range, when the text is one character.
+    """
+    rendered = _render_text_from_numeric(
+        value,
+        source_tag=source_tag,
+        suppress_zero=converter.suppress_zero,
+        pad=None,
+        exponential=converter.exponential,
+    )
+    return rendered + _termination_char(converter.termination_code)
+
+
 def _is_number_constant(value: Any) -> bool:
     """Return True for an int or float constant.  A bool is not a number to a Copy."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_bool_source(source: Any) -> bool:
+    """Return True for a Bool tag, a pointer into a Bool block or a Bool constant."""
+    return isinstance(source, bool) or copy_source_kind(source) is TagType.BOOL
 
 
 def _unwrapped(value: Any) -> Any:
@@ -182,6 +210,99 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
             f"{what} of the text {value!r} into a number register ({dest_type.name}) cannot "
             f"store a number. {advice}"
         ) from None
+
+
+# The target types that the CLICK export accepts for each converter of a single Copy.
+# CLICK accepts to_binary into a Dint or a Real only from some sources, and
+# ``copy_binary_store`` names them.
+_CONVERTER_TARGETS: dict[str, tuple[TagType, ...]] = {
+    "text": (TagType.CHAR,),
+    "binary": (TagType.CHAR, TagType.DINT, TagType.REAL),
+    "value": (TagType.INT, TagType.DINT, TagType.WORD),
+    "ascii": (TagType.INT, TagType.DINT, TagType.WORD),
+}
+
+
+def _refuse_converter_into(
+    convert: Any, dest: Any, authored: Any, source: Value, authored_source: Any
+) -> None:
+    """Raise ``ValueError`` for a converter that cannot store into the type of *dest*.
+
+    The CLICK export refuses such a Copy whatever its source.  Without the refusal, most
+    such forms would store nothing and set the out-of-range flag.  The message names
+    *authored*, the target as the user wrote it, so a TXT range is named whole.
+
+    Also raise for a source that CLICK's Copy dialog offers the converter no option for.
+    *source* is the parsed source, and *authored_source* is the source as the user wrote it.
+    """
+    if not isinstance(convert, CopyConverter):
+        return
+    allowed = _CONVERTER_TARGETS.get(convert.mode)
+    target_type = copy_source_kind(dest)
+    if (
+        convert.mode == "binary"
+        and target_type in (TagType.DINT, TagType.REAL)
+        and copy_binary_store(source, target_type) is None
+    ):
+        raise ValueError(
+            f"copy() got convert=to_binary with {describe(authored_source)} as the source and "
+            f"{describe(authored)} as the target. to_binary stores into a Dint only from a "
+            "Real tag or a Real constant, such as 1.5, and into a Real only from a Dint tag or "
+            "an integer constant outside -32768..32767. Leave convert out."
+        )
+    shown = "to_text()" if convert.mode == "text" else f"to_{convert.mode}"
+    if allowed is None or not isinstance(target_type, TagType) or target_type in allowed:
+        _refuse_converter_from(convert, shown, source, authored_source, authored, target_type)
+        return
+    names = [tag_type.name.capitalize() for tag_type in allowed]
+    article = "an" if names[0][0] in "AEIOU" else "a"
+    if len(names) == 1:
+        kinds, advice = f"{article} {names[0]} tag", f"copy into {article} {names[0]} tag"
+    else:
+        kinds = f"{article} {', '.join(names[:-1])} or {names[-1]} tag"
+        advice = "copy into a tag of one of those types"
+    raise ValueError(
+        f"copy() got convert={shown} with {describe(authored)} as the target. {shown} stores "
+        f"only into {kinds}. Leave convert out, or {advice}."
+    )
+
+
+def _refuse_converter_from(
+    convert: CopyConverter,
+    shown: str,
+    source: Value,
+    authored_source: Any,
+    authored: Any,
+    target_type: Any,
+) -> None:
+    """Raise ``ValueError`` for a source that CLICK's Copy dialog offers *convert* no option for.
+
+    The target already suits the converter.  ``to_value`` and ``to_ascii`` read a TXT, and
+    CLICK refuses a text constant for them.
+    ``to_text()`` and ``to_binary`` write a number into TXT, so a text source has nothing for
+    them to convert.  CLICK's dialog also hides Copy Binary from a DF into a TXT, and
+    laddercodec refuses a Real constant there too.
+    """
+    kind = copy_source_kind(source)
+    text = kind is TagType.CHAR or (isinstance(source, ConstArg) and isinstance(source.value, str))
+    real = kind is TagType.REAL or (
+        isinstance(source, ConstArg) and isinstance(source.value, float)
+    )
+    if convert.mode in ("value", "ascii"):
+        if kind is TagType.CHAR:
+            return
+        reads = "only a Char tag or a Char pointer"
+    elif convert.mode in ("text", "binary") and text:
+        reads = "a number, not text"
+    elif convert.mode == "binary" and real and target_type is TagType.CHAR:
+        reads = "no Real tag or Real constant when it writes into Char tags"
+    else:
+        return
+    raise ValueError(
+        f"copy() got convert={shown} with {describe(authored_source)} as the source and "
+        f"{describe(authored)} as the target. {shown} reads {reads}. Leave convert out, or "
+        "use a converter that matches the source and target."
+    )
 
 
 def _copy_dest(dest: Any) -> Any:
@@ -337,13 +458,27 @@ class CopyInstruction(OneShotMixin, Instruction):
             raise TypeError("copy() needs a source: a tag, a pointer or a constant.")
         if _is_range(source):
             raise TypeError("copy() reads one value. Use blockcopy() to copy a range.")
+        authored_dest = dest
         dest = _copy_dest(dest)
+        if copy_source_kind(dest) is TagType.CHAR and _is_bool_source(source):
+            # CLICK's editor refuses a C, X, Y, T, CT or SC there, and a Copy of 1 needs a converter.
+            advice = (
+                'Copy the text "1" or "0" instead.'
+                if isinstance(source, bool)
+                else 'Copy the text "1" in a rung that has the Bool as its condition, and "0" '
+                "in a rung that has its inverse."
+            )
+            raise ValueError(
+                f"copy() got {describe(source)} as the source and {describe(authored_dest)} as "
+                f"the target. copy() writes no Bool into a Char tag. {advice}"
+            )
         check_real_literal(source, dest, "copy() source")
         if convert is None:
             _refuse_text_that_stores_no_number("copy()", source, copy_source_kind(dest))
         self.source: Value = _one_value(VALUE.parse("copy()", "source", source))
         self.dest: Dest = _COPY_DEST.parse("copy()", "target", dest)
         check_rules(self._operands, self._operand_rules, "copy()", {"source": source, "dest": dest})
+        _refuse_converter_into(convert, dest, authored_dest, self.source, source)
         self.authored_convert = convert
         self.convert = convert if convert is not None else _plain_text_converter(source, dest)
 
@@ -405,6 +540,9 @@ class CopyInstruction(OneShotMixin, Instruction):
             ctx.set_tags(updates)
             return
 
+        self._store_value(ctx, value, resolved_target)
+
+    def _store_value(self, ctx: ScanContext, value: Any, resolved_target: Tag) -> None:
         source = copy_source_kind(self.source)
         stored = _store_copy_value_to_tag_type(value, resolved_target, source)
         ctx.set_tag(resolved_target.name, stored)
@@ -422,7 +560,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             self._copy_numeric_to_text(ctx, resolved_target, converter)
             return
         if mode == "binary":
-            self._copy_binary_to_text(ctx, resolved_target, converter)
+            self._copy_binary(ctx, resolved_target, converter)
             return
         _set_fault_out_of_range(ctx)
 
@@ -492,14 +630,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             return
 
         try:
-            rendered = _render_text_from_numeric(
-                value,
-                source_tag=source_tag,
-                suppress_zero=converter.suppress_zero,
-                pad=None,
-                exponential=converter.exponential,
-            )
-            rendered += _termination_char(converter.termination_code)
+            rendered = _number_text(value, source_tag, converter)
             chars = [_as_single_ascii_char(char) for char in rendered]
             targets = _sequential_tags(resolved_target, len(chars))
             updates = {target.name: char for target, char in zip(targets, chars, strict=False)}
@@ -509,9 +640,30 @@ class CopyInstruction(OneShotMixin, Instruction):
 
         ctx.set_tags(updates)
 
-    def _copy_binary_to_text(
+    def _copy_binary(
         self, ctx: ScanContext, resolved_target: Tag, converter: CopyConverter
     ) -> None:
+        store = copy_binary_store(self.source, resolved_target.type)
+        if store == BINARY_VALUE:
+            self._store_value(ctx, _read(self.source, ctx), resolved_target)
+            return
+        if store == BINARY_BITS:
+            try:
+                stored = _binary_bits_into(_read(self.source, ctx), resolved_target.type)
+            except IndexError:
+                _set_fault_address_error(ctx)
+                return
+            except TypeError:
+                if isinstance(self.source, PointerArg):
+                    _set_fault_address_error(ctx)
+                else:
+                    _set_fault_out_of_range(ctx)
+                return
+            except (ValueError, OverflowError):
+                _set_fault_out_of_range(ctx)
+                return
+            ctx.set_tag(resolved_target.name, stored)
+            return
         if resolved_target.type != TagType.CHAR:
             _set_fault_out_of_range(ctx)
             return
@@ -684,6 +836,12 @@ class FillInstruction(OneShotMixin, Instruction):
     Dest can be BlockRange or IndirectBlockRange (resolved at scan time).  The builder
     parses both, so ``value`` holds a ``Value`` and ``dest`` a ``Span``
     (:mod:`pyrung.core.instruction.operands`).
+
+    An integer constant into a TXT range writes its text, as a plain ``copy()`` into one TXT
+    does.  ``convert`` holds that ``to_text()`` converter, and is ``None`` for any other
+    Fill.  The builder stores True and False there as 1 and 0.  It refuses a Bool tag, a
+    number register, an expression or a Real constant there.  Text of more than one
+    character sets the out-of-range flag and writes nothing.
     """
 
     _reads = ("value",)
@@ -708,17 +866,41 @@ class FillInstruction(OneShotMixin, Instruction):
         if _is_range(value):
             raise TypeError("fill() writes one value. Use blockcopy() to copy a range.")
         dest_type = _range_type(dest)
+        if dest_type is TagType.CHAR and isinstance(value, bool):
+            # The export writes True as 1, and a CLICK fills the digit "1".
+            value = int(value)
+        if dest_type is TagType.CHAR and copy_source_kind(value) is TagType.BOOL:
+            # CLICK's editor refuses a C, X, Y, T, CT or SC there.
+            raise ValueError(
+                f"fill() got {describe(value)} as the value and {describe(dest)} as the "
+                "target. fill() writes no Bool tag into Char tags. Fill True in a rung that has "
+                "the Bool as its condition, and False in a rung that has its inverse."
+            )
         if copy_source_kind(value) is TagType.CHAR and dest_type in _NUMBER_TYPES:
             raise TypeError(
                 "fill() cannot write a TXT into a number register. Copy the TXT into a "
                 "number register with copy(..., convert=to_value), then fill() from that "
                 "register."
             )
+        if dest_type is TagType.CHAR and (
+            copy_source_kind(value) in _NUMBER_TYPES
+            or isinstance(value, float)
+            or _is_expression(value)
+        ):
+            # CLICK's editor refuses a number register here (OBJ-024).  An expression stores
+            # as a register does.  A CLICK was read writing a Real constant's text at each
+            # address in turn, past the range's end.
+            raise ValueError(
+                f"fill() got {describe(value)} as the value and {describe(dest)} as the "
+                "target. fill() writes only an integer or a text constant into Char tags. "
+                "Fill one of those, or copy() the value into one Char tag."
+            )
         _refuse_text_that_stores_no_number("fill()", value, dest_type)
         check_real_literal(value, dest, "fill() value")
         self.value: Value = _one_value(VALUE.parse("fill()", "value", value))
         self.dest: Span = RANGE.parse("fill()", "dest", dest)
         check_rules(self._operands, self._operand_rules, "fill()", {"value": value, "dest": dest})
+        self.convert = _plain_text_converter(value, dest)
 
     def check_operands(self, call: str | None = None) -> None:
         """Do nothing, because the builder parsed every operand."""
@@ -730,6 +912,14 @@ class FillInstruction(OneShotMixin, Instruction):
             value = _read(self.value, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
+            return
+        if self.convert is not None:
+            try:
+                char = _as_single_ascii_char(_number_text(value, None, self.convert))
+            except (TypeError, ValueError, OverflowError):
+                _set_fault_out_of_range(ctx)
+                return
+            ctx.set_tags({dst_tag.name: char for dst_tag in dst_tags})
             return
         if dst_tags and dst_tags[0].type.name == "REAL" and isinstance(self.value, ExprArg):
             value = computed_real(value)

@@ -29,7 +29,12 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
-from pyrung.core.instruction.conversions import copy_source_kind
+from pyrung.core.instruction.conversions import (
+    BINARY_BITS,
+    BINARY_VALUE,
+    copy_binary_store,
+    copy_source_kind,
+)
 from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.operands import (
     ConstArg,
@@ -43,7 +48,7 @@ from pyrung.core.instruction.timers import tof_armed_key
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef, block_room, element_names_after
 from pyrung.core.relations.records import Const, TagValue
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._emit import (
@@ -74,6 +79,8 @@ from ._primitives import (
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _copy_source_past_end_test,
+    _number_text_lines,
+    _pack_store_expr,
     _past_end_keeps,
     _pointer_check_lines,
 )
@@ -446,6 +453,13 @@ def _compile_copy_instruction(
         and target_type == "CHAR"
     )
     convert = instr.convert
+    if (
+        convert is not None
+        and convert.mode == "binary"
+        and copy_binary_store(source, TagType[target_type]) == BINARY_VALUE
+    ):
+        # A Copy Binary of a constant into a number stores what a plain Copy stores.
+        convert = None
     if convert is not None or fanout:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent, convert)
     source_expr = _compile_copy_source(_copy_source(source), ctx)
@@ -522,7 +536,10 @@ def _compile_copy_converter_instruction(
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
         target, ctx, stem
     )
-    if mode in {"text", "binary"} and target_type != "CHAR":
+    moves_bits = (
+        mode == "binary" and copy_binary_store(instr.source, TagType[target_type]) == BINARY_BITS
+    )
+    if mode in {"text", "binary"} and target_type != "CHAR" and not moves_bits:
         # Only a TXT holds text, so stepping sets the out-of-range flag and writes nothing.
         # It reads no source, but a source pointer past its bank's end drops the copy.
         past_end = _copy_source_past_end_test(source, ctx)
@@ -592,21 +609,28 @@ def _compile_copy_converter_instruction(
             ]
         )
     elif mode == "text":
-        ctx.mark_helper("_render_text_from_numeric")
-        ctx.mark_helper("_termination_char")
-        source_type = _optional_value_type_name(instr.source)
+        text_lines = _number_text_lines("_rendered", source_expr, instr.source, converter, ctx)
         enabled_body.extend(
             [
                 "try:",
-                "    _rendered = _render_text_from_numeric(",
-                f"        {source_expr},",
-                f"        source_type={source_type!r},",
-                f"        suppress_zero={converter.suppress_zero!r},",
-                "        pad=None,",
-                f"        exponential={converter.exponential!r},",
-                "    )",
-                f"    _rendered += _termination_char({converter.termination_code!r})",
+                *_indent_body(text_lines, 4),
                 f"    {values_var} = [{_store_coerce_expr('_ch', target_type, ctx)} for _ch in _rendered]",
+                *_indent_body(write_lines, 4),
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif moves_bits:
+        if target_type == "DINT":
+            ctx.mark_helper("_float_to_int_bits")
+            source_expr = f"_float_to_int_bits({source_expr})"
+        stored = _pack_store_expr(source_expr, target_type, ctx)
+        enabled_body.extend(
+            [
+                "try:",
+                f"    {values_var} = [{stored}]",
                 *_indent_body(write_lines, 4),
                 "except IndexError:",
                 *_indent_body(address_fault_body, 4),

@@ -159,6 +159,8 @@ def build_reverse_edge_map(
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, FillInstruction):
+            if instr.convert is not None:
+                continue
             source_name = tag_name_from_value(as_authored(instr.value))
             if source_name is None:
                 continue

@@ -95,6 +95,8 @@ def _check_literal_write(
             return None
         raw_value = as_authored(instr.source)
     elif isinstance(instr, FillInstruction):
+        if instr.convert is not None:
+            return None
         raw_value = as_authored(instr.value)
     else:
         return None

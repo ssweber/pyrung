@@ -208,7 +208,7 @@ A read of the register after XD8 or after YD8 returns 0, as on a CLICK.
 
 A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
 
-The server sends every NaN in a `Real` as 0xFFFF:0xFFFF, the NaN that a CLICK's Math stores. An Unpack Copy and `send()` give the same words. A CLICK keeps the bits of a NaN that a client writes, so a NaN such as 0x0000:0x7FC0 reads back differently from the P1AM. CircuitPython's floats are 30 bits wide, so they can't hold a NaN's bits.
+The server sends every NaN in a `Real` as 0xFFFF:0xFFFF, the NaN that a CLICK's Math stores. An Unpack Copy, a Copy Binary into a `Dint` and `send()` give the same words. A CLICK keeps the bits of a NaN that a client writes, so a NaN such as 0x0000:0x7FC0 reads back differently from the P1AM. CircuitPython's floats are 30 bits wide, so they can't hold a NaN's bits.
 
 A client that writes 2.5 to a `Real` holding a NaN one register at a time, low word first, reads back 2.50002 (0xFFFF:0x4020). The low word it wrote still makes a NaN, so the server sends 0xFFFF in its place. Write both words of a `Real` in one FC 16 request.
 

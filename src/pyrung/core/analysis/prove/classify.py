@@ -436,6 +436,8 @@ def _comparison_influencing_tags(
             for tn in target_names:
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, FillInstruction):
+            if instr.convert is not None:
+                continue
             source_name = _tag_name_from_value(as_authored(instr.value))
             if source_name is None:
                 continue
@@ -593,6 +595,8 @@ def _literal_write_values(
             return None
         raw_value = as_authored(instr.source)
     elif isinstance(instr, FillInstruction):
+        if instr.convert is not None:
+            return None
         raw_value = as_authored(instr.value)
     else:
         return None
@@ -1372,6 +1376,8 @@ def _domain_from_write_instruction(
         )
 
     if isinstance(instr, FillInstruction):
+        if instr.convert is not None:
+            return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
             as_authored(instr.value),
             target,
@@ -2104,6 +2110,8 @@ def _backward_propagate_comparison_boundaries(
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, FillInstruction):
+            if instr.convert is not None:
+                continue
             source_name = _tag_name_from_value(as_authored(instr.value))
             if source_name is None:
                 continue

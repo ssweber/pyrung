@@ -47,7 +47,7 @@ class Name(enum.StrEnum):
 
 
 # DS100 points at TXT1, and TXT1 and TXT2 hold digits.  DS102 points below every bank,
-# and DS103 points past the end of DS and TXT.
+# and DS103 points past the end of DS and TXT.  DF4 holds 2.5, whose bits are 0x40200000.
 DATA = {
     x[3]: True,
     ds[1]: 4,
@@ -57,6 +57,7 @@ DATA = {
     ds[103]: 5000,
     txt[1]: "7",
     txt[2]: "2",
+    df[4]: 2.5,
 }
 
 # Each form, and what some tags hold after a scan.  A flag the form does not name is off.
@@ -72,29 +73,22 @@ KERNEL_FORMS: dict[str, tuple[Callable[[], Any], dict[str, Any]]] = {
     "Char plus Char": (lambda: math(txt[1] + txt[2], df[3]), {"DF3": 72.0}),
     "Char times 2": (lambda: math(txt[1] * 2, df[3]), {"DF3": 77.0}),
     "Char sum of a sum": (lambda: math((txt[1] + txt[2]) + txt[1], df[3]), {"DF3": 727.0}),
-    "to_text() into a Bool": (
-        lambda: copy(ds[1], c[3], convert=to_text()),
-        {"C3": False, "fault.out_of_range": True},
+    "to_text() from below DS into a TXT": (
+        lambda: copy(ds[ds[102]], txt[3], convert=to_text()),
+        {"TXT3": "\x00", "fault.address_error": True},
     ),
-    "to_text() into a Real": (
-        lambda: copy(ds[1], df[3], convert=to_text()),
-        {"DF3": 0.0, "fault.out_of_range": True},
+    "to_text() from past DS into a TXT": (
+        lambda: copy(ds[ds[103]], txt[3], convert=to_text()),
+        {"TXT3": "\x00"},
     ),
-    "to_binary of '7' into an Int": (
-        lambda: copy(55, ds[3], convert=to_binary),
-        {"DS3": 0, "fault.out_of_range": True},
+    "to_binary of 1.5 into a Dint": (lambda: copy(1.5, dd[3], convert=to_binary), {"DD3": 1}),
+    "to_binary of a Real into a Dint pointer": (
+        lambda: copy(df[4], dd[ds[101]], convert=to_binary),
+        {"DD2": 1075838976},
     ),
-    "to_binary into a Bool pointer": (
-        lambda: copy(ds[1], c[ds[101]], convert=to_binary),
-        {"C2": False, "fault.out_of_range": True},
-    ),
-    "to_text() from below DS into an Int": (
-        lambda: copy(ds[ds[102]], ds[3], convert=to_text()),
-        {"DS3": 0, "fault.out_of_range": True},
-    ),
-    "to_text() from past DS into an Int": (
-        lambda: copy(ds[ds[103]], ds[3], convert=to_text()),
-        {"DS3": 0},
+    "to_binary into a TXT pointer": (
+        lambda: copy(ds[1], txt[ds[101]], convert=to_binary),
+        {"TXT2": "\x04"},
     ),
     "to_text() from below DS to past TXT": (
         lambda: copy(ds[ds[102]], txt[ds[103]], convert=to_text()),
@@ -149,6 +143,23 @@ def _same(left: Any, right: Any) -> bool:
     if isinstance(left, float) and pymath.isnan(left):
         return isinstance(right, float) and pymath.isnan(right)
     return left == right
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda: copy(55, dd[3], convert=to_binary), id="constant into a Dint"),
+        pytest.param(
+            lambda: copy(ds[1], dd[ds[101]], convert=to_binary), id="Int into a Dint pointer"
+        ),
+    ],
+)
+def test_to_binary_from_an_integer_into_a_dint_is_refused_at_build(
+    build: Callable[[], Any],
+) -> None:
+    """CLICK's Copy dialog offers no Copy Binary for these, so no kernel ever runs them."""
+    with pytest.raises(ValueError, match=r"^copy\(\) got convert=to_binary with "):
+        _program(build)
 
 
 @pytest.mark.parametrize("name", list(KERNEL_FORMS))
