@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-from pyrung.click.codegen._syntax import _csv_string_value, _typed_text_cell
+from pyrung.click.codegen._syntax import _csv_string_value, _txt_send_pair, _typed_text_cell
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.constants import _HEADER_WIDTH
 from pyrung.click.codegen.models import _RawRung, _SubroutineInfo
@@ -50,6 +50,7 @@ def _parse_rows(all_rows: Iterable[Iterable[str]], *, typed_quotes: bool = True)
             pending_comments.append(row[1] if len(row) > 1 else "")
             continue
 
+        row[1:] = [_txt_send_pair(cell) for cell in row[1:]]
         if typed_quotes:
             row[1:] = [_typed_text_cell(cell) for cell in row[1:]]
 

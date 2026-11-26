@@ -125,7 +125,8 @@ def _validate_status_tags(
 
 #: The shift of each character in a register, first character first.  A raw send or receive
 #: of Char tags keeps the first character in the low byte.  pyrung's Modbus server packs TXT
-#: the same way.  No one has yet read a CLICK's raw send or receive of TXT to confirm it.
+#: the same way.  A CLICK 4.00 confirmed it (round b13): a Receive and a Send both keep the
+#: first character in the low byte, with no word swap.
 TXT_BYTE_SHIFTS = (0, 8)
 
 
@@ -142,14 +143,20 @@ def _calculate_register_count(tag_types: list[TagType], register_type: RegisterT
     return sum(_registers_per_tag(tt, register_type) for tt in tag_types)
 
 
-def _register_count(tag_types: list[TagType], register_type: RegisterType) -> int:
+def _register_count(tag_types: list[TagType], register_type: RegisterType, call: str) -> int:
     """Return how many registers a raw send or receive of tags of *tag_types* moves.
 
-    Each register holds two characters, one from each of two Char tags.  With an odd
-    count, a receive ignores the last high byte, and a send writes 0 there.
+    Each register holds two characters, one from each of two Char tags.  CLICK's dialogs
+    refuse an odd count, so the count of Char tags must be even.
     """
     if register_type in {RegisterType.HOLDING, RegisterType.INPUT} and _all_char(tag_types):
-        return (len(tag_types) + 1) // 2
+        if len(tag_types) % 2:
+            raise ValueError(
+                f"{call}() of {len(tag_types)} Char tags to a raw {register_type.name} "
+                "register has no CLICK form, because each register holds two characters. "
+                "Use an even number of Char tags."
+            )
+        return len(tag_types) // 2
     return _calculate_register_count(tag_types, register_type)
 
 
@@ -177,7 +184,7 @@ def _pack_values_to_registers(
         return [
             sum(
                 ord(ch) << shift
-                for ch, shift in zip(values[i : i + 2], TXT_BYTE_SHIFTS, strict=False)
+                for ch, shift in zip(values[i : i + 2], TXT_BYTE_SHIFTS, strict=True)
             )
             for i in range(0, len(values), 2)
         ]

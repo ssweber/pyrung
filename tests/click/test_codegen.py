@@ -6061,3 +6061,124 @@ class TestMapBeforeProgram:
         assert [c.tag.name for c in cond.conditions][1] == expected[1]
         report = validate_click_program(ns["logic"], ns["mapping"], mode="strict")
         assert [f for f in report.errors if f.code == CLK_TEXT_WINDOW_NOT_CONTIGUOUS] == []
+
+
+def _write_one_register_send(main: Path) -> None:
+    """Replace the Send cell of *main* with laddercodec's own FC06 Send of one TXT."""
+    from dataclasses import replace
+
+    from laddercodec import Send
+
+    with main.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    for row in rows:
+        if row[-1].startswith("send("):
+            send_row = replace(Send.from_csv_token(row[-1]), quantity=1, function_code=6)
+            assert send_row.function_code is None  # FC06 is the default for quantity 1
+            assert "source=TXT41," in send_row.to_csv()
+            row[-1] = send_row.to_csv()
+    with main.open("w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+
+def test_a_one_register_send_of_txt_imports_as_two_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLICK's Send with FC06 reads quantity 1 and moves the register that holds an odd TXT
+    and the TXT after it.  The import writes the pair, and the run sends both characters in
+    one register, low byte first."""
+    from concurrent.futures import Future
+    from typing import Any
+
+    from pyrung.core import PLC, send
+    from pyrung.core.instruction.send_receive import ModbusAddress, ModbusTcpTarget, RegisterType
+    from pyrung.core.instruction.send_receive import _core as modbus_core
+    from pyrung.core.instruction.send_receive._core import _RequestResult
+
+    pair = Block("Pair", TagType.CHAR, 1, 2)
+    En, Ok, Bu, Er, Ex = Bool("En"), Bool("Ok"), Bool("Bu"), Bool("Er"), Int("Ex")
+    with Program(strict=False) as program:
+        with rung(En):
+            send(
+                target=ModbusTcpTarget(name="p", ip="127.0.0.1"),
+                remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+                source=pair.select(1, 2),
+                sending=Bu,
+                success=Ok,
+                error=Er,
+                exception_response=Ex,
+            )
+    tag_map = TagMap(
+        {En: x[1], pair: txt.select(41, 42), Ok: c[1], Bu: c[2], Er: c[3], Ex: ds[1]},
+        include_system=False,
+    )
+    main = _export_csv(program, tag_map, tmp_path)
+    assert "source=TXT41..TXT42" in main.read_text(encoding="utf-8")
+    _write_one_register_send(main)
+
+    code = ladder_to_pyrung(main)
+    assert "source=txt.select(41, 42)" in code
+    ns: dict = {}
+    exec_with_source(code, ns)
+
+    requests: list[dict[str, Any]] = []
+
+    def submit(**request: Any) -> Future[_RequestResult]:
+        requests.append(request)
+        done: Future[_RequestResult] = Future()
+        done.set_result(_RequestResult(ok=True, exception_code=0))
+        return done
+
+    monkeypatch.setattr(modbus_core, "_submit_raw_send_request", submit)
+    plc = PLC(ns["logic"])
+    plc.patch({"TXT41": "W", "TXT42": "X", "X001": True})
+    plc.step()
+    assert requests[0]["registers"] == [0x5857]
+
+
+_SEND_CELL = (
+    'send(target=ModbusTcpTarget(name="p",ip="127.0.0.1",port=502,device_id=1),'
+    "remote_start={remote},source={source},sending=C2,success=C1,error=C3,"
+    "exception_response=DS1)"
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("TXT41", "TXT41..TXT42"),
+        ("TXT999", "TXT999..TXT1000"),
+        ("TXT42", "TXT42"),
+        ("TXT1000", "TXT1000"),
+        ("TXT41..TXT42", "TXT41..TXT42"),
+    ],
+)
+def test_only_an_odd_lone_txt_send_becomes_a_pair(source: str, expected: str) -> None:
+    from pyrung.click.codegen._syntax import _txt_send_pair
+
+    cell = _SEND_CELL.format(remote="ModbusAddress(address=400257)", source=source)
+    assert _txt_send_pair(cell) == cell.replace(f"source={source}", f"source={expected}")
+
+
+def test_a_send_to_a_click_address_keeps_its_one_txt() -> None:
+    from pyrung.click.codegen._syntax import _txt_send_pair
+
+    cell = _SEND_CELL.format(remote='"DS1"', source="TXT41")
+    assert _txt_send_pair(cell) == cell
+
+
+def test_a_one_txt_receive_row_is_refused_on_import(tmp_path: Path) -> None:
+    csv_path = tmp_path / "main.csv"
+    header = ["marker", *[chr(c) for c in range(ord("A"), ord("A") + 31)], "AF"]
+    cell = (
+        'receive(target=ModbusTcpTarget(name="p",ip="127.0.0.1",port=502,device_id=1),'
+        "remote_start=ModbusAddress(address=400257),dest=TXT41,receiving=C2,success=C1,"
+        "error=C3,exception_response=DS1)"
+    )
+    row = ["R", "X001", *["-"] * 30, cell]
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerows([header, row])
+    code = ladder_to_pyrung(csv_path)
+    ns: dict = {}
+    with pytest.raises(ValueError, match="Use an even number of Char tags"):
+        exec_with_source(code, ns)
