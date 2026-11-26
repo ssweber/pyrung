@@ -44,7 +44,6 @@ from .packing import (
 from .resolvers import (
     resolve_block_range_ctx,
     resolve_block_range_tags_ctx,
-    resolve_coil_targets_ctx,
     resolve_tag_ctx,
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
@@ -66,7 +65,6 @@ __all__ = [
     # Resolvers
     "resolve_block_range_ctx",
     "resolve_block_range_tags_ctx",
-    "resolve_coil_targets_ctx",
     "resolve_tag_ctx",
     "resolve_tag_name_ctx",
     "resolve_tag_or_value_ctx",

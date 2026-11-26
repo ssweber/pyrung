@@ -5,11 +5,12 @@ laddercodec's Coil checks them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never
 
 from laddercodec import Coil, CoilKind
 
-from pyrung.core.tag import ImmediateRef
+from pyrung.core.instruction.operands import Coil as CoilTarget
+from pyrung.core.instruction.operands import RangeArg, TagArg, held
 from pyrung.core.validation.render import Call, declared_call
 
 from ..fields import Family, Unbuildable, memory_types, refusals_of, render_operand
@@ -35,7 +36,7 @@ _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 
 
 def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache) -> str | None:
-    if code == "bank-not-allowed" and memory_types(instruction.target, resolver) - _BIT_BANKS:
+    if code == "bank-not-allowed" and memory_types(held(instruction.target), resolver) - _BIT_BANKS:
         return "Write a register with copy() or fill()."
     return None
 
@@ -47,7 +48,7 @@ def immediate_call(instruction: Any) -> Call:
     """
     call = declared_call(instruction)
     span = call.span(0)
-    if not isinstance(instruction.target, ImmediateRef) or span is None:
+    if not instruction.target.immediate or span is None:
         return call
     start, length = span
     text = f"{call.text[:start]}immediate({call.text[start : start + length]}){call.text[start + length :]}"
@@ -63,12 +64,16 @@ def immediate_call(instruction: Any) -> Call:
 
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the coil that the export writes."""
-    target = instruction.target
-    immediate = isinstance(target, ImmediateRef)
-    if immediate:
-        # The export refuses an immediate target outside Y itself. laddercodec gets the
-        # address and the flag, and refuses it in its own words.
-        target = target.value
+    # The export refuses an immediate target outside Y itself. laddercodec gets the
+    # address and the flag, and refuses it in its own words.
+    coil: CoilTarget = instruction.target
+    match coil:
+        case TagArg(tag=target, immediate=immediate):
+            pass
+        case RangeArg(span=target, immediate=immediate):
+            pass
+        case _:
+            assert_never(coil)
     text = render_operand(exporter, target, "target", instruction)
     # A list such as ``[C1,C5]`` is a range that CLICK cannot hold. Validation reports a
     # list for a plain target before this runs. The export refuses one in an immediate.

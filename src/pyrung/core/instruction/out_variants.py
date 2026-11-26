@@ -13,6 +13,9 @@ CLICK Out coil claims the whole timer number and never turns T<n> on
 (hardware round 1, probe O6).  So a contact on that Timer's ``Done`` is always
 off.  The ``*_done`` fields only name the claimed timer, for the Click mapping
 checks.
+
+Each variant holds its target as a ``TagArg``.  Its builder, such as ``toggle()``, parses
+the target before it builds the instruction (:mod:`pyrung.core.instruction.operands`).
 """
 
 from __future__ import annotations
@@ -21,11 +24,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.crossing import Eq
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import Tag
 from pyrung.core.time_mode import _parse_time_unit
 
 from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, constraint_holds
 from .base import Instruction
+from .operands import TagArg
 from .utils import elapsed_units, resolve_preset_ctx, to_condition, validate_preset
 
 if TYPE_CHECKING:
@@ -41,13 +45,6 @@ _ACC_MAX = 32767
 # A flasher's phase (memory ``_flash_phase``).  A ``_NEXT`` phase starts on the next scan.  That
 # scan clears the phase's accumulator before it ticks.
 _FLASH_IDLE, _FLASH_ON, _FLASH_OFF, _FLASH_ON_NEXT, _FLASH_OFF_NEXT = 0, 1, 2, 3, 4
-
-
-def _coil_tag(target: Tag | ImmediateRef) -> Tag:
-    tag = target.value if isinstance(target, ImmediateRef) else target
-    if not isinstance(tag, Tag):
-        raise TypeError(f"Out coil variants write one Bool tag, got {type(tag).__name__}")
-    return tag
 
 
 def _tick(ctx: ScanContext, acc: Tag, unit: TimeUnit) -> tuple[int, int | Fraction]:
@@ -91,21 +88,21 @@ class ToggleInstruction(Instruction):
     _call_operands = (("target", "target"),)
     _call_keywords = ()
 
-    def __init__(self, target: Tag | ImmediateRef, enable_condition: Any = None):
+    def __init__(self, target: TagArg, enable_condition: Any = None):
         self.target = target
         self.enable_condition = to_condition(enable_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         key = self.memory_key("_toggle")
         if enabled and not ctx.get_memory(key, False):
-            name = _coil_tag(self.target).name
+            name = self.target.tag.name
             ctx.set_tag(name, not ctx.get_tag(name, False))
         ctx.set_memory(key, bool(enabled))
 
     def advance_profile(self) -> AdvanceProfile | None:
         if self.enable_condition is None:
             return None
-        target = _coil_tag(self.target)
+        target = self.target.tag
         rung = self.enable_condition
 
         def step(constraint: Eq, desired: bool) -> AdvanceStep:
@@ -148,7 +145,7 @@ class DebounceInstruction(Instruction):
 
     def __init__(
         self,
-        target: Tag,
+        target: TagArg,
         *,
         on_done: Tag,
         on_acc: Tag,
@@ -187,11 +184,11 @@ class DebounceInstruction(Instruction):
             ctx.set_memory(off_frac, 0)
             tags: dict[str, Any] = {self.on_acc.name: acc_value, self.off_acc.name: 0}
             if acc_value >= resolve_preset_ctx(self.on_preset, ctx):
-                tags[self.target.name] = True
+                tags[self.target.tag.name] = True
             ctx.set_tags(tags)
             return
         ctx.set_memory(on_frac, ctx.get_memory(on_frac, 0))
-        if not ctx.get_tag(self.target.name, False):
+        if not ctx.get_tag(self.target.tag.name, False):
             # With the coil off, the off TD holds its value, including one the ladder wrote.
             ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0))
             return
@@ -203,7 +200,7 @@ class DebounceInstruction(Instruction):
         ctx.set_memory(off_frac, frac)
         tags = {self.off_acc.name: acc_value}
         if timed_out:
-            tags[self.target.name] = False
+            tags[self.target.tag.name] = False
         ctx.set_tags(tags)
 
     def advance_profile(self) -> AdvanceProfile | None:
@@ -214,7 +211,7 @@ class DebounceInstruction(Instruction):
         def step(constraint: Eq, desired: bool) -> AdvanceStep:
             return AdvanceStep(until=constraint, holds=(ConditionDemand(rung, desired),))
 
-        return AdvanceProfile(channels=(self.target,), plan=_target_plan(self.target, step))
+        return AdvanceProfile(channels=(self.target.tag,), plan=_target_plan(self.target.tag, step))
 
 
 class FlasherInstruction(Instruction):
@@ -256,7 +253,7 @@ class FlasherInstruction(Instruction):
 
     def __init__(
         self,
-        target: Tag,
+        target: TagArg,
         *,
         on_done: Tag,
         on_acc: Tag,
@@ -286,14 +283,14 @@ class FlasherInstruction(Instruction):
         if not enabled:
             # Both accumulators (and their remainders) freeze where they are.
             ctx.set_memory(phase_key, _FLASH_IDLE)
-            ctx.set_tags({self.target.name: False})
+            ctx.set_tags({self.target.tag.name: False})
             return
         on_preset = resolve_preset_ctx(self.on_preset, ctx)
         off_preset = resolve_preset_ctx(self.off_preset, ctx)
         if on_preset <= 0 or off_preset <= 0:
             # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
             ctx.set_memory(phase_key, _FLASH_IDLE)
-            ctx.set_tags({self.target.name: False})
+            ctx.set_tags({self.target.tag.name: False})
             return
         phase = ctx.get_memory(phase_key, _FLASH_IDLE)
         if phase == _FLASH_IDLE:
@@ -309,7 +306,7 @@ class FlasherInstruction(Instruction):
             ctx.set_tags({starting.name: 0})
             ctx.set_memory(f"_frac:{starting.name}", 0)
         # The coil shows the phase that runs this scan, even one that ends on it.
-        tags: dict[str, Any] = {self.target.name: phase == _FLASH_ON}
+        tags: dict[str, Any] = {self.target.tag.name: phase == _FLASH_ON}
         if phase == _FLASH_ON:
             acc, preset, other = self.on_acc, on_preset, self.off_acc
         else:
@@ -361,7 +358,7 @@ class TimedInstruction(Instruction):
 
     def __init__(
         self,
-        target: Tag,
+        target: TagArg,
         *,
         timer_done: Tag,
         timer_acc: Tag,
@@ -385,7 +382,7 @@ class TimedInstruction(Instruction):
         rose = bool(enabled) and not ctx.get_memory(rung_key, False)
         ctx.set_memory(rung_key, bool(enabled))
         preset = resolve_preset_ctx(self.on_preset, ctx)
-        timing = bool(ctx.get_tag(self.target.name, False)) and (
+        timing = bool(ctx.get_tag(self.target.tag.name, False)) and (
             ctx.get_tag(self.timer_acc.name, 0) < preset
         )
         if rose and not timing:
@@ -398,14 +395,14 @@ class TimedInstruction(Instruction):
             ctx.set_memory(frac_key, frac)
             ctx.set_tags(
                 {
-                    self.target.name: acc_value < preset or (self.maintained and bool(enabled)),
+                    self.target.tag.name: acc_value < preset or (self.maintained and bool(enabled)),
                     self.timer_acc.name: acc_value,
                 }
             )
             return
         # Timed out, or never started: the accumulator holds.
         ctx.set_memory(frac_key, ctx.get_memory(frac_key, 0))
-        ctx.set_tag(self.target.name, self.maintained and bool(enabled))
+        ctx.set_tag(self.target.tag.name, self.maintained and bool(enabled))
 
     def advance_profile(self) -> AdvanceProfile | None:
         if self.enable_condition is None:
@@ -421,4 +418,4 @@ class TimedInstruction(Instruction):
             # It drops by itself once the on time is up.
             return AdvanceStep(until=constraint)
 
-        return AdvanceProfile(channels=(self.target,), plan=_target_plan(self.target, step))
+        return AdvanceProfile(channels=(self.target.tag,), plan=_target_plan(self.target.tag, step))

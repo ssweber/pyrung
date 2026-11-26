@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import (
         BlockRange,
-        IndirectBlockRange,
         IndirectExprRef,
         IndirectRef,
     )
@@ -178,30 +177,6 @@ def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> BlockRange:
         )
 
     return block_range
-
-
-def resolve_coil_targets_ctx(
-    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef, ctx: ScanContext
-) -> list[Tag]:
-    """Resolve a coil target to one or more concrete Tags.
-
-    Coil targets support:
-    - Single Tag
-    - BlockRange from `.select(start, end)`
-    - IndirectBlockRange from dynamic `.select(...)`
-    """
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-    if isinstance(target, ImmediateRef):
-        return resolve_coil_targets_ctx(target.value, ctx)
-    if isinstance(target, Tag):
-        return [target]
-    if isinstance(target, (BlockRange, IndirectBlockRange)):
-        return resolve_block_range_tags_ctx(target, ctx)
-    raise TypeError(
-        "Expected Tag, BlockRange, IndirectBlockRange, or immediate(...) wrapper, "
-        f"got {type(target).__name__}"
-    )
 
 
 def _raise_fault(ctx: ScanContext, name: str) -> None:

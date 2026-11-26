@@ -978,7 +978,7 @@ _EXCLUSIVE_SPEC_EXTRACTORS: dict[str, tuple[str, str, str]] = {
 def _exclusive_resource_key(spec: InstrSpec) -> tuple[str, str] | None:
     """Derive the exclusive resource key from an InstrSpec.
 
-    Mirrors Instruction._exclusive_fields / exclusive_resources() but operates
+    Mirrors Instruction._exclusive_fields but operates
     on the spec-level args dict (UDT instances) rather than instruction fields
     (destructured tags).
     """

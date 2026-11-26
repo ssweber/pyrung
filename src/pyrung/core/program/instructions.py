@@ -40,20 +40,6 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 
-def _iter_coil_tags(target: Tag | BlockRange | ImmediateRef) -> list[Tag]:
-    """Normalize a coil target to concrete tags."""
-    if isinstance(target, ImmediateRef):
-        return _iter_coil_tags(target.value)
-    if isinstance(target, Tag):
-        return [target]
-    if isinstance(target, BlockRange):
-        return target.tags()
-    raise TypeError(
-        "Expected Tag, BlockRange from .select(), or immediate(...) wrapper, "
-        f"got {type(target).__name__}."
-    )
-
-
 def _attach_instruction(
     ctx: Any,
     instruction: Any,
@@ -161,7 +147,6 @@ def out(
             out(Y.select(1, 4))
     """
     ctx, source_file, source_line = _capture_instruction_context("out", source_depth=3)
-    _iter_coil_tags(target)
     _attach_instruction(ctx, OutInstruction(target, oneshot=oneshot), source_file, source_line)
     return target
 
@@ -178,7 +163,6 @@ def latch(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
             latch(C.select(1, 8))
     """
     ctx, source_file, source_line = _capture_instruction_context("latch", source_depth=3)
-    _iter_coil_tags(target)
     _attach_instruction(ctx, LatchInstruction(target), source_file, source_line)
     return target
 
@@ -195,7 +179,6 @@ def reset(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
             reset(C.select(1, 8))
     """
     ctx, source_file, source_line = _capture_instruction_context("reset", source_depth=3)
-    _iter_coil_tags(target)
     _attach_instruction(ctx, ResetInstruction(target), source_file, source_line)
     return target
 

@@ -107,19 +107,6 @@ class Instruction(ABC):
         """Execute this instruction within the given context (internal)."""
         pass
 
-    def exclusive_resources(self) -> list[tuple[str, str]]:
-        """Return (resource_type, resource_name) for each exclusively-owned resource.
-
-        A resource is exclusive when only one instruction in a program may
-        target it (e.g. a timer accumulator can have only one owner).
-        Subclasses declare exclusive fields via ``_exclusive_fields``.
-        """
-        result: list[tuple[str, str]] = []
-        for field_name in self._exclusive_fields:
-            tag = getattr(self, field_name)
-            result.append((type(self).__name__, tag.name))
-        return result
-
     def check_operands(self, call: str | None = None) -> None:
         """Raise an error for an operand that ``_operands`` or ``_operand_rules`` refuses.
 

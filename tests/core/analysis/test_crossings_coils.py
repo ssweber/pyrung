@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import Block, Bool, Int, OutputBlock, TagType, immediate
 from pyrung.core.analysis.crossings.boolean import LatchCrossing, OutCrossing, ResetCrossing
 from pyrung.core.crossing import CondAttr, CrossingContext, Eq, Prior, eq_target
@@ -128,15 +130,15 @@ def test_reset_static_block_range_uses_element_type() -> None:
     )
 
 
-def test_reset_indirect_block_range_uses_static_element_type() -> None:
+def test_reset_refuses_a_range_with_pointers() -> None:
     registers = Block("Registers", TagType.INT, 1, 8)
     start = Int("RangeStart")
     end = Int("RangeEnd")
-    _assert_reset_polarity(
-        ResetInstruction(registers.select(start, end)),
-        "Registers4",
-        reset_value=0,
-        non_reset_value=9,
+    with pytest.raises(TypeError) as excinfo:
+        ResetInstruction(registers.select(start, end))
+    assert str(excinfo.value) == (
+        "Expected Tag, BlockRange from .select(), or immediate(...) wrapper, "
+        "got IndirectBlockRange."
     )
 
 

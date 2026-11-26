@@ -476,7 +476,7 @@ def _two_links(en_a: bool, en_b: bool, scans: int) -> PLC:
 
 def _coil_order(plc: PLC) -> list[str]:
     assert plc._synthesis is not None
-    return [rung._instructions[0].target.name for rung in plc._synthesis.plant]
+    return [rung._instructions[0].target.tag.name for rung in plc._synthesis.plant]
 
 
 def _scans_to(plc: PLC, tag: str, value: bool) -> int | None:

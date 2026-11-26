@@ -2,34 +2,27 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.storage import BLANK_CHAR
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import Tag, TagType
 
 from .base import Instruction, OneShotMixin
-from .resolvers import (
-    resolve_coil_targets_ctx,
-)
+from .operands import COIL, Coil, RangeArg, TagArg
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
 
-def _static_coil_targets(
-    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
-) -> tuple[Tag, ...] | None:
-    """Resolve immutable direct coil destinations once at construction."""
-    from pyrung.core.memory_block import BlockRange
-
-    if isinstance(target, ImmediateRef):
-        return _static_coil_targets(target.value)
-    if isinstance(target, Tag):
-        return (target,)
-    if isinstance(target, BlockRange):
-        return tuple(target.tags())
-    return None
+def coil_tags(target: Coil) -> tuple[Tag, ...]:
+    """Return the tags that a coil with *target* writes, in the order that it writes them."""
+    match target:
+        case TagArg(tag=tag):
+            return (tag,)
+        case RangeArg(span=span):
+            return tuple(span.tags())
+        case _:
+            assert_never(target)
 
 
 _RESET_VALUES: dict[TagType, bool | int | float | str] = {
@@ -51,6 +44,8 @@ class OutInstruction(OneShotMixin, Instruction):
     """Output coil instruction (OUT).
 
     Sets the target bit to True when executed.
+
+    ``__init__`` parses the target into a ``Coil`` (:mod:`pyrung.core.instruction.operands`).
     """
 
     INERT_WHEN_DISABLED = False
@@ -60,20 +55,13 @@ class OutInstruction(OneShotMixin, Instruction):
     _structural_fields = ()
     _call_operands = (("target", "target"),)
 
-    def __init__(
-        self,
-        target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
-        *,
-        oneshot: bool = False,
-    ):
+    def __init__(self, target: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
-        self.target = target
-        self._static_targets = _static_coil_targets(target)
+        self.target: Coil = COIL.parse("out()", "target", target)
+        self._static_targets = coil_tags(self.target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         targets = self._static_targets
-        if targets is None:
-            targets = resolve_coil_targets_ctx(self.target, ctx)
         if not enabled:
             if self._oneshot:
                 ctx.set_memory(self.memory_key("_oneshot"), False)
@@ -97,6 +85,8 @@ class LatchInstruction(Instruction):
 
     Sets the target bit to True. Unlike OUT, this is typically
     not reset when the rung goes false.
+
+    ``__init__`` parses the target into a ``Coil`` (:mod:`pyrung.core.instruction.operands`).
     """
 
     _reads = ()
@@ -106,17 +96,14 @@ class LatchInstruction(Instruction):
     _call_operands = (("target", "target"),)
     _call_keywords = ()
 
-    def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
-        self.target = target
-        self._static_targets = _static_coil_targets(target)
+    def __init__(self, target: Any):
+        self.target: Coil = COIL.parse("latch()", "target", target)
+        self._static_targets = coil_tags(self.target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        targets = self._static_targets
-        if targets is None:
-            targets = resolve_coil_targets_ctx(self.target, ctx)
-        for target in targets:
+        for target in self._static_targets:
             ctx.set_tag(target.name, True)
 
 
@@ -125,6 +112,8 @@ class ResetInstruction(Instruction):
 
     Clears the target to its type's OFF/zero value, independent of its
     initialization default.
+
+    ``__init__`` parses the target into a ``Coil`` (:mod:`pyrung.core.instruction.operands`).
     """
 
     _reads = ()
@@ -134,15 +123,12 @@ class ResetInstruction(Instruction):
     _call_operands = (("target", "target"),)
     _call_keywords = ()
 
-    def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
-        self.target = target
-        self._static_targets = _static_coil_targets(target)
+    def __init__(self, target: Any):
+        self.target: Coil = COIL.parse("reset()", "target", target)
+        self._static_targets = coil_tags(self.target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        targets = self._static_targets
-        if targets is None:
-            targets = resolve_coil_targets_ctx(self.target, ctx)
-        for target in targets:
+        for target in self._static_targets:
             ctx.set_tag(target.name, reset_value_for_type(target.type))

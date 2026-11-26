@@ -50,6 +50,7 @@ from pyrung.core.instruction.drums import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.operands import TagArg
 from pyrung.core.instruction.out_variants import (
     DebounceInstruction,
     FlasherInstruction,
@@ -219,10 +220,10 @@ _CASES = [
     (_event_drum(), "Y2", True, "fallthrough", ()),
     (_time_drum(), "Y2", True, "fallthrough", ()),
     (_time_event_drum(), "Y2", True, "fallthrough", ()),
-    (ToggleInstruction(Bool("L"), Bool("En")), "L", True, "fallthrough", ()),
+    (ToggleInstruction(TagArg(Bool("L")), Bool("En")), "L", True, "fallthrough", ()),
     (
         DebounceInstruction(
-            Bool("V"),
+            TagArg(Bool("V")),
             on_done=Bool("OnDone"),
             on_acc=Int("OnAcc"),
             on_preset=10,
@@ -238,7 +239,7 @@ _CASES = [
     ),
     (
         FlasherInstruction(
-            Bool("B"),
+            TagArg(Bool("B")),
             on_done=Bool("OnDone"),
             on_acc=Int("OnAcc"),
             on_preset=10,
@@ -254,7 +255,7 @@ _CASES = [
     ),
     (
         TimedInstruction(
-            Bool("H"),
+            TagArg(Bool("H")),
             timer_done=Bool("Done"),
             timer_acc=Int("Acc"),
             on_preset=10,
