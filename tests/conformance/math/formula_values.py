@@ -70,6 +70,11 @@ _STORES_READ: dict[str, tuple[float, float]] = {
 }
 
 
+#: The largest hex value that a reading shows a CLICK holding whole inside a formula.
+#: FF38h * FE70h MOD 7h is 0005h, so the product FDA93880h stays whole before the MOD (b15 m2b).
+_HEX_READ = 0xFDA93880
+
+
 class Unread(Exception):
     """No reading shows what a CLICK does at this step of a formula."""
 
@@ -93,6 +98,7 @@ def click_steps(
 
     Raise :class:`Unread` at each step that no reading shows. These steps are:
 
+    - a hex step whose value is above FDA93880h or below -FDA93880h, the largest read (b15 m2b)
     - a hex AND, OR or XOR of a value above FFFFh or below -FFFFh
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
       a negative divisor
@@ -228,7 +234,10 @@ def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> 
             "OR": lambda: (x | y) & 0xFFFF,
             "XOR": lambda: (x ^ y) & 0xFFFF,
         }
-        return hex_steps[op]()
+        result = hex_steps[op]()
+        if guard is not None and abs(result) > _HEX_READ:
+            raise Unread(f"hex {x} {op} {y}")
+        return result
     if op == "^" and guard is not None and not _power_is_read(a, b):
         raise Unread(f"{a} ^ {b}")
     decimal_steps: dict[str, Callable[[], float]] = {

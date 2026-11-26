@@ -24,9 +24,9 @@ because a reading settled the pair. The rest are probes (``probe=``). When a pro
 CLICK, add its readings to the ``READINGS`` of ``tests/click/test_click_formula.py``, and its
 pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
-No probe asks about a minus sign before ``/`` or MOD. Both orders give the same value in
-pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them apart.
-``formula.SAME_VALUE_PAIRS`` holds them.
+No probe asks about a minus sign before ``/`` or MOD in decimal. Both orders give the same
+value in pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them
+apart. ``formula.SAME_VALUE_PAIRS`` holds them.
 
 The ``WIDTHS`` cases each bracket their formulas, so the order is fixed and only one step is
 read. They run formulas that a CLICK was read running on 2026-11-26, and expect the values read
@@ -53,9 +53,10 @@ do, and expects what pyrung gives.
 
 - Result1 is ``DF 1.0 + DF 1.0E+17 - DF 1.0E+17`` into an Int. A double drops the 1.0 from
   1.0 + 1.0E+17, so the formula is 0 from the left and 1 with the ``-`` first.
-- Result2 is 1 when ``DD 164999119 * DD 114975250 * DD 58`` into a DD is 1322058880, the
-  product of the doubles from the left. It is 2 for 1322058752, the product with the second
-  ``*`` first, and 3 for 1322058796, the whole product. Each wraps to 32 bits.
+- Result2 is 1 when ``( DD 164999119 * DD 114975250 * DD 58 ) MOD DD 1000000`` into a DD is
+  675584, from the product of the doubles from the left. It is 2 for 675456, with the second
+  ``*`` first, and 3 for 675500, from the whole product. The MOD keeps the stored value inside
+  the values that a reading shows a DD holding.
 - Result3 is 1 when ``DD 2147483647 * DD 2147483647`` into a DD is 0, 2 for 1 and 3 for
   2147483647. Result4 is the same formula into an Int. As a double the product is
   2^62 - 2^32, whose low 32 bits are 0. The low bits of the whole product are 1.
@@ -346,11 +347,11 @@ def init_hex_by_zero(slot: Any) -> None:
 
 def prove_doubles(slot: Any) -> None:
     one, big, big_again = df[170], df[171], df[172]
-    a, b, c, product = dd[178], dd[179], dd[180], dd[181]
+    a, b, c, product, million = dd[178], dd[179], dd[180], dd[181], dd[185]
     top, top_again, square = dd[182], dd[183], dd[184]
     with rung(*once(slot)):
         math(one + big - big_again, slot.Result1)
-        math(a * b * c, product)
+        math((a * b * c) % million, product)
         math(top * top_again, square)
         math(top * top_again, slot.Result4)
         math(df[173] + df[174] + df[175], slot.Scratch)
@@ -365,6 +366,7 @@ def init_doubles(slot: Any) -> None:
     copy(164999119, dd[178])
     copy(114975250, dd[179])
     copy(58, dd[180])
+    copy(1000000, dd[185])
     fill(2147483647, dd.select(182, 183))
     copy(0, dd[181])
     copy(0, dd[184])
@@ -376,13 +378,17 @@ def init_doubles(slot: Any) -> None:
 #: The formulas of the ``doubles`` case that read an order, with their register values.
 DOUBLES: tuple[tuple[str, dict[str, Any]], ...] = (
     ("DF170 + DF171 - DF172", {"DF170": 1.0, "DF171": float32(1.0e17), "DF172": float32(1.0e17)}),
-    ("DD178 * DD179 * DD180", {"DD178": 164999119, "DD179": 114975250, "DD180": 58}),
+    (
+        "( DD178 * DD179 * DD180 ) MOD DD185",
+        {"DD178": 164999119, "DD179": 114975250, "DD180": 58, "DD185": 1000000},
+    ),
     ("DF173 + DF174 + DF175", {"DF173": 1.0, "DF174": float32(1.0e17), "DF175": float32(-1.0e17)}),
 )
 
-#: What a DD stores for 164999119 * 114975250 * 58: the product of the doubles from the left,
-#: with the second ``*`` first, and the whole product. Each wraps to 32 bits.
-DOUBLES_PRODUCTS = [1322058880, 1322058752, 1322058796]
+#: What a DD stores for ( 164999119 * 114975250 * 58 ) MOD 1000000, from the product of the
+#: doubles from the left, from the product with the second ``*`` first, and from the whole
+#: product.
+DOUBLES_PRODUCTS = [675584, 675456, 675500]
 
 #: The cases that bracket their formulas to read one step, in the order of the manifest.
 WIDTHS = [
@@ -418,25 +424,25 @@ WIDTHS = [
 
 #: A case that reads the order of two operators in doubles, and a store past 2^53.
 DOUBLES_CASE = case(
-    "A Math applies + and - from the left in doubles. 1.0 + 1.0E+17 - 1.0E+17 is 0 into an "
-    "Int (Result1), and 1 with the - first. A Math applies two * from the left. 164999119 * "
-    "114975250 * 58 into a DD is 1322058880 (Result2 = 1), and 1322058752 with the second * "
-    "first (2). 2147483647 * 2147483647 is 0 into a DD (Result3 = 1) and into an Int "
-    "(Result4). 1.0 + 1.0E+17 + -1.0E+17 is 0 into an Int (Scratch), and 1 with the second + "
-    "first",
+    "pyrung expects a Math to apply + and -, + twice and * twice from the left, in doubles. "
+    "1.0 + 1.0E+17 - 1.0E+17 into an Int is 0 (Result1), and 1 with the - first. "
+    "( 164999119 * 114975250 * 58 ) MOD 1000000 into a DD is 675584 (Result2 = 1), and 675456 "
+    "with the second * first (2). 1.0 + 1.0E+17 + -1.0E+17 into an Int is 0 (Scratch), and 1 "
+    "with the second + first. pyrung stores 0 for 2147483647 * 2147483647 into a DD "
+    "(Result3 = 1) and into an Int (Result4)",
     ladder=prove_doubles,
     init=init_doubles,
     id="doubles",
     expect={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": 0, "Scratch": 0},
     formulas=[
         "DF170 + DF171 - DF172",
-        "DD178 * DD179 * DD180",
+        "( DD178 * DD179 * DD180 ) MOD DD185",
         "DD182 * DD183",
         "DD182 * DD183",
         "DF173 + DF174 + DF175",
     ],
-    probe="whether a CLICK applies + and -, and * twice, from the left where a double rounds, "
-    "and + twice, and what it stores for a value past 2^53",
+    probe="whether a CLICK applies + and -, + twice and * twice from the left where a double "
+    "rounds, and what it stores for a value past 2^53",
 )
 
 
@@ -639,8 +645,6 @@ def test_doubles_tells_the_two_orders_apart(text: str, registers: dict[str, Any]
     if text.startswith("DF"):
         assert (left, other) == (0.0, 1.0)
     else:
-        # A DD keeps the low 32 bits.
-        stored = [(int(value) + 2**31) % 2**32 - 2**31 for value in (left, other)]
-        assert stored == DOUBLES_PRODUCTS[:2]
-        a, b, c = registers.values()
-        assert a * b * c % 2**32 == DOUBLES_PRODUCTS[2]
+        assert [left, other] == DOUBLES_PRODUCTS[:2]
+        a, b, c, million = registers.values()
+        assert a * b * c % million == DOUBLES_PRODUCTS[2]

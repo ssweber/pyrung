@@ -377,6 +377,54 @@ _DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] =
     True: (("Word", Word, Word, _HEX_GRID),),
 }
 
+#: A bracketed product that stands for an operand of any size, in place of one register of a
+#: pair's formula. Three registers cannot reach what a longer formula can. Its brackets
+#: settle its own order, so it adds no pair.
+_PRODUCT = "( ( ( {bank}4 * {bank}5 ) * {bank}6 ) * {bank}7 )"
+
+#: The values of the product's four registers, for each type of operand. Each list reaches
+#: past 2^53. In hex, 8000h four times is 2^60, and the last product needs 55 bits.
+_PRODUCT_VALUES: dict[Any, tuple[tuple[float, ...], ...]] = {
+    Dint: (
+        (1, 1, 1, 1),
+        (-2, 3, 7, 1),
+        (164999119, 114975250, 58, 1),
+        (2147483647, 2147483647, 2147483647, -2147483648),
+    ),
+    Real: tuple(
+        tuple(float32(value) for value in values)
+        for values in ((1, 1, 1, 1), (1.5, -2.5, 0.25, 1), (1.0e17, 1.0e17, 1, 1), (1.0e30,) * 4)
+    ),
+    Word: (
+        (1, 1, 1, 1),
+        (0x100, 0x101, 1, 1),
+        (0x8000, 0x8000, 0x8000, 0x8000),
+        (0x3031, 0x3AFD, 0x24FD, 0x2B86),
+    ),
+}
+
+
+def _with_a_product(text: str, bank: str) -> list[str]:
+    """Return *text* with the product in place of each register in turn.
+
+    A register right after the leading minus sign keeps its place, because a product there
+    makes another kind of minus sign. A range function takes registers only.
+    """
+    if ":" in text:
+        return []
+    product = _PRODUCT.format(bank=bank)
+    return [
+        re.sub(rf"\b{bank}{index}\b", product, text)
+        for index in _registers(text, bank)
+        if not text.startswith(f"- {bank}{index} ")
+    ]
+
+
+def _registers(text: str, bank: str) -> list[int]:
+    """Return the number of each register of *text*, in order."""
+    return sorted({int(index) for index in re.findall(rf"\b{bank}(\d+)\b", text)})
+
+
 #: The binary operators of each mode. CLICK has no ``^`` in hex mode.
 _MODE_OPERATORS = {
     False: ("+", "-", "*", "/", "^", "MOD"),
@@ -427,9 +475,11 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
 class _PyrungRun:
     """One formula as a pyrung ``math()``, built once and run for many values."""
 
-    def __init__(self, tree: Any, bank: str, operand_type: Any, dest_type: Any) -> None:
-        self.names = [f"{bank}{index}" for index in (1, 2, 3)]
-        tags = {index: operand_type(name) for index, name in enumerate(self.names, 1)}
+    def __init__(
+        self, tree: Any, bank: str, indexes: list[int], operand_type: Any, dest_type: Any
+    ) -> None:
+        self.names = [f"{bank}{index}" for index in indexes]
+        tags = {index: operand_type(f"{bank}{index}") for index in indexes}
         self.instruction = CalcInstruction(pyrung_expression(tree, tags), dest_type("Dest"))
         execute(self.instruction, SystemState())
 
@@ -458,23 +508,34 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
     groupings apart, so the model leaves out the store. Otherwise both stores must give the
     same value and flags, and pyrung's ``math()`` must store that value. A point where the model
     has no reading counts as a difference. pyrung's two groupings must store the same value
-    everywhere.
+    everywhere. The grid runs *text*, and *text* with the product in place of each register.
 
     pyrung's flags are not compared, because a flag that pyrung gets wrong under both groupings
     is a flag bug, not a question of order (ruled 2026-11-26). A store that pyrung gets wrong
     under both groupings is a store bug in the same way (ruled 2026-11-26).
     """
+    bank = "DH" if hex_mode else "DS"
+    for formula in (text, *_with_a_product(text, bank)):
+        how = _how_one_formula_differs(formula, hex_mode, bank)
+        if how is not None:
+            return f"{formula}: {how}"
+    return None
+
+
+def _how_one_formula_differs(text: str, hex_mode: bool, bank: str) -> str | None:
     tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
-    bank = "DH" if hex_mode else "DS"
-    count = 3 if f"{bank}3" in text else 2
+    indexes = _registers(text, bank)
+    outer = [index for index in indexes if index < 4]
     for dest, dest_type, operand_type, grid in _DESTINATIONS[hex_mode]:
         # pyrung_expression builds no range function, so the runs wait for a point that the
         # model reads.
         runs: list[_PyrungRun] = []
         context = ScanContext(SystemState())
-        for values in itertools.product(grid, repeat=count):
-            registers = {f"{bank}{index}": value for index, value in enumerate(values, 1)}
+        products = _PRODUCT_VALUES[operand_type] if len(outer) < len(indexes) else [()]
+        for point in itertools.product(itertools.product(grid, repeat=len(outer)), products):
+            values: tuple[float, ...] = (*point[0], *point[1])
+            registers = dict(zip((f"{bank}{index}" for index in indexes), values, strict=True))
             where = f"for {values} into a {dest}"
             try:
                 steps = [click_steps(t, hex_mode, registers) for t in (tree, regrouped)]
@@ -484,7 +545,9 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
             if click is not None and click[0] != click[1]:
                 return f"the model of a CLICK stores {click} {where}"
             if not runs:
-                runs = [_PyrungRun(t, bank, operand_type, dest_type) for t in (tree, regrouped)]
+                runs = [
+                    _PyrungRun(t, bank, indexes, operand_type, dest_type) for t in (tree, regrouped)
+                ]
             pyrung = [run(context, values) for run in runs]
             if pyrung[0] != pyrung[1] or (click is not None and pyrung[0] != click[0][0]):
                 stored = "" if click is None else f", a CLICK {click[0][0]}"
@@ -542,6 +605,20 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
         # In doubles, 164999119 * 114975250 * 58 rounds to one value from the left, and to
         # another with the second * first.
         ("DS1 * DS2 * DS3", False, [("*", "*")]),
+        # In hex, a product of four DHs passes 2^53. No reading shows a hex value past
+        # FDA93880h, and pyrung stores 0000h and 0100h for the two groupings of the first.
+        ("DH1 * DH2 * DH3 * DH4 + DH5 + DH6", True, [("*", "*"), ("+", "+")]),
+        ("DH1 * DH2 * DH3 * DH4 + DH5 - DH6", True, [("*", "*"), ("+", "-")]),
+        ("DH1 * DH2 * DH3 * DH4 * DH5", True, [("*", "*")]),
+        # A bracket can hand each of these a value that no reading shows.
+        ("DH1 AND DH2 AND DH3", True, [("AND", "AND")]),
+        ("DH1 OR DH2 OR DH3", True, [("OR", "OR")]),
+        ("DH1 XOR DH2 XOR DH3", True, [("XOR", "XOR")]),
+        ("DH1 + DH2 - DH3", True, [("+", "-")]),
+        ("DH1 * DH2 * DH3", True, [("*", "*")]),
+        ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
+        ("- DH1 MOD DH2", True, [(NEGATE_ADDRESS, "MOD")]),
+        ("- ( DH1 ) MOD DH2", True, [(NEGATE_BRACKET, "MOD")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
@@ -580,18 +657,10 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DS1 ) ^ 2", False),
         ("- SQRT ( DS1 ) + 2", False),
         # Both groupings give the same value and flags (SAME_VALUE_PAIRS).
-        ("DH1 AND DH2 AND DH3", True),
-        ("DH1 OR DH2 OR DH3", True),
-        ("DH1 XOR DH2 XOR DH3", True),
         ("- DS2 * 4", False),
         ("- DS1 / 2", False),
         ("- DS2 MOD 3", False),
         ("- ( DS1 ) * DS2", False),
-        ("DH1 + DH2 - DH3", True),
-        ("DH1 * DH2 * DH3", True),
-        ("- DH1 * DH2", True),
-        ("- DH1 MOD DH2", True),
-        ("- ( DH1 ) MOD DH2", True),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
@@ -735,6 +804,7 @@ def test_imported_constants_compute_what_math_computes(
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
         ("DS1 + DS2 - DS3", "DF1", "'+' and '-'", "the two from the left"),
+        ("DH1 * DH2 * DH3 * DH4 * DH5", "DH6,mode=hex", "'*' twice", "the two from the left"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(

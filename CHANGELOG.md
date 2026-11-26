@@ -64,7 +64,7 @@
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
-  - The import warns on a Math formula that mixes two operators whose order no one has checked on a CLICK, such as `DS1 / DS2 MOD 3`. Add brackets in CLICK to set the order.
+  - The import warns on a Math formula whose order no one has checked on a CLICK, such as `DS1 + DS2 + DS3` or `DS1 / DS2 MOD 3`. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. It stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
 
 ## v0.18.1 (2026-11-25)

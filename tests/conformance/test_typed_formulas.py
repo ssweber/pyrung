@@ -64,9 +64,10 @@ _TYPED_PARTS = [
 
 @pytest.mark.parametrize("part", _TYPED_PARTS)
 def test_laddercodec_reads_each_typed_formula(part: str, tmp_path: Path) -> None:
-    """ClickNick pastes the export through laddercodec, which refuses what CLICK's dialog refuses.
+    """ClickNick pastes the export through laddercodec.
 
-    One refused formula, such as ``- - DS1`` (OBJ-1001), keeps the whole part off the PLC.
+    One formula that laddercodec refuses, such as ``- - DS1`` (OBJ-1001), keeps the whole part
+    off the PLC.
     """
     out = suite.build(part).export(tmp_path)
     ladders = [path for path in out.rglob("*.csv") if path.name != "nicknames.csv"]

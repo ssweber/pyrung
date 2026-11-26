@@ -115,7 +115,10 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = ()
 #: ``tests/click/test_click_formula.py`` computes both groupings over a grid of values, with a
 #: model of what the readings show a CLICK does. It checks that this list holds each pair whose
 #: groupings agree there, and whose value pyrung's ``math()`` stores. A pair agrees only if a
-#: reading shows each step of both groupings.
+#: reading shows each step of both groupings. An operand of the pair can be a longer formula,
+#: so the grid also puts a product of four registers in place of each register. No reading
+#: shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step, so no hex
+#: pair agrees.
 SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     (NEGATE_ADDRESS, "*", False),
     (NEGATE_ADDRESS, "/", False),
@@ -123,16 +126,6 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     (NEGATE_BRACKET, "*", False),
     (NEGATE_BRACKET, "/", False),
     (NEGATE_BRACKET, "MOD", False),
-    ("+", "+", True),
-    ("+", "-", True),
-    ("*", "*", True),
-    ("AND", "AND", True),
-    ("OR", "OR", True),
-    ("XOR", "XOR", True),
-    (NEGATE_ADDRESS, "*", True),
-    (NEGATE_ADDRESS, "MOD", True),
-    (NEGATE_BRACKET, "*", True),
-    (NEGATE_BRACKET, "MOD", True),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
