@@ -32,7 +32,7 @@ from .conversions import (
     _math_out_of_range_for_dest,
     _truncate_to_tag_type,
 )
-from .operands import TAG, NumberInto, ValueOperand
+from .operands import TAG, NumberInto, TextInto, ValueOperand
 from .resolvers import (
     _raise_fault,
     _set_fault_address_error,
@@ -381,7 +381,10 @@ class CalcInstruction(OneShotMixin, Instruction):
             pointer_hint="Write into a tag, then copy() that tag to the pointer.",
         ),
     }
-    _operand_rules = (NumberInto(value="source_expression", dest="dest", text=True),)
+    _operand_rules = (
+        NumberInto(value="source_expression", dest="dest", text=True),
+        TextInto(dest="dest", writes="number"),
+    )
     _call_operands = (("expression", "source_expression"), ("dest", "dest"))
 
     def __init__(

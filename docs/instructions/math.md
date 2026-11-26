@@ -12,6 +12,8 @@ math(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 
 The expression comes first and the destination second, as in every pyrung instruction (`copy(source, dest)`, `blockcopy(source, dest)`). CLICK's Math dialog puts the result first.
 
+`math()` refuses a TXT as the destination. A TXT holds only text. Write into a number tag, then `copy()` that tag into the TXT. The copy writes the number's text.
+
 ## Overflow behavior
 
 **Math wraps.** Overflow truncates to the destination type's bit width (modular arithmetic). This differs from `copy()`, which clamps.

@@ -199,6 +199,12 @@ class Tag:
             object.__setattr__(self, "default", defaults.get(self.type, 0))
 
         if self.type == TagType.CHAR:
+            if not isinstance(self.default, str):
+                # A Char tag holds only text, and check() and how() read its default as text.
+                raise TypeError(
+                    f"Char tag {self.name!r} got the default {self.default!r}. A Char tag "
+                    "holds only text. Pass one character, or '' for a blank."
+                )
             object.__setattr__(self, "default", store_char(self.default))
         if self.type == TagType.REAL:
             check_real_value(self.default, f"Tag {self.name!r}: default")

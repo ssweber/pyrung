@@ -25,10 +25,19 @@
   Copy the constant into one TXT with `copy()`.
 - A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT.
   Copy the text "1" in a rung that has the Bool as its condition, and "0" in a rung that has its inverse.
+- pyrung now raises when you build a program with one of these forms (it stored a number or a bit in the TXT tag). A CLICK program cannot hold any of them.
+  - `blockcopy()` into TXT from a range that is not TXT, or with `convert=`
+  - `copy()` of an expression into a TXT
+  - `math()`, `out()` or `latch()` into a TXT
+  - `receive()` into TXT from a CLICK address that is not TXT, or from a coil or discrete input
+  - a `Char` tag whose default is not text
+
+  Store the number in a number tag, then `copy()` that tag into the TXT. The copy writes the number's text. Give a `Char` tag a text default, such as `"5"`.
 
 ### Fixes
 
 - `math()` on `Word` tags only (CLICK's hex mode) now truncates each division, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
+- `check()` and `how()` no longer fail with `TypeError` on a program that stores a number in a TXT tag. pyrung refuses each such write when you build the program.
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.

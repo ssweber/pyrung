@@ -14,6 +14,8 @@ with rung(Button):
 
 `out` follows rung power. It is True when the rung is True and False when the rung is False. The last rung to write a tag wins within a scan.
 
+`out()` and `latch()` refuse a TXT. A TXT holds only text. `reset()` of a TXT writes a blank.
+
 With `oneshot=True`, the output is True for only one scan on the rung's rising edge.
 
 ## Out coil variants

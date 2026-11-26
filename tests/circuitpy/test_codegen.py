@@ -442,7 +442,7 @@ class TestGenerateCircuitPyAPI:
         with Program(strict=False) as prog:
             with rung():
                 # copy() refuses a range when the program is built, so a range goes to math().
-                (math if shown.startswith("a range") else copy)(value(), Char("Text"))
+                (math if shown.startswith("a range") else copy)(value(), Bool("Flag"))
         line = prog.rungs[0]._instructions[0].source_line
 
         message = rf"\(\) at .*test_codegen\.py:{line}\. It reads {re.escape(shown)} as a value\."
@@ -2218,10 +2218,6 @@ class TestBoardPeripheralsAndRunStop:
         "store",
         [
             pytest.param(lambda r, chars, reals: copy(r, chars[1]), id="copy"),
-            pytest.param(
-                lambda r, chars, reals: blockcopy(reals.select(1, 2), chars.select(1, 2)),
-                id="blockcopy",
-            ),
         ],
     )
     def test_a_non_finite_real_into_a_char_is_zero_on_every_backend(

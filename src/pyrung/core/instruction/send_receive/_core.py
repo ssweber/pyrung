@@ -28,6 +28,7 @@ from pyrung.core.tag import Tag, TagType
 
 from ..base import Instruction
 from ..conversions import _store_copy_value_to_tag_type
+from ..operands import TextInto, check_rules
 from . import backends as _backends
 from .helpers import (
     _addresses_for_count,
@@ -600,6 +601,9 @@ class ModbusReceiveInstruction(Instruction):
 # ---------------------------------------------------------------------------
 
 
+_RECEIVE_TEXT = TextInto(value="remote_start", dest="dest", writes="receive")
+
+
 def _resolve_target(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
 ) -> tuple[str, str | None, int, int | Tag, float, ModbusTcpTarget | ModbusRtuTarget | None]:
@@ -785,6 +789,7 @@ def receive(
     bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
         remote_start, dest, count, target, is_send=False
     )
+    check_rules({}, (_RECEIVE_TEXT,), "receive()", {"remote_start": remote_start, "dest": dest})
 
     ctx = _require_rung_context("receive")
     source_file, source_line = _capture_source(depth=2)

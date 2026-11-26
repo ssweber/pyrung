@@ -103,7 +103,6 @@ KERNEL_FORMS: dict[str, tuple[Callable[[], Any], dict[str, Any]]] = {
 
 # Each form stores a value when you step it, so its scans run.
 DECLINED_FORMS: dict[str, Callable[[], Any]] = {
-    "Timer[1] into a Char": lambda: copy(Timer[1], txt[3]),
     "Timer into a Bool": lambda: copy(Timer, c[3]),
     "udt into a Bool": lambda: copy(Motor, c[3]),
     "udt instance into a Bool": lambda: copy(Motor[1], c[3]),

@@ -103,11 +103,12 @@ def _blocks() -> dict[str, Block]:
 
 def _rows(kind: Any) -> Any:
     """Return a named array of two fields at stride 4.  Its ranges are not a slice of one block."""
+    blank = "" if kind is Char else 0
 
     @named_array(kind, count=2, stride=4)
     class Row:
-        first = 0
-        second = 0
+        first = blank
+        second = blank
 
     return Row
 
