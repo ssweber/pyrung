@@ -6061,3 +6061,59 @@ class TestMapBeforeProgram:
         assert [c.tag.name for c in cond.conditions][1] == expected[1]
         report = validate_click_program(ns["logic"], ns["mapping"], mode="strict")
         assert [f for f in report.errors if f.code == CLK_TEXT_WINDOW_NOT_CONTIGUOUS] == []
+
+
+def test_a_one_register_send_of_txt_imports_as_two_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLICK's Send with FC06 reads quantity 1 and moves the register that holds an odd TXT
+    and the TXT after it.  The import writes the pair, and the run sends both characters in
+    one register, low byte first."""
+    from concurrent.futures import Future
+    from typing import Any
+
+    from pyrung.core import PLC, send
+    from pyrung.core.instruction.send_receive import ModbusAddress, ModbusTcpTarget, RegisterType
+    from pyrung.core.instruction.send_receive import _core as modbus_core
+    from pyrung.core.instruction.send_receive._core import _RequestResult
+
+    pair = Block("Pair", TagType.CHAR, 1, 2)
+    En, Ok, Bu, Er, Ex = Bool("En"), Bool("Ok"), Bool("Bu"), Bool("Er"), Int("Ex")
+    with Program(strict=False) as program:
+        with rung(En):
+            send(
+                target=ModbusTcpTarget(name="p", ip="127.0.0.1"),
+                remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+                source=pair.select(1, 2),
+                sending=Bu,
+                success=Ok,
+                error=Er,
+                exception_response=Ex,
+            )
+    tag_map = TagMap(
+        {En: x[1], pair: txt.select(41, 42), Ok: c[1], Bu: c[2], Er: c[3], Ex: ds[1]},
+        include_system=False,
+    )
+    main = _export_csv(program, tag_map, tmp_path)
+    original = main.read_text(encoding="utf-8")
+    assert "source=TXT41..TXT42" in original
+    main.write_text(original.replace("source=TXT41..TXT42", "source=TXT41"), encoding="utf-8")
+
+    code = ladder_to_pyrung(main)
+    assert "source=txt.select(41, 42)" in code
+    ns: dict = {}
+    exec_with_source(code, ns)
+
+    requests: list[dict[str, Any]] = []
+
+    def submit(**request: Any) -> Future[_RequestResult]:
+        requests.append(request)
+        done: Future[_RequestResult] = Future()
+        done.set_result(_RequestResult(ok=True, exception_code=0))
+        return done
+
+    monkeypatch.setattr(modbus_core, "_submit_raw_send_request", submit)
+    plc = PLC(ns["logic"])
+    plc.patch({"TXT41": "W", "TXT42": "X", "X001": True})
+    plc.step()
+    assert requests[0]["registers"] == [0x5857]

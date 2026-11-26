@@ -118,6 +118,23 @@ def _text_holds_the_rest(call: str, args: str, last: int) -> bool:
     return {"result", "found"} <= keys
 
 
+_ONE_TXT_SEND = re.compile(r"(send\(.*remote_start=ModbusAddress\(.*?[,(]source=TXT)(\d+)([,)])")
+
+
+def _txt_send_pair(cell: str) -> str:
+    """Return *cell* with a Send of one TXT written as a Send of the TXT pair.
+
+    CLICK's Send of one register (FC06) holds the character at an odd TXT address and the
+    character after it. The count box reads 1, and the register moves two characters. A
+    pyrung send() needs one Char tag for each character, so the importer writes the pair.
+    """
+    match = _ONE_TXT_SEND.match(cell)
+    if match is None:
+        return cell
+    first = int(match.group(2))
+    return f"{match.group(1)}{first}..TXT{first + 1}{cell[match.end(3) - 1 :]}"
+
+
 def _typed_text_cell(cell: str) -> str:
     """Return *cell* with each quote inside a text written twice.
 
