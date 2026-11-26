@@ -271,10 +271,10 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
       ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
       not yet read.
-    - In hex mode AND, OR and XOR each give 16 unsigned bits.  ``- DH1 OR 0h`` with
-      DH1 = 2h stores FFFEh and raises no SC43 (read, 2026-11-26).  The 16 bits are also
-      the value that a later step reads, so ``( - DH1 OR 0h ) / 2h`` is 7FFFh.  That is
-      pyrung's choice, and no CLICK reading covers it yet.
+    - In hex mode AND, OR and XOR each give 16 unsigned bits, and a later step reads
+      those 16 bits.  With DH1 = 2h, ``- DH1 OR 0h`` stores FFFEh and
+      ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
+      2026-11-26).
 
     Return *expression* itself when nothing changes (no operation in it).
     """

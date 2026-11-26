@@ -3131,6 +3131,19 @@ class TestBoardPeripheralsAndRunStop:
         ("c1_division_by_zero", Int, lambda a, b, c: (a / b) + c, (5, 0, 1), 1, (1, 0, 0)),
         ("c2_mod_by_zero", Int, lambda a, b, c: (a % b) + c, (5, 0, 1), 1, (0, 0, 1)),
         ("c3_hex_mod_by_zero", Word, lambda a, b, c: a % b, (5, 0, 0), 0, (0, 0, 1)),
+        ("d1_hex_division_by_zero", Word, lambda a, b, c: (a / b) + 1, (5, 0, 0), 1, (1, 0, 0)),
+        ("d2_hex_mod_by_zero", Word, lambda a, b, c: (a % b) + 1, (5, 0, 0), 1, (0, 0, 1)),
+        ("d3_division_by_zero", Int, lambda a, b, c: (a / b) + 1, (5, 0, 0), 1, (1, 0, 0)),
+        ("d5_or_then_add", Word, lambda a, b, c: ((0 - a) | 0) + 1, (2, 0, 0), 0xFFFF, (0, 0, 0)),
+        ("d5x_or_then_add_past", Word, lambda a, b, c: ((0 - a) | 0) + 1, (1, 0, 0), 0, (0, 1, 0)),
+        (
+            "d6_or_then_subtract",
+            Word,
+            lambda a, b, c: ((0 - a) | 0) - 1,
+            (2, 0, 0),
+            0xFFFD,
+            (0, 0, 0),
+        ),
     ]
 
     @pytest.mark.parametrize(
@@ -3152,8 +3165,10 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: expected for name in results}, label
 
     #: Rows as in :attr:`_CLICK_HEX_MATH`, with two Word tags.  In hex mode AND, OR and XOR
-    #: give 16 unsigned bits, and a later step reads those 16 bits.  No CLICK reading has
-    #: a bitwise result that feeds another step, so these rows are pyrung's assumption.
+    #: give 16 unsigned bits, and a later step reads those 16 bits.  A CLICK was read doing
+    #: this for an OR that feeds a + or a - (the d rows of :attr:`_CLICK_MATH_FLAGS`).
+    #: These rows apply the same rule to a /, an XOR and a wide product, which no CLICK
+    #: reading covers.
     _HEX_BITWISE_ONWARD = [
         ("or_then_divide", lambda a, b: (-a | 0) / 2, (2, 0), 0x7FFF, (0, 0, 0)),
         ("xor_then_subtract", lambda a, b: (-a ^ 0) - 1, (2, 0), 0xFFFD, (0, 0, 0)),

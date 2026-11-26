@@ -129,16 +129,16 @@ class TestCalcInstruction:
             (lambda a: -a | 0, 0xFFFE, False),
             (lambda a: -a ^ 1, 0xFFFF, False),
             (lambda a: -a & 0xFFFF, 0xFFFE, False),
-            (lambda a: (-a | 0) / 2, 0x7FFF, False),
+            (lambda a: ((0 - a) | 0) + 1, 0xFFFF, False),
         ],
-        ids=["minus", "or", "xor", "and", "or_then_divide"],
+        ids=["minus", "or", "xor", "and", "or_then_add"],
     )
     def test_a_hex_bitwise_result_is_16_unsigned_bits(self, runner_factory, make, stored, flagged):
         """A hex AND, OR or XOR gives 16 unsigned bits and sets no SC43.
 
         A CLICK stored FFFEh with no SC43 for ``- DH OR 0h`` with DH = 2h (2026-11-26).  A
-        minus alone sets SC43.  The ``or_then_divide`` row is pyrung's assumption, because
-        no CLICK reading has a bitwise result that feeds a later step.
+        minus alone sets SC43.  A later step reads the 16 bits, so
+        ``( ( 0h - DH ) OR 0h ) + 1h`` stored FFFFh with no SC43.
         """
         A, Out = Word("A"), Word("Out")
         with Program() as logic:

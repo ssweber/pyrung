@@ -537,7 +537,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "fill_binary": {"TXT": range(451, 455), "DD": range(451, 455), "DF": range(451, 454)},
     # The follow6_reads part.
     "hex_divmod": {"DH": range(141, 168)},
-    "math_flags": {"DH": range(168, 186), "DS": range(4301, 4304)},
+    "math_flags": {"DH": range(168, 195), "DS": range(4301, 4308), "C": range(741, 748)},
     # DS10 is a spare header register no group writes, for a pointer with choices of its own.
     # DS4500 is the last DS, for a Modbus write that runs past it.
     "modbus_raw": {

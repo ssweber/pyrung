@@ -76,7 +76,7 @@ math(-DH[1], DH[2])         # DH1 = 2: stores FFFEh, sets out_of_range
 math(-DH[1] | 0, DH[3])     # stores FFFEh, sets no flag
 ```
 
-If a hex-mode result is below 0 or above FFFFh, `math()` stores its low 16 bits and sets `system.fault.out_of_range` (CLICK's SC43). The result of an AND, OR or XOR is 16 unsigned bits, so a formula that ends in one of them stays in range. A CLICK does the same.
+If a hex-mode result is below 0 or above FFFFh, `math()` stores its low 16 bits and sets `system.fault.out_of_range` (CLICK's SC43). The result of an AND, OR or XOR is 16 unsigned bits, and a later step in the formula reads those bits. So `((0 - DH[1]) | 0) + 1` with DH1 = 2 stores FFFFh and sets no flag. A CLICK does the same.
 
 For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. pyrung exports such a `math()` in decimal mode. A decimal Math refuses a `Word` tag. CLICK validation reports `math-operand-bank` for each `Word` tag in the formula. It reports `bank-not-allowed` for a DH or YD destination of a formula without `Word` tags.
 
