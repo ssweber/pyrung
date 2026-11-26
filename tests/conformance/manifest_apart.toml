@@ -310,3 +310,12 @@ slots = 3
 fill_number_into_txt = 1
 copy_binary_df_dd = 2
 copy_binary_constants = 3
+
+[groups.hex_divmod]
+base = 1801 # Conf_HexDivmod: DS1801..DS1840
+slots = 3
+
+[groups.hex_divmod.cases]
+division_truncates = 1
+mod_truncates = 2
+product_not_cut = 3
