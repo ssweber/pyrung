@@ -89,23 +89,25 @@ def test_pack_text_real(runner_factory, text, value, fault):
     ],
     ids=["int", "dint", "word", "real"],
 )
-def test_pack_text_refuses_a_character_above_ffh(runner_factory, dest_type, text):
-    """A TXT holds one byte.  Python's int() and float() read U+0661 as the digit 1."""
-    assert _pack(runner_factory, dest_type, text) == (99, True)
+def test_pack_text_never_reads_a_character_above_ffh(runner_factory, dest_type, text):
+    """A TXT holds one byte, so patch() refuses the character before pack_text reads it.
+
+    Python's int() and float() read U+0661 as the digit 1.
+    """
+    with pytest.raises(ValueError, match="a CHAR holds one character with a code of 0..255"):
+        _pack(runner_factory, dest_type, text)
 
 
-def test_pack_text_refuses_a_character_above_ffh_that_strip_removes(runner_factory):
-    """Python's strip() removes U+3000, so the check comes before the strip."""
+def test_pack_text_never_reads_a_character_above_ffh_that_strip_removes(runner_factory):
+    """Python's strip() removes U+3000, so patch() refuses it before pack_text strips it."""
     CH = Block("CH", TagType.CHAR, 1, 2)
     dest = Int("Dest")
     with Program() as logic:
         with rung():
             pack_text(CH.select(1, 2), dest, allow_whitespace=True)
     runner = runner_factory(logic)
-    runner.patch({"CH1": "　", "CH2": "7", "Dest": 99})
-    runner.step()
-    tags = runner.current_state.tags
-    assert (tags["Dest"], tags[FAULT]) == (99, True)
+    with pytest.raises(ValueError, match="a CHAR holds one character with a code of 0..255"):
+        runner.patch({"CH1": "　", "CH2": "7", "Dest": 99})
 
 
 def test_a_blank_pack_text_flag_lasts_until_a_good_pack_text(runner_factory):

@@ -52,6 +52,7 @@ from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter, to_text
 from pyrung.core.expression import Expression, LiteralExpr, RandIntExpr
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.storage import CHAR_CODE_MAX, CHAR_HOLDS
 from pyrung.core.structure import InstanceView
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -725,11 +726,12 @@ class NumberInto:
         )
 
 
-TextWrite = Literal["copy", "fill", "blockcopy", "receive", "number", "bit"]
+TextWrite = Literal["copy", "fill", "blockcopy", "receive", "send", "number", "bit"]
 """What an instruction stores, for :class:`TextInto`.
 
 - ``"copy"``, ``"fill"`` and ``"blockcopy"`` store their source.
 - ``"receive"`` stores what it reads from a remote device.
+- ``"send"`` stores the Char tags in a remote device, which must hold text too.
 - ``"number"`` stores a number, as ``math()`` does.
 - ``"bit"`` stores True or False, as ``out()`` and ``latch()`` do.
 """
@@ -741,19 +743,25 @@ class TextInto:
 
     A Char tag holds only text, and the facts that ``check()`` and ``how()`` read assume
     it.  Into a Char tag, the rule accepts text, a Char tag and a Char range.  A Copy also
-    accepts a number, because :meth:`converter` gives it ``to_text()``.  A Fill accepts
-    an integer constant the same way.  A Receive accepts a TXT address, or a raw holding
-    or input register, which holds two characters.  The rule refuses every other source,
-    and every write of a number or a bit.  CLICK's editor refuses each of these forms.
+    accepts a number, because :meth:`converter` returns ``to_text()`` for it.  A Fill
+    accepts an integer constant the same way.  A Copy's text constant needs one Char tag
+    for each character, and a Fill's constant must be one character.  A Receive accepts a
+    TXT address, or a raw holding or input register.  Each register holds two characters.
+    The rule refuses every other source, and every write of a number or a bit.  CLICK's
+    editor refuses each of these forms.
 
-    The rule refuses nothing into a destination that is not a Char tag.
+    A Send of Char tags to a raw address must go to a holding register.  CLICK's editor
+    refuses a coil.
+
+    The rule refuses nothing for tags that are not Char tags.
 
     Attributes:
-        dest: The field that holds the destination.
+        dest: The field that holds the destination.  For ``"send"`` it holds the source,
+            the Char tags that the Send reads.
         writes: What the instruction stores.  See :data:`TextWrite`.
         value: The field that holds the source.  Leave it empty when *writes* is
-            ``"number"`` or ``"bit"``.  For ``"receive"`` the field holds the remote
-            start, such as "DS1" or a ``ModbusAddress``.
+            ``"number"`` or ``"bit"``.  For ``"receive"`` and ``"send"`` the field holds
+            the remote start, such as "DS1" or a ``ModbusAddress``.
         convert: The field that holds the converter that the author passed.  Leave it
             empty for an instruction that takes none.
     """
@@ -803,6 +811,13 @@ class TextInto:
         value = values[self.value]
         if self.writes == "receive":
             return _receive_refusal(call, value, args[self.value], target)
+        if self.writes == "send":
+            if isinstance(value, str):
+                # Validation and the CLICK export refuse a TXT to another CLICK bank.
+                return None
+            return _bit_address_refusal(
+                call, value, args[self.value], target, "Send to a HOLDING register"
+            )
         got = f"{call} got {describe(value)} as the {args[self.value]} and {target}."
         convert = values[self.convert] if self.convert else None
         kind = _source_kind(value)
@@ -818,6 +833,9 @@ class TextInto:
             if kind == "number":
                 advice += " To write a number's text, copy() each number into its Char tag."
             return ValueError(f"{got} {call} into Char tags reads only Char tags. {advice}")
+        if isinstance(value, str) or (self.writes == "fill" and kind == "integer"):
+            # A Fill writes an integer's text, so 12 is two characters (OBJ-023).
+            return _text_constant_refusal(call, got, str(value), fill=self.writes == "fill")
         if kind in ("bool", "bool constant") and not (
             self.writes == "fill" and kind == "bool constant"
         ):
@@ -838,9 +856,12 @@ class TextInto:
                 "Fill one of those, or copy() the value into one Char tag."
             )
         if kind == "other":
-            return TypeError(
-                f"{got} A Char tag holds only text. Pass text, a number, or a Char or number tag."
+            advice = (
+                "Pass text or an integer constant."
+                if self.writes == "fill"
+                else "Pass text, a number, or a Char or number tag."
             )
+            return TypeError(f"{got} A Char tag holds only text. {advice}")
         return None
 
 
@@ -852,6 +873,26 @@ _BOOL_ADVICE = {
     ("fill", "bool"): "fill() writes no Bool tag into Char tags. Fill True in a rung that has "
     "the Bool as its condition, and False in a rung that has its inverse.",
 }
+
+
+def _text_constant_refusal(call: str, got: str, text: str, *, fill: bool) -> Exception | None:
+    """Return the error for a constant's *text* into Char tags, or None if the store holds it.
+
+    A Copy writes one character into each Char tag in turn.  A Fill writes the same
+    character into each tag, so it takes one.  CLICK's editor refuses a longer one (OBJ-023).
+    """
+    if fill and len(text) > 1:
+        return ValueError(
+            f"{got} {call} writes one character into every Char tag. Fill one character, "
+            "or copy() the value to write its characters into the tags in turn."
+        )
+    wide = next((ch for ch in text if ord(ch) > CHAR_CODE_MAX), None)
+    if wide is not None:
+        return ValueError(
+            f"{got} A Char tag holds {CHAR_HOLDS}, and {wide!r} is past {CHAR_CODE_MAX}. "
+            f"Pass characters up to code {CHAR_CODE_MAX}."
+        )
+    return None
 
 
 def _holds_text(dest: Any) -> bool:
@@ -892,7 +933,7 @@ def _receive_refusal(call: str, remote: Any, arg: str, target: str) -> Exception
 
     *remote* is a CLICK address, such as "TXT1", or a ``ModbusAddress``.  CLICK's TXT
     reads only TXT from a CLICK.  From any other device it reads a holding or input
-    register, which holds two characters.
+    register.  Each register holds two characters.
     """
     if isinstance(remote, str):
         from pyclickplc.addresses import parse_address
@@ -903,15 +944,27 @@ def _receive_refusal(call: str, remote: Any, arg: str, target: str) -> Exception
         return TypeError(
             f"{call} got the CLICK address {remote} as the {arg} and {target}. Char tags "
             f"receive only from TXT addresses. Receive from a TXT address, or receive into "
-            f"tags of the {bank} type."
+            f"tags that suit the {bank} bank."
         )
+    return _bit_address_refusal(
+        call, remote, arg, target, "Receive from a HOLDING or INPUT register"
+    )
+
+
+def _bit_address_refusal(
+    call: str, remote: Any, arg: str, target: str, advice: str
+) -> Exception | None:
+    """Return the error for Char tags and a raw coil or discrete input, or None for a register.
+
+    *advice* names the register to use instead, such as "Send to a HOLDING register".
+    """
     kind = remote.register_type.name
     if kind in ("HOLDING", "INPUT"):
         return None
     return TypeError(
         f"{call} got a {kind} address as the {arg} and {target}. A {kind} address holds "
-        "a bit, and Char tags hold only text. Receive from a HOLDING or INPUT register, "
-        "which holds two characters."
+        f"a bit, and Char tags hold only text. {advice}. Each register holds two "
+        "characters."
     )
 
 

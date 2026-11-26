@@ -518,11 +518,9 @@ def test_a_compare_with_an_operator_in_its_text_has_the_operator_outside_the_quo
 
 
 def test_fill_still_refuses_a_quote_among_other_characters():
-    # No one has yet checked on a CLICK how Fill reads a quote.
-    with pytest.raises(LadderExportError, match="holds a quote among other characters"):
-        pyrung_to_ladder(
-            _quoted_fill('a"b'), TagMap(), allow=["invalid-text-constant", "constant-out-of-range"]
-        )
+    # A Fill takes one character, so the build refuses the text before the export sees it.
+    with pytest.raises(ValueError, match="writes one character into every Char tag"):
+        _quoted_fill('a"b')
 
 
 def test_no_copy_search_or_compare_cell_writes_a_keyword_value_in_quotes():

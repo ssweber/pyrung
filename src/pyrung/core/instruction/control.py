@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.storage import CHAR_HOLDS, holds_char
 from pyrung.core.tag import Tag, TagType
 
 from .base import (
@@ -40,16 +41,18 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
 
 
-def not_text_error(call: str, fn_name: str, key: str, target: Any) -> tuple[str, str]:
-    """Return the text before and after the value in the error for a result that is not text.
+def not_a_char_error(call: str, fn_name: str, key: str, target: Any) -> tuple[str, str]:
+    """Return the text before and after the value in the error for a result no Char holds.
 
-    A Char tag holds only text, and a function's result is known only at the scan.  The
-    scan and the generated code both raise ``TypeError`` with this text.
+    A function's result is known only at the scan.  The scan and the generated code both
+    raise this text, as ``TypeError`` for a value that is not a str and as ``ValueError``
+    for a str that is not one character.
     """
     named = describe(target)
     return (
         f"{call}: {fn_name!r} returned ",
-        f" for {key!r}. {named[0].upper()}{named[1:]} holds only text. Return a str for {key!r}.",
+        f" for {key!r}. {named[0].upper()}{named[1:]} holds {CHAR_HOLDS}. Return one "
+        f"for {key!r}, or '' for a blank.",
     )
 
 
@@ -57,9 +60,10 @@ def _store_result(
     ctx: ScanContext, call: str, fn: Callable[..., Any], key: str, value: Any, target: Any
 ) -> None:
     resolved = resolve_tag_ctx(target, ctx)
-    if resolved.type is TagType.CHAR and not isinstance(value, str):
-        before, after = not_text_error(call, _fn_name(fn), key, target)
-        raise TypeError(before + repr(value) + after)
+    if resolved.type is TagType.CHAR and not holds_char(value):
+        before, after = not_a_char_error(call, _fn_name(fn), key, target)
+        error = ValueError if isinstance(value, str) else TypeError
+        raise error(before + repr(value) + after)
     ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(value, resolved))
 
 

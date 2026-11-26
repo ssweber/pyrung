@@ -30,15 +30,26 @@
   - `copy()` of an expression into a TXT
   - `math()`, `out()` or `latch()` into a TXT
   - `receive()` into TXT from a CLICK address that is not TXT, or from a coil or discrete input
-  - a `Char` tag whose default is not text
 
-  Store the number in a number tag, then `copy()` that tag into the TXT. The copy writes the number's text. Give a `Char` tag a text default, such as `"5"`.
+  Store the number in a number tag, then `copy()` that tag into the TXT. The copy writes the number's text.
+- `send()` of TXT tags to a raw coil now raises when you build it, as CLICK's editor does (it sent True for each character).
+  Send to a holding register.
+- A TXT holds one character with a code of 0..255. pyrung now raises when you build one of these forms (it raised at the scan, set the out-of-range flag, or stored the value whole).
+  - `fill()` of a value with more than one character, such as 12 or "AB", as CLICK's editor does
+  - a text constant with a character past code 255, such as "€"
+
+  Fill one character, or `copy()` the value to write one character into each TXT.
+- A `Char` tag or a TXT block slot now raises when you give it a default that is not one character with a code of 0..255, or "" (it kept the value). `slot()` raises when you call it.
+  Give a text default, such as `"5"`.
+- `run_function()` and `run_enabled_function()` now raise `TypeError` at the scan when the function returns a value that is not text for a TXT (it stored the value). They raise `ValueError` for text that is not one character.
+  Return one character, or "" for a blank.
 
 ### Fixes
 
 - `math()` on `Word` tags only (CLICK's hex mode) now truncates each division, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
 - `check()` and `how()` no longer fail with `TypeError` on a program that stores a number in a TXT tag. pyrung refuses each such write when you build the program.
 - `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT).
+- `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.

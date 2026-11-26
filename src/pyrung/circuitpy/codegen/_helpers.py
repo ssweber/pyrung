@@ -16,7 +16,20 @@ from pyrung.circuitpy.codegen._constants import (
     _INT_MAX,
     _INT_MIN,
 )
-from pyrung.core.storage import NOT_TEXT_IN_CHAR, REAL_MAX, WORD_STORE_FLOOR
+from pyrung.core.storage import CHAR_CODE_MAX, NOT_A_CHAR, REAL_MAX, WORD_STORE_FLOOR
+
+
+def holds_char_source(name: str) -> str:
+    """Return Python source that is True when a Char can hold the value in *name*.
+
+    It makes the test that ``pyrung.core.storage.holds_char`` makes, so the generated
+    code and the scan accept the same values.
+    """
+    return (
+        f'(isinstance({name}, str) and ({name} == "" or '
+        f"(len({name}) == 1 and ord({name}) <= {CHAR_CODE_MAX})))"
+    )
+
 
 _HELPER_DEFS: dict[str, list[str]] = {
     "_clamp_int": [
@@ -58,11 +71,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "def _as_single_ascii_char(value):",
         "    if not isinstance(value, str):",
         '        raise ValueError("CHAR value must be a string")',
-        '    if value == "":',
-        '        return "\\x00"',
-        "    if len(value) != 1 or ord(value) > 255:",
+        f"    if not {holds_char_source('value')}:",
         '        raise ValueError("CHAR value must be blank or one 8-bit character")',
-        "    return value",
+        '    return value if value != "" else "\\x00"',
         "",
     ],
     "_text_from_source_value": [
@@ -175,13 +186,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '    if dest_type == "REAL":',
         "        return _store_real(value)",
         '    if dest_type == "CHAR":',
-        "        if not isinstance(value, str):",
-        f"            raise RuntimeError({NOT_TEXT_IN_CHAR!r}.format(value))",
-        '        if value == "":',
-        '            return "\\x00"',
-        "        if len(value) != 1 or ord(value) > 255:",
-        '            raise ValueError("CHAR value must be blank or one 8-bit character")',
-        "        return value",
+        f"        if not {holds_char_source('value')}:",
+        f"            raise RuntimeError({NOT_A_CHAR!r}.format(value))",
+        '        return value if value != "" else "\\x00"',
         "    if isinstance(value, float) and not math.isfinite(value):",
         "        # A clamp pins +/-Inf at its bound; NaN, and anything that wraps, is 0.",
         '        if value == value and dest_type == "INT":',

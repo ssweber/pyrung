@@ -46,13 +46,33 @@ def computed_real(value: Any) -> Any:
 BLANK_CHAR = "\x00"
 
 
-#: The error that a plain Char store raises for a value that is not text.  Every runtime
-#: raises the same text.  Build-time rules refuse every write that could store a number in
-#: a Char, so this error means a path skipped them.
-NOT_TEXT_IN_CHAR = (
-    "pyrung tried to store {!r} in a Char tag. A Char tag holds only text. "
-    "This is a bug in pyrung. Please report it."
+#: The highest character code that a Char holds.  A CLICK TXT is one byte.
+CHAR_CODE_MAX = 255
+
+#: What a Char tag holds, for the errors that refuse anything else.
+CHAR_HOLDS = f"one character with a code of 0..{CHAR_CODE_MAX}"
+
+#: The error that a plain Char store raises for a value that :func:`holds_char` refuses.
+#: Every runtime raises the same text.  Build-time rules refuse every write that could
+#: store such a value, so this error means a path skipped them.
+NOT_A_CHAR = (
+    "pyrung tried to store {!r} in a Char tag. A Char tag holds "
+    + CHAR_HOLDS
+    + ". This is a bug in pyrung. Please report it with the traceback. The traceback names "
+    "the instruction that made the store."
 )
+
+
+def holds_char(value: Any) -> bool:
+    """Return True if a Char tag can hold *value*.
+
+    A Char holds one character up to code :data:`CHAR_CODE_MAX`.  ``""`` is the blank, and
+    a store turns it into NUL.  The generated code renders the same test from
+    ``pyrung.circuitpy.codegen._helpers``.
+    """
+    return isinstance(value, str) and (
+        value == "" or (len(value) == 1 and ord(value) <= CHAR_CODE_MAX)
+    )
 
 
 def store_char(value: Any) -> Any:
@@ -62,6 +82,21 @@ def store_char(value: Any) -> Any:
     force, tag defaults) goes through here, so the engine has one blank.
     """
     return BLANK_CHAR if isinstance(value, str) and value == "" else value
+
+
+def char_default(value: Any, owner: str) -> str:
+    """Return what a Char holds for the default *value*, or raise if no Char holds it.
+
+    A tag and a block slot both check their default here, so a slot default set after the
+    tag exists meets the same rule.  *owner* names the tag or slot in the error.
+    """
+    if not holds_char(value):
+        error = ValueError if isinstance(value, str) else TypeError
+        raise error(
+            f"{owner} got the default {value!r}. A Char tag holds {CHAR_HOLDS}. "
+            "Pass one, or '' for a blank."
+        )
+    return store_char(value)
 
 
 def real_in_range(value: Any) -> bool:
@@ -132,8 +167,8 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
         # The copy-family handlers turn TypeError and ValueError into the out-of-range
         # flag.  A RuntimeError reaches the caller, so a write that skipped the build rules
         # fails loudly.
-        if not isinstance(value, str):
-            raise RuntimeError(NOT_TEXT_IN_CHAR.format(value))
+        if not holds_char(value):
+            raise RuntimeError(NOT_A_CHAR.format(value))
         return store_char(value)
     if isinstance(value, float) and not math.isfinite(value):
         # A clamp pins +/-Inf at its bound.  An infinity that wraps is 0.

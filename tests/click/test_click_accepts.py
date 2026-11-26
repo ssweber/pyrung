@@ -520,7 +520,6 @@ def test_a_copy_click_accepts_exports_and_imports(write, token):
         (lambda: fill(70000, dh.select(1, 1)), CLK_COPY_WIDE_CONSTANT),
         (lambda: math(dh[1] + 70000, dh[100]), Code.MATH_CONSTANT_OUT_OF_RANGE),
         (lambda: copy(ds[1], txt[1], convert=to_text(exponential=True)), "option-not-offered"),
-        (lambda: fill("AB", txt.select(5, 5)), "constant-out-of-range"),
     ],
     ids=[
         "text-past-bank",
@@ -529,7 +528,6 @@ def test_a_copy_click_accepts_exports_and_imports(write, token):
         "fill-wide-constant",
         "math-wide-constant",
         "exponential-integer",
-        "fill-several-characters",
     ],
 )
 def test_an_export_refusal_under_allow_names_the_validation_code(write, code):

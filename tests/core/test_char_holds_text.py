@@ -1,4 +1,4 @@
-"""A Char tag holds only text, whatever instruction writes it.
+"""A Char tag holds one character with a code of 0..255, whatever instruction writes it.
 
 ``check()`` and the how() prior compare a Char tag's values as text, so a number or a bit
 in a Char tag makes them raise.  Each case here is refused when the program is built, or
@@ -16,14 +16,19 @@ Three lists keep the cases complete:
 
 from __future__ import annotations
 
+import asyncio
 import math
+import socket
 import struct
-from collections.abc import Callable
+import threading
+import time
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any, get_args
 
 import pytest
+from pyclickplc.server import ClickServer, MemoryDataProvider
 
 from pyrung.circuitpy import P1AM, RunStopConfig, generate_circuitpy
 from pyrung.circuitpy.codegen._helpers import _HELPER_DEFS
@@ -50,10 +55,16 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.prove import _build_prior_facts
 from pyrung.core.instruction.operands import Dest, Span, Value, parse_value
-from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType, receive
+from pyrung.core.instruction.send_receive import (
+    ModbusAddress,
+    ModbusTcpTarget,
+    RegisterType,
+    receive,
+    send,
+)
 from pyrung.core.instruction.send_receive import _core as modbus_core
 from pyrung.core.instruction.send_receive._core import _RequestResult
-from pyrung.core.storage import StoreTransform, store_value
+from pyrung.core.storage import CHAR_CODE_MAX, StoreTransform, store_value
 from tests.circuitpy.test_codegen import (
     _context_for_program,
     _IdleBase,
@@ -121,12 +132,13 @@ def _build(write: Callable[[], Any], compared: Any) -> Program:
 
 
 def _holds_text(program: Program, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Assert that every Char tag holds one character on every backend after two scans."""
+    """Assert that every Char tag holds one 8-bit character on every backend after two scans."""
     watch = _char_tags(program)
     results = _on_every_backend(program, monkeypatch, watch)
     for backend, values in results.items():
         for tag, value in zip(watch, values, strict=True):
             assert isinstance(value, str) and len(value) == 1, (backend, tag.name, value)
+            assert ord(value) <= CHAR_CODE_MAX, (backend, tag.name, value)
     assert len(set(results.values())) == 1, results
     program.check()
     _build_prior_facts(program)
@@ -135,8 +147,8 @@ def _holds_text(program: Program, monkeypatch: pytest.MonkeyPatch) -> None:
 # --- The guard in each runtime's plain Char store ----------------------------------------
 
 
-@pytest.mark.parametrize("value", [5, True, float("inf"), None], ids=repr)
-def test_a_plain_char_store_raises_on_a_value_that_is_not_text(value: Any) -> None:
+@pytest.mark.parametrize("value", [5, True, float("inf"), None, "AB", "\u20ac"], ids=repr)
+def test_a_plain_char_store_raises_on_a_value_that_no_char_holds(value: Any) -> None:
     """Only a write that skipped the build rules reaches the guard, so the sweeps below never
     trip it.  A float Inf would otherwise store 0."""
     with pytest.raises(RuntimeError, match="This is a bug in pyrung"):
@@ -146,6 +158,49 @@ def test_a_plain_char_store_raises_on_a_value_that_is_not_text(value: Any) -> No
     with pytest.raises(RuntimeError, match="This is a bug in pyrung"):
         namespace["_store_copy_value_to_type"](value, "CHAR")
     assert namespace["_store_copy_value_to_type"]("", "CHAR") == "\x00"
+    assert namespace["_store_copy_value_to_type"]("\xff", "CHAR") == "\xff"
+
+
+@pytest.mark.parametrize(
+    ("default", "error"),
+    [(5, TypeError), (True, TypeError), ("AB", ValueError), ("\u20ac", ValueError)],
+    ids=repr,
+)
+def test_a_char_default_is_one_character(default: Any, error: type[Exception]) -> None:
+    with pytest.raises(error, match="holds one character with a code of 0..255"):
+        Char("Default", default=default)
+    assert Char("Blank", default="").default == "\x00"
+    assert Char("Top", default="\xff").default == "\xff"
+
+
+@pytest.mark.parametrize(
+    "configure, error",
+    [
+        pytest.param(lambda txt: txt.slot(1, default=5), TypeError, id="slot"),
+        pytest.param(lambda txt: (txt[1], txt.slot(1, default=5)), TypeError, id="slot-after-tag"),
+        pytest.param(lambda txt: txt.slot(1, 3, default=7), TypeError, id="slot-range"),
+        pytest.param(
+            lambda txt: (txt[2], txt.slot(1, 3, default=7)), TypeError, id="range-after-tag"
+        ),
+        pytest.param(lambda txt: txt.slot(1, default="AB"), ValueError, id="slot-two"),
+    ],
+)
+def test_a_slot_default_is_one_character(
+    configure: Callable[[Block], Any], error: type[Exception]
+) -> None:
+    # slot() raises when it is called, before a later txt[1] makes the tag.
+    txt = Block("TxtSlot", TagType.CHAR, 1, 4)
+    with pytest.raises(error, match=r"Slot TxtSlot\[\d\] got the default"):
+        configure(txt)
+    txt.slot(1, default="A")
+    assert txt[1].default == "A"
+
+
+@pytest.mark.parametrize("seed, error", [(5, TypeError), ("AB", ValueError)])
+def test_a_block_factory_default_is_one_character(seed: Any, error: type[Exception]) -> None:
+    txt = Block("TxtFactory", TagType.CHAR, 1, 4, default_factory=lambda addr: seed)
+    with pytest.raises(error, match="holds one character with a code of 0..255"):
+        txt[1]
 
 
 # --- Every write field ------------------------------------------------------------------
@@ -270,7 +325,10 @@ def _shapes(tag_type: TagType) -> list[Source]:
 
 SOURCES = [
     *(source for tag_type in _SOURCE_TYPES for source in _shapes(tag_type)),
-    *(Source(repr(value), lambda value=value: value) for value in (True, 5, 12, 1.5, "A", "ABC")),
+    *(
+        Source(repr(value), lambda value=value: value)
+        for value in (True, 5, 12, 1.5, "A", "ABC", "", "\xe9", "\u20ac", "A\u20ac")
+    ),
     Source("Int expression", lambda: _block(TagType.INT)[2] + 1),
     Source("Real expression", lambda: _block(TagType.REAL)[2] * 2),
 ]
@@ -305,15 +363,40 @@ def _blockcopy(source: Any, convert: Any, txt: Block) -> None:
         blockcopy(source, txt.select(1, 2), convert=convert)
 
 
-#: The cases that build, and whose first scan raises ``ValueError`` on every backend.  A
-#: TXT holds one character.  laddercodec refuses this Fill when you export the program.
-RAISES_VALUE_ERROR = {("fill-plain", "'ABC'")}
-
 WRITES = [
     *(("copy", name, _copy, convert) for name, convert in _COPY_CONVERTERS.items()),
     ("fill", "plain", _fill, None),
     *(("blockcopy", name, _blockcopy, convert) for name, convert in _BLOCK_COPY_CONVERTERS.items()),
 ]
+
+_NUMBER_REGISTERS = (
+    "Int tag",
+    "Int pointer",
+    "Dint tag",
+    "Dint pointer",
+    "Word tag",
+    "Word pointer",
+)
+_TO_TEXT = (*_NUMBER_REGISTERS, "Real tag", "Real pointer", "5", "12", "1.5")
+
+#: The sources that build for each write, so a rule that refuses too much fails here.  The
+#: build refuses every other pair in the sweep.
+BUILDS = {
+    "copy-plain": {
+        *_TO_TEXT,
+        "Char tag",
+        "Char pointer",
+        "'A'",
+        "'ABC'",
+        "''",
+        repr("\xe9"),
+    },
+    "copy-to_text()": set(_TO_TEXT),
+    "copy-to_text(exponential=True)": set(_TO_TEXT),
+    "copy-to_binary": {*_NUMBER_REGISTERS, "5", "12"},
+    "fill-plain": {"Char tag", "Char pointer", "True", "5", "'A'", "''", repr("\xe9")},
+    "blockcopy-plain": {"Char range", "Char pointer range"},
+}
 
 
 def test_the_sources_cover_every_kind_of_parsed_operand() -> None:
@@ -335,14 +418,45 @@ def test_a_source_into_char_tags_is_refused_or_stores_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     txt = _txt()
-    try:
-        program = _build(lambda: write(source.make(), convert, txt), txt[1])
-    except (TypeError, ValueError):
+    if source.name not in BUILDS.get(name, set()):
+        with pytest.raises((TypeError, ValueError)):
+            _build(lambda: write(source.make(), convert, txt), txt[1])
         return
-    if (name, source.name) in RAISES_VALUE_ERROR:
-        _raises_on_every_backend(program, monkeypatch, ValueError, "one 8-bit character")
-        return
+    program = _build(lambda: write(source.make(), convert, txt), txt[1])
     _holds_text(program, monkeypatch)
+
+
+def test_every_pair_that_builds_is_in_the_sweep() -> None:
+    names = {f"{w[0]}-{w[1]}" for w in WRITES}
+    sources = {source.name for source in SOURCES}
+    assert set(BUILDS) <= names
+    assert set().union(*BUILDS.values()) <= sources
+
+
+def test_a_fill_of_more_than_one_character_is_refused() -> None:
+    # CLICK's editor refuses it: "Only one character is allowed in the Source" (OBJ-023).
+    with pytest.raises(ValueError, match=r"fill\(\) writes one character into every Char tag"):
+        _build(lambda: _fill("AB", None, _txt()), _txt()[1])
+
+
+@pytest.mark.parametrize("write", [_copy, _fill], ids=["copy", "fill"])
+def test_text_past_code_255_is_refused(write: Callable[[Any, Any, Block], None]) -> None:
+    with pytest.raises(ValueError, match="'\u20ac' is past 255"):
+        _build(lambda: write("\u20ac", None, _txt()), _txt()[1])
+
+
+def test_a_copy_of_text_writes_one_character_into_each_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    txt = _txt()
+    with Program(strict=False) as program:
+        with rung():
+            copy("AB\xe9", txt[1])
+        # The generated code holds only the tags that a rung reads or writes.
+        with rung(txt[2] == txt[3], txt[4] == "Z"):
+            out(Bool("Same"))
+    results = _on_every_backend(program, monkeypatch, [txt[1], txt[2], txt[3], txt[4]])
+    assert results == {name: ("A", "B", "\xe9", "Z") for name in results}
 
 
 # --- Receive ----------------------------------------------------------------------------
@@ -442,6 +556,113 @@ def test_a_raw_receive_reads_two_characters_from_each_register(
     assert [eval(ctx.symbol_for_tag(txt[i]), namespace) for i in (1, 2, 3)] == ["A", "B", "C"]
 
 
+# --- Send -------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", [RegisterType.HOLDING, RegisterType.COIL], ids=repr)
+def test_a_raw_send_of_char_tags_goes_only_to_a_register(kind: RegisterType) -> None:
+    txt = _txt()
+
+    def write() -> None:
+        with rung():
+            send(target="peer", remote_start=ModbusAddress(1, kind), source=txt.select(1, 2))
+
+    if kind is RegisterType.HOLDING:
+        _build(write, txt[1])
+        return
+    with pytest.raises(
+        TypeError, match="Send to a HOLDING register. Each register holds two characters"
+    ):
+        _build(write, txt[1])
+
+
+def test_a_raw_send_packs_two_characters_into_each_register(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three characters write two registers, the first character in each low byte.  The
+    last high byte is 0.  The core half runs only on ``PLC``, as for a receive."""
+    txt = Block("T", TagType.CHAR, 1, 3, default_factory=lambda addr: "ABC"[addr - 1])
+    registers = [0x4241, 0x0043]
+    with Program(strict=False) as program:
+        with rung():
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+                source=txt.select(1, 3),
+                success=Bool("Success"),
+            )
+
+    requests: list[dict[str, Any]] = []
+
+    def submit(**request: Any) -> Future[_RequestResult]:
+        requests.append(request)
+        done: Future[_RequestResult] = Future()
+        done.set_result(_RequestResult(ok=True, exception_code=0))
+        return done
+
+    monkeypatch.setattr(modbus_core, "_submit_raw_send_request", submit)
+    plc = PLC(program)
+    plc.step()
+    assert requests[0]["registers"] == registers
+
+    namespace, _sockets = _run_raw_client_job(monkeypatch, program)
+    job = next(
+        v for k, v in namespace.items() if k.startswith("_mb_client_") and isinstance(v, dict)
+    )
+    pdu = struct.pack(">BHHB", 16, 0x100, 2, 4) + struct.pack(">HH", *registers)
+    assert job["request"] == _mbap(1, pdu, uid=17)
+
+
+@pytest.fixture
+def soft_plc() -> Iterator[tuple[int, MemoryDataProvider]]:
+    """Serve a CLICK's Modbus map from memory on a free local port."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    provider = MemoryDataProvider()
+    ready, stop = threading.Event(), threading.Event()
+
+    async def serve() -> None:
+        async with ClickServer(provider, host="127.0.0.1", port=port):
+            ready.set()
+            while not stop.is_set():
+                await asyncio.sleep(0.02)
+
+    thread = threading.Thread(target=lambda: asyncio.run(serve()), daemon=True)
+    thread.start()
+    assert ready.wait(10)
+    yield port, provider
+    stop.set()
+    thread.join(timeout=5)
+
+
+def test_text_sent_to_a_soft_plc_receives_back(
+    soft_plc: tuple[int, MemoryDataProvider],
+) -> None:
+    """A raw send of three characters to TXT1 lands in TXT1..TXT3, and a raw receive reads
+    them back.  The odd count writes a blank into TXT4, the high byte of the last register."""
+    port, provider = soft_plc
+    provider.write("TXT4", "Z")
+    peer = ModbusTcpTarget(name="soft", ip="127.0.0.1", port=port)
+    txt1 = ModbusAddress(36864, RegisterType.HOLDING)
+    sent = Block("S", TagType.CHAR, 1, 3, default_factory=lambda addr: "AB\xe9"[addr - 1])
+    back = Block("R", TagType.CHAR, 1, 3)
+    sent_ok, back_ok = Bool("SentOk"), Bool("BackOk")
+    with Program(strict=False) as program:
+        with rung(~sent_ok):
+            send(target=peer, remote_start=txt1, source=sent.select(1, 3), success=sent_ok)
+        with rung(sent_ok):
+            receive(target=peer, remote_start=txt1, dest=back.select(1, 3), success=back_ok)
+
+    plc = PLC(program)
+    deadline = time.monotonic() + 10
+    while not plc.current_state.tags.get("BackOk") and time.monotonic() < deadline:
+        plc.step()
+        time.sleep(0.005)
+    assert [provider.read(f"TXT{i}") for i in (1, 2, 3, 4)] == ["A", "B", "\xe9", "\x00"]
+    assert [plc.current_state.tags[f"R{i}"] for i in (1, 2, 3)] == ["A", "B", "\xe9"]
+
+
 # --- run_function -----------------------------------------------------------------------
 
 
@@ -458,11 +679,25 @@ def _letter(*_args: Any) -> dict[str, Any]:
     return {"result": "A"}
 
 
+def _blank(*_args: Any) -> dict[str, Any]:
+    return {"result": ""}
+
+
+def _two(*_args: Any) -> dict[str, Any]:
+    return {"result": "AB"}
+
+
+def _euro(*_args: Any) -> dict[str, Any]:
+    return {"result": "\u20ac"}
+
+
 @pytest.mark.parametrize("enabled", [False, True], ids=["run_function", "run_enabled_function"])
 @pytest.mark.parametrize(
-    "fn, value", [(_five, 5), (_true, True), (_letter, "A")], ids=["5", "True", "'A'"]
+    "fn, value",
+    [(_five, 5), (_true, True), (_letter, "A"), (_blank, ""), (_two, "AB"), (_euro, "\u20ac")],
+    ids=["5", "True", "'A'", "''", "'AB'", "euro"],
 )
-def test_a_function_result_into_a_char_tag_must_be_text(
+def test_a_function_result_into_a_char_tag_must_be_one_character(
     fn: Callable[..., dict[str, Any]], value: Any, enabled: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     txt = _txt()
@@ -475,7 +710,9 @@ def test_a_function_result_into_a_char_tag_must_be_text(
                 run_function(fn, outs={"result": txt[1]})
 
     program = _build(write, txt[1])
-    if isinstance(value, str):
+    if value in ("A", ""):
         _holds_text(program, monkeypatch)
         return
-    _raises_on_every_backend(program, monkeypatch, TypeError, f"returned {value!r} for 'result'")
+    error = ValueError if isinstance(value, str) else TypeError
+    message = f"returned {value!r} for 'result'. The Char tag T1 holds one character"
+    _raises_on_every_backend(program, monkeypatch, error, message)

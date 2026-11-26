@@ -106,6 +106,11 @@ def _raw_register_lines() -> list[str]:
     """
     return [
         "def _mb_client_raw_pack_register_values(values, tag_types, word_order):",
+        "    if tag_types and all(_tt == 'CHAR' for _tt in tag_types):",
+        "        return [",
+        f"            sum(ord(_c) << _s for _c, _s in zip(values[_i:_i + 2], {TXT_BYTE_SHIFTS!r}))",
+        "            for _i in range(0, len(values), 2)",
+        "        ]",
         "    _regs = []",
         "    for _vi in range(len(values)):",
         "        _tt = tag_types[_vi]",

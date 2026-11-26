@@ -19,13 +19,13 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from laddercodec import BlockCopy, Code, Copy, FieldError, Fill, Receive
+from laddercodec import BlockCopy, Code, Copy, FieldError, Fill, Receive, Send
 from laddercodec.instructions import send_receive as laddercodec_modbus
 
 from pyrung import Program, blockcopy, copy, fill, rung
 from pyrung.click import ClickBlocks
 from pyrung.core import to_ascii, to_binary, to_text, to_value
-from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType, receive
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType, receive, send
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -265,12 +265,9 @@ def test_blockcopy_into_txt_refuses_what_laddercodec_refuses() -> None:
     assert differ == []
 
 
-#: The values of a Fill into TXT that only one side refuses.  pyrung refuses a Real
-#: constant, because a CLICK writes its text past the end of the range.  laddercodec
-#: refuses a value that is too long for one TXT (OBJ-023).  pyrung builds that Fill, and
-#: the scan sets the out-of-range flag.
+#: The values of a Fill into TXT that only pyrung refuses.  A CLICK writes a Real
+#: constant's text past the end of the range.
 ONLY_PYRUNG_REFUSES_FILL = frozenset({"1.5"})
-ONLY_LADDERCODEC_REFUSES_FILL = frozenset({"12", '"AB"'})
 
 
 def test_fill_into_txt_refuses_what_laddercodec_refuses() -> None:
@@ -297,7 +294,7 @@ def test_fill_into_txt_refuses_what_laddercodec_refuses() -> None:
         elif ours and not theirs:
             only_pyrung.add(text)
     assert only_pyrung == ONLY_PYRUNG_REFUSES_FILL
-    assert only_laddercodec == ONLY_LADDERCODEC_REFUSES_FILL
+    assert only_laddercodec == set()
 
 
 _LADDERCODEC_PEER = laddercodec_modbus.ModbusTcpTarget(
@@ -326,5 +323,24 @@ def test_receive_into_txt_refuses_what_laddercodec_refuses(remote: Any) -> None:
     )
     ours = _pyrung_refuses_any(
         lambda: receive(target="peer", remote_start=ours_start, dest=txt.select(11, 12))
+    )
+    assert ours == theirs
+
+
+@pytest.mark.parametrize("remote", ["holding", "coil"])
+def test_send_of_txt_to_a_raw_address_refuses_what_laddercodec_refuses(remote: str) -> None:
+    theirs = _laddercodec_refuses_any(
+        Send,
+        _LADDERCODEC_PEER,
+        laddercodec_modbus.ModbusAddress(_RAW_STARTS[remote][0]),
+        "TXT11",
+        2,
+        "C1",
+        "C2",
+        "C3",
+        "DS1",
+    )
+    ours = _pyrung_refuses_any(
+        lambda: send(target="peer", remote_start=_RAW_STARTS[remote][1], source=txt.select(11, 12))
     )
     assert ours == theirs

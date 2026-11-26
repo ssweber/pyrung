@@ -496,9 +496,9 @@ def test_a_constant_that_hex_would_spell_with_an_e_exports_in_decimal(write, tok
 @pytest.mark.parametrize("text", ["AB", "HELLO"])
 def test_a_fill_of_more_than_one_character_is_refused(text, dest):
     # laddercodec editor_grids copy_fill: CLICK refuses "AB" (OBJ-023). It accepts "HELLO",
-    # but its save holds the Real 0.0 and not the text.
-    (finding,) = _errors(lambda: fill(text, txt.select(*dest)))
-    assert finding.code == Code.CONSTANT_OUT_OF_RANGE
+    # but its save holds the Real 0.0 and not the text. The build refuses both.
+    with pytest.raises(ValueError, match="writes one character into every Char tag"):
+        _errors(lambda: fill(text, txt.select(*dest)))
 
 
 # --- How a refusal prints ---------------------------------------------------------------

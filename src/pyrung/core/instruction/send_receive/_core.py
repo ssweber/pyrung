@@ -32,12 +32,11 @@ from ..operands import TextInto, check_rules
 from . import backends as _backends
 from .helpers import (
     _addresses_for_count,
-    _calculate_register_count,
     _normalize_operand_count,
     _normalize_operand_tags,
     _pack_values_to_registers,
     _preview_operand_tag_types,
-    _receive_register_count,
+    _register_count,
     _unpack_registers_to_values,
     _validate_status_tags,
 )
@@ -603,6 +602,7 @@ class ModbusReceiveInstruction(Instruction):
 
 
 _RECEIVE_TEXT = TextInto(value="remote_start", dest="dest", writes="receive")
+_SEND_TEXT = TextInto(value="remote_start", dest="source", writes="send")
 
 
 def _resolve_target(
@@ -671,8 +671,7 @@ def _resolve_remote_start(
                 "because they are read-only. Use a HOLDING or COIL address."
             )
         tag_types = _preview_operand_tag_types(operand, effective_count)
-        count_registers = _calculate_register_count if is_send else _receive_register_count
-        register_count = count_registers(tag_types, remote_start.register_type)
+        register_count = _register_count(tag_types, remote_start.register_type)
         start_addr = remote_start.address
         addresses = tuple(range(start_addr, start_addr + register_count))
         return (None, start_addr, addresses, remote_start, register_count)
@@ -720,6 +719,7 @@ def send(
     bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
         remote_start, source, count, target, is_send=True
     )
+    check_rules({}, (_SEND_TEXT,), "send()", {"remote_start": remote_start, "source": source})
 
     ctx = _require_rung_context("send")
     source_file, source_line = _capture_source(depth=2)

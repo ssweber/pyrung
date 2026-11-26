@@ -56,7 +56,7 @@ fill(Setpoint, Alarms.select(1, 8)) # Copy tag value to all 8 elements
 fill(5, Txt.select(1, 3))           # Txt1..Txt3 = "5"
 ```
 
-An integer constant filled into a TXT range writes its text, the same as a plain `copy()` into one TXT. Each TXT holds one character. If the text is longer, such as "12", `fill()` writes nothing and sets `system.fault.out_of_range`. CLICK's editor refuses a Fill of 12 into a TXT.
+An integer constant filled into a TXT range writes its text, the same as a plain `copy()` into one TXT. Each TXT holds one character. So `fill()` refuses a value of more than one character, such as 12 or "AB", as CLICK's editor does. To write text across a range, `copy()` it into the first TXT. Each character goes into the next TXT.
 
 `fill()` refuses a number register or an expression as the value for a TXT range, as CLICK's editor does. Copy the value into one TXT with `copy()` instead.
 

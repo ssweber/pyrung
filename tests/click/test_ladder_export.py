@@ -2825,12 +2825,9 @@ def test_one_register_fill_refuses_text_that_a_copy_would_convert():
 
 
 def test_one_register_fill_refuses_several_characters():
-    # laddercodec's Fill takes one character. With its code allowed, the export's own
-    # refusal is reached.
-    with pytest.raises(LadderExportError, match="constant-out-of-range"):
+    # laddercodec's Fill takes one character, and so does the build.
+    with pytest.raises(ValueError, match="writes one character into every Char tag"):
         _single_fill_tokens(lambda: fill("AB", txt.select(5, 5)))
-    with pytest.raises(LadderExportError, match="several characters"):
-        _single_fill_tokens(lambda: fill("AB", txt.select(5, 5)), allow=("constant-out-of-range",))
 
 
 def test_pointer_range_fill_is_still_refused():

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Never, cast, overload
 
 from pyrung.core.physical import Physical
-from pyrung.core.storage import BLANK_CHAR
+from pyrung.core.storage import BLANK_CHAR, char_default
 from pyrung.core.tag import (
     ChoiceMap,
     LiveInputTag,
@@ -669,6 +669,9 @@ class Block:
                 default = self._factory_default(addr)
             else:
                 default = self._type_default()
+        if self.type is TagType.CHAR and default is not None:
+            # A factory's default and a default from slot() meet the same rule as a tag's.
+            default = char_default(default, f"Slot {self.name}[{addr}]")
         return retentive, default
 
     def _factory_default(self, addr: int) -> Any:
@@ -780,6 +783,10 @@ class Block:
         if field_name == "name":
             refuse_system_point_in_block(new_value, self.name, addr)
             self._slot_names_changed += 1
+        held = new_value
+        if field_name == "default" and self.type is TagType.CHAR:
+            # Refuse the default here, not when a later block[addr] makes the tag.
+            held = char_default(new_value, f"Slot {self.name}[{addr}]")
         entry = self._slot_config.get(addr)
         if entry is None:
             entry = SlotConfig()
@@ -795,7 +802,7 @@ class Block:
         setattr(entry, field_name, new_value)
         note_metadata_edit()
         if addr in self._tag_cache:
-            object.__setattr__(self._tag_cache[addr], field_name, new_value)
+            object.__setattr__(self._tag_cache[addr], field_name, held)
 
     def _configured_addresses(self) -> set[int]:
         """Addresses with at least one slot override or mapped tag."""
