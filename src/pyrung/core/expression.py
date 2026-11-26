@@ -117,6 +117,30 @@ def _op_div(a: Numeric, b: Numeric) -> Numeric:
     return a / b
 
 
+def _op_hex_div(a: Numeric, b: Numeric) -> Numeric:
+    """Return ``a / b`` truncated toward zero, as a CLICK's hex Math divides.
+
+    A hex Math truncates each division, so ``7h / 2h * 2h`` is 6h and ``1h / 2h * 4h``
+    is 0 (hardware, 2026-11-26).  ``calc_form`` runs ``/`` as this function in a hex
+    Math.  A division by 0 is 0 and sets SC40, as in :func:`_op_div`.
+
+    An operand is a float only after a ``**`` or a step past 2 ** 53.  The function then
+    truncates the quotient to a whole double.  No CLICK reading had a negative quotient.
+    Truncation toward zero there is pyrung's assumption, based on the hex MOD, which
+    truncates.
+    """
+    if b == 0:
+        faults = CALC_FAULTS.get()
+        if faults is not None:
+            faults.append(DIVISION_FAULT)
+        return 0
+    if isinstance(a, int) and isinstance(b, int):
+        quotient = abs(a) // abs(b)
+        return quotient if (a < 0) == (b < 0) else -quotient
+    quotient = a / b
+    return float(int(quotient)) if math.isfinite(quotient) else quotient
+
+
 def _op_mod(a: Numeric, b: Numeric) -> Numeric:
     """Return ``a MOD b`` as CLICK's Math computes it, truncated with the sign of *a*.
 

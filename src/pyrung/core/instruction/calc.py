@@ -20,6 +20,8 @@ from pyrung.core.expression import (
     TagExpr,
     UnaryExpr,
     _op_and,
+    _op_div,
+    _op_hex_div,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import check_real_value, computed_real
@@ -138,6 +140,7 @@ class _CalcForm:
     abs_ops: bool = False
     mask_shifts: bool = False
     calc_ops: bool = True
+    whole_division: bool = False
 
     def cut(self, value: int) -> int:
         return value & 0xFFFF if self.unsigned else _int32(value)
@@ -171,7 +174,11 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
     if isinstance(value, BinaryExpr):
         left = _rebuild(value.left, form)
         right = _rebuild(value.right, form)
-        op = CALC_OPS.get(value.op, value.op) if form.calc_ops else value.op
+        op = value.op
+        if form.calc_ops:
+            op = CALC_OPS.get(op, op)
+            if form.whole_division and op is _op_div:
+                op = _op_hex_div
         cls = CalcBinaryExpr if form.calc_ops else type(value)
         node = value
         if (
@@ -246,6 +253,9 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
       hex mode.
     - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
+    - A hex Math truncates the result of each ``/`` toward zero
+      (:func:`~pyrung.core.expression._op_hex_div`).  So ``7h / 2h * 2h`` stores 6h
+      (read, 2026-11-26).  A decimal ``/`` keeps the fraction.
     - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
       a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
       Outside a Math they stay Python's.
@@ -261,7 +271,7 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
     Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
-        form = _CalcForm(unsigned=True, mask_shifts=True)
+        form = _CalcForm(unsigned=True, mask_shifts=True, whole_division=True)
     else:
         form = _CalcForm(abs_ops=True)
     return _rebuild(expression, form)

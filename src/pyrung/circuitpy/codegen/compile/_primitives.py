@@ -42,6 +42,7 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
     UnaryExpr,
+    _op_hex_div,
     _op_pow,
     may_be_float,
 )
@@ -177,6 +178,13 @@ def _compile_expression_impl(
         )
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         flags = CALC_FLAGS if strict else None
+        if expr.op is _op_hex_div:
+            # A hex Math's / truncates toward zero (core _op_hex_div).  A dividend of 0
+            # or more and a positive constant divisor give the same quotient with //.
+            if _non_negative(expr.left) and _positive_literal(expr.right):
+                return f"({left} // {right})"
+            ctx.mark_helper("_hex_div")
+            return f"_hex_div({left}, {right}, {flags})"
         if (not strict or not isinstance(expr, CalcBinaryExpr)) and (
             _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
         ):
@@ -549,7 +557,8 @@ def _int_bound(expr: Any) -> float:
             # and inf * 0 is NaN.
             return 0 if left == 0 or right == 0 else left * right
         if symbol == "/":
-            return 0
+            # A hex Math's / of integers is an integer no larger than the dividend.
+            return left if expr.op is _op_hex_div else 0
         if symbol in ("//", "%", ">>"):
             return left
         if symbol in ("&", "|", "^"):

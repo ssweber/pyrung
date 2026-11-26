@@ -392,6 +392,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_store_copy_value_to_type" in ctx.used_helpers
         or "_calc_math_isfinite" in ctx.used_helpers
         or "_math_func" in ctx.used_helpers
+        or "_hex_div" in ctx.used_helpers
         or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
         or "_store_word_clamped" in ctx.used_helpers
     )
