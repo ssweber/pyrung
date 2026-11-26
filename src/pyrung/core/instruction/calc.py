@@ -132,13 +132,17 @@ def _int32(value: int) -> int:
     return ((value + 0x8000_0000) & 0xFFFF_FFFF) - 0x8000_0000
 
 
+#: The binary ops whose result a hex Math keeps to 16 unsigned bits (:func:`calc_form`).
+_HEX_MASKED_SYMBOLS = frozenset({"<<", "&", "|", "^"})
+
+
 @dataclass(frozen=True)
 class _CalcForm:
     """How :func:`calc_form` rewrites a formula: see there."""
 
     unsigned: bool = False
     abs_ops: bool = False
-    mask_shifts: bool = False
+    mask_bits: bool = False
     calc_ops: bool = True
     whole_division: bool = False
 
@@ -188,7 +192,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             or type(value) is not cls
         ):
             node = cls(left, right, op, value.symbol)
-        if form.mask_shifts and value.symbol == "<<":
+        if form.mask_bits and value.symbol in _HEX_MASKED_SYMBOLS:
             node = cls(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, UnaryExpr):
@@ -211,7 +215,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         node = value
         if shifted is not value.value or count is not value.count:
             node = type(value)(shifted, count, value.func, value.name)
-        if form.mask_shifts and value.name == "lsh":
+        if form.mask_bits and value.name == "lsh":
             return BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, RandIntExpr):
@@ -267,11 +271,15 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
       ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
       not yet read.
+    - In hex mode AND, OR and XOR each give 16 unsigned bits.  ``- DH1 OR 0h`` with
+      DH1 = 2h stores FFFEh and raises no SC43 (read, 2026-11-26).  The 16 bits are also
+      the value that a later step reads, so ``( - DH1 OR 0h ) / 2h`` is 7FFFh.  That is
+      pyrung's choice, and no CLICK reading covers it yet.
 
     Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
-        form = _CalcForm(unsigned=True, mask_shifts=True, whole_division=True)
+        form = _CalcForm(unsigned=True, mask_bits=True, whole_division=True)
     else:
         form = _CalcForm(abs_ops=True)
     return _rebuild(expression, form)

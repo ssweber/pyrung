@@ -325,4 +325,7 @@ base = 2241 # Conf_MathFlags: DS2241..DS2290
 slots = 4
 
 [groups.math_flags.cases]
-mod_by_zero = 1
+minus_sets_sc43 = 1
+last_op_sets_sc43 = 2
+bitwise_unsigned = 3
+mod_by_zero = 4

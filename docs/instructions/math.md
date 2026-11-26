@@ -71,6 +71,13 @@ An expression outside `math()` is permissive. That covers a rung condition, a `c
 | WORD-only | `"hex"` (unsigned 16-bit wrap) |
 | Any non-WORD present | `"decimal"` (signed arithmetic) |
 
+```python
+math(-DH[1], DH[2])         # DH1 = 2: stores FFFEh, sets out_of_range
+math(-DH[1] | 0, DH[3])     # stores FFFEh, sets no flag
+```
+
+A hex-mode result below 0 or above FFFFh keeps its low 16 bits and sets `system.fault.out_of_range` (CLICK's SC43). AND, OR and XOR give 16 unsigned bits, so a formula whose last step is one of them never sets the flag. A CLICK does the same.
+
 For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. pyrung exports such a `math()` in decimal mode. A decimal Math refuses a `Word` tag. CLICK validation reports `math-operand-bank` for each `Word` tag in the formula. It reports `bank-not-allowed` for a DH or YD destination of a formula without `Word` tags.
 
 CLICK's editor accepts only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`. It accepts only a tag or a constant on either side of `<<` and `>>`. CLICK validation reports `math-arg-expression` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`. Compute the value into a tag in a `math()` above. The same rule applies to `randint()` bounds.

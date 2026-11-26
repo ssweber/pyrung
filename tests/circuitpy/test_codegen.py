@@ -3113,6 +3113,21 @@ class TestBoardPeripheralsAndRunStop:
     #: flags as (SC40, SC43, SC46)).  The rows are what a CLICK's Math did (hardware
     #: 2026-11-26).  The result starts at 99.
     _CLICK_MATH_FLAGS = [
+        ("a1_minus", Word, lambda a, b, c: -a, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a2_zero_less", Word, lambda a, b, c: LiteralExpr(0) - a, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a3_difference", Word, lambda a, b, c: b - a, (2, 1, 0), 0xFFFF, (0, 1, 0)),
+        ("a4_then_add", Word, lambda a, b, c: -a + 0, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a5_then_multiply", Word, lambda a, b, c: -a * 1, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a6_then_divide", Word, lambda a, b, c: -a / 1, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a7_then_mod", Word, lambda a, b, c: -a % 7, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a8_then_and", Word, lambda a, b, c: -a & 0xFFFF, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        ("a9_then_or", Word, lambda a, b, c: -a | 0, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        ("a10_then_xor", Word, lambda a, b, c: -a ^ 0, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        ("a11_difference_or", Word, lambda a, b, c: (0 - a) | 0, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        # SC40 was not read for these three rows.
+        ("b14_1_minus_or", Word, lambda a, b, c: -a | 1, (2, 0, 0), 0xFFFF, (0, 0, 0)),
+        ("b14_2_minus_xor", Word, lambda a, b, c: -a ^ 1, (2, 0, 0), 0xFFFF, (0, 0, 0)),
+        ("b14_2b_minus_xor", Word, lambda a, b, c: -a ^ 1, (3, 0, 0), 0xFFFC, (0, 0, 0)),
         ("c1_division_by_zero", Int, lambda a, b, c: (a / b) + c, (5, 0, 1), 1, (1, 0, 0)),
         ("c2_mod_by_zero", Int, lambda a, b, c: (a % b) + c, (5, 0, 1), 1, (0, 0, 1)),
         ("c3_hex_mod_by_zero", Word, lambda a, b, c: a % b, (5, 0, 0), 0, (0, 0, 1)),
@@ -3131,6 +3146,35 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with rung():
                 math(make(a, b, c), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    #: Rows as in :attr:`_CLICK_HEX_MATH`, with two Word tags.  In hex mode AND, OR and XOR
+    #: give 16 unsigned bits, and a later step reads those 16 bits.  No CLICK reading has
+    #: a bitwise result that feeds another step, so these rows are pyrung's assumption.
+    _HEX_BITWISE_ONWARD = [
+        ("or_then_divide", lambda a, b: (-a | 0) / 2, (2, 0), 0x7FFF, (0, 0, 0)),
+        ("xor_then_subtract", lambda a, b: (-a ^ 0) - 1, (2, 0), 0xFFFD, (0, 0, 0)),
+        ("wide_product_or", lambda a, b: a * b | 0, (0x100, 0x100), 0, (0, 0, 0)),
+        ("wide_product_and", lambda a, b: a * b & 0x1FFFF, (0x100, 0x101), 0x100, (0, 0, 0)),
+        ("lsh_then_or", lambda a, b: (a << 1) | 0, (0x8001, 0), 2, (0, 0, 0)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make", "values", "stored", "flags"),
+        _HEX_BITWISE_ONWARD,
+        ids=[case[0] for case in _HEX_BITWISE_ONWARD],
+    )
+    def test_hex_bitwise_result_agrees_on_every_backend(
+        self, monkeypatch, label, make, values, stored, flags
+    ):
+        a, b = (Word(name, default=value) for name, value in zip("AB", values, strict=True))
+        dest = Word("Dest", default=0xBEEF)
+        with Program(strict=False) as prog:
+            with rung():
+                math(make(a, b), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         expected = (stored, *(bool(flag) for flag in flags))
