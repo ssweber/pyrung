@@ -2,7 +2,19 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, call, copy, out, rung, subroutine
+import pytest
+
+from pyrung.core import (
+    Bool,
+    Int,
+    Program,
+    call,
+    copy,
+    out,
+    return_early,
+    rung,
+    subroutine,
+)
 
 
 class TestSubroutineCall:
@@ -123,3 +135,13 @@ class TestSubroutineCall:
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Deep"] is True
+
+
+class TestReturnEarlyPlacement:
+    def test_return_early_in_the_main_program_says_what_to_do(self):
+        Button = Bool("Button")
+
+        with pytest.raises(RuntimeError, match="ends a subroutine.*main program ends by itself"):
+            with Program():
+                with rung(Button):
+                    return_early()

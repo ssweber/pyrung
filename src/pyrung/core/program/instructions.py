@@ -557,7 +557,10 @@ def return_early() -> None:
     ctx, source_file, source_line = _capture_instruction_context("return_early", source_depth=3)
     prog = Program._current()
     if prog is None or prog._current_subroutine is None:
-        raise RuntimeError("return_early() must be used inside a subroutine")
+        raise RuntimeError(
+            "return_early() ends a subroutine. CLICK drops return() from the main program. "
+            "Use it inside a subroutine. The main program ends by itself, so it needs no call."
+        )
     _attach_instruction(ctx, ReturnInstruction(), source_file, source_line)
 
 

@@ -807,6 +807,22 @@ def _analyze_rungs(
                 raise
             raise ValueError(f"{source_name}, rung {rung_index + 1}: {exc}") from None
 
+    # CLICK's paste drops return() from the main program and end() from a subroutine, with no
+    # message. Refuse them here so the dropped rung is not a silent loss.
+    for index, raw in enumerate(raw_rungs):
+        for row in raw.rows:
+            token = row[-1] if row else ""
+            if subroutine and token == "end()":
+                raise ValueError(
+                    f"{where(index)}end() is in a subroutine. CLICK drops it there. "
+                    "Use return() in a subroutine."
+                )
+            if not subroutine and token.startswith("return("):
+                raise ValueError(
+                    f"{where(index)}return() is in the main program. CLICK drops it there. "
+                    "Use end() in the main program."
+                )
+
     # Strip trailing end() rung (auto-appended by pyrung_to_ladder, not part of user logic).
     if raw_rungs:
         last = raw_rungs[-1]

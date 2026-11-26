@@ -422,7 +422,7 @@ def exec_with_source(
     return namespace
 
 
-def rows_logic(rows) -> list[tuple]:
+def rows_logic(rows, *, subroutine: bool = False) -> list[tuple]:
     """Return per-output (AF, full condition, pins) entries of ladder rows, NOPs included.
 
     This compares logic, not shape. Continued rows and branches that read the same
@@ -434,7 +434,7 @@ def rows_logic(rows) -> list[tuple]:
     from pyrung.click.codegen.shaping import _tree_key
 
     outputs = []
-    for analyzed in _analyze_rungs(_parse_rows(rows)):
+    for analyzed in _analyze_rungs(_parse_rows(rows), subroutine=subroutine):
         for instr in analyzed.instructions:
             parts = [p for p in (analyzed.condition_tree, instr.branch_tree) if p is not None]
             tree = make_compound(parts, Series) if parts else None
@@ -455,7 +455,7 @@ def bundle_logic(bundle) -> dict[str, list[tuple]]:
     """Return :func:`rows_logic` for the main scope and every subroutine."""
     scopes = {"main": rows_logic(bundle.main_rows)}
     for name, rows in bundle.subroutine_rows:
-        scopes[name] = rows_logic(rows)
+        scopes[name] = rows_logic(rows, subroutine=True)
     return scopes
 
 

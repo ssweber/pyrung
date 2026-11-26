@@ -756,14 +756,14 @@ def _evaluate_nop_no_coil(bundle: Any, mode: ValidationMode) -> list[ClickFindin
 
     findings: list[ClickFinding] = []
     scopes = [
-        ("main", bundle.main_rows),
-        *((f"subroutine '{n}'", r) for n, r in bundle.subroutine_rows),
+        ("main", bundle.main_rows, False),
+        *((f"subroutine '{n}'", r, True) for n, r in bundle.subroutine_rows),
     ]
-    for where, rows in scopes:
+    for where, rows, in_subroutine in scopes:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                analyzed = _analyze_rungs(_parse_rows(rows))
+                analyzed = _analyze_rungs(_parse_rows(rows), subroutine=in_subroutine)
         except ValueError:
             continue
         number = 0

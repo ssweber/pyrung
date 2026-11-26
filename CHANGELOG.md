@@ -15,6 +15,8 @@
 
 ### Behaviour changes
 
+- `ladder_to_pyrung()` now raises `ValueError` for a `return()` in the main program and for an `end()` in a subroutine, as CLICK's editor offers neither (a subroutine's `end()` imported, and the generated code failed to build with a `return()` in main).
+  Use `end()` in the main program and `return()` in a subroutine.
 - `copy()` now raises `ValueError` when you build a program with a converter that cannot store into its target, such as `to_value` into a TXT (it built).
   Leave `convert` out, or copy into a tag type that the converter writes.
 - `copy()` now raises `ValueError` at build when CLICK's Copy dialog offers no such option for its converter and source, such as `to_value` from an `Int`, `to_text()` from a TXT, or `to_binary` from 55 into a `Dint` (it built, and most of these wrote nothing).
