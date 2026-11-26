@@ -265,7 +265,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert len(analyzed) == 1
         r = analyzed[0]
         assert _find_parallel(r.condition_tree) is None
@@ -286,7 +286,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert len(analyzed) == 1
         r = analyzed[0]
         par = _find_parallel(r.condition_tree)
@@ -308,7 +308,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert len(analyzed) == 1
         r = analyzed[0]
         par = _find_parallel(r.condition_tree)
@@ -332,7 +332,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert len(analyzed) == 1
         r = analyzed[0]
         assert _leaf_labels(r.condition_tree) == ["X001"]
@@ -357,7 +357,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert len(analyzed) == 1
         r = analyzed[0]
         assert len(r.instructions) == 1
@@ -384,7 +384,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert len(analyzed) == 1
         r = analyzed[0]
         assert len(r.instructions) == 2
@@ -403,7 +403,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert analyzed[0].comment == "Start motor"
 
     def test_multiline_comment(self, tmp_path: Path):
@@ -420,7 +420,7 @@ class TestTopologyAnalysis:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         raw_rungs = _parse_csv(csv_path)
-        analyzed = _analyze_rungs(raw_rungs)
+        analyzed = _analyze_rungs(raw_rungs, subroutine=False)
         assert analyzed[0].comment == "Line 1\nLine 2"
 
 
@@ -607,7 +607,7 @@ class TestDroppedContactValidation:
 
         rung = self._dropped_or_rung()
         with pytest.warns(UserWarning, match="connects to no output"):
-            analyzed = _analyze_rungs([rung])
+            analyzed = _analyze_rungs([rung], subroutine=False)
 
         # X001 survives; the dangling X002 is omitted from the logic.
         labels = _leaf_labels(analyzed[0].condition_tree)
@@ -624,7 +624,7 @@ class TestDroppedContactValidation:
             # warnings still fire before the raise; ignore them for this assertion
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                _analyze_rungs([rung], validate=True)
+                _analyze_rungs([rung], validate=True, subroutine=False)
 
     def test_wired_or_is_not_flagged(self):
         """A correctly tee-wired OR keeps both contacts and never warns/raises."""
@@ -639,7 +639,7 @@ class TestDroppedContactValidation:
         for validate in (False, True):
             with warnings.catch_warnings():
                 warnings.simplefilter("error")  # any warning becomes a failure
-                analyzed = _analyze_rungs([rung], validate=validate)
+                analyzed = _analyze_rungs([rung], validate=validate, subroutine=False)
             par = _find_parallel(analyzed[0].condition_tree)
             assert par is not None
             assert sorted(_leaf_labels(c) for c in par.children) == [["X001"], ["X002"]]
@@ -662,8 +662,7 @@ class TestDroppedContactValidation:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             analyzed = _analyze_rungs(
-                [_RawRung(comment_lines=[], rows=[row0, row1])],
-                validate=True,
+                [_RawRung(comment_lines=[], rows=[row0, row1])], validate=True, subroutine=False
             )
 
         assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)"]
@@ -1140,7 +1139,7 @@ class TestShannonBridgeCoverage:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            analyzed = _analyze_rungs(raw_rungs)
+            analyzed = _analyze_rungs(raw_rungs, subroutine=False)
 
         assert len(analyzed) == 1
         assert [str(item.message) for item in caught] == [
@@ -1160,7 +1159,9 @@ class TestShannonBridgeCoverage:
         """The Shannon-expanded tree matches brute-force reachability for all 2^5 inputs."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            tree = _analyze_rungs(_parse_csv(_WHEATSTONE_FIXTURE))[0].condition_tree
+            tree = _analyze_rungs(_parse_csv(_WHEATSTONE_FIXTURE), subroutine=False)[
+                0
+            ].condition_tree
 
         assert tree is not None
 

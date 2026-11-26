@@ -214,14 +214,17 @@ class _RoundTripValidationMixin:
     ) -> None:
         """Fail loudly when emitted CSV rows lose rung semantics."""
         rows = [tuple(_HEADER), *rendered_rows]
-        actual_rungs = _analyze_rungs(_parse_rows(rows, typed_quotes=False))
+        in_subroutine = subroutine_name is not None
+        actual_rungs = _analyze_rungs(
+            _parse_rows(rows, typed_quotes=False), subroutine=in_subroutine
+        )
         # The importer rewrites a text that holds a quote before it analyzes the rows, so
         # the check analyzes the rewritten rows.
         imported = _parse_rows(rows)
         imported_rungs = (
             actual_rungs
             if imported == _parse_rows(rows, typed_quotes=False)
-            else _analyze_rungs(imported)
+            else _analyze_rungs(imported, subroutine=in_subroutine)
         )
         scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
 

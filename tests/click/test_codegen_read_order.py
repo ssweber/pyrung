@@ -272,7 +272,7 @@ def test_one_click_rung_of_several_wires_imports_as_the_code_written(name: str):
 
 
 def _analyzed(rows: list[list[str]]):
-    return _analyze_rungs(_parse_rows([_HEADER, *rows, _row("R", [], "end()")]))
+    return _analyze_rungs(_parse_rows([_HEADER, *rows, _row("R", [], "end()")]), subroutine=False)
 
 
 def test_logic_check_refuses_two_cells_folded_into_one():
