@@ -473,7 +473,7 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
 
 
 def _picked(go_a: Bool, go_b: Bool, tag: Int | Word, a: int, b: int, c: int) -> None:
-    """Write *a* into *tag* when GoA is on, *b* when only GoB is on, and *c* otherwise."""
+    """Write *a* into *tag* when *go_a* is on, *b* when only *go_b* is on, and *c* otherwise."""
     with rung(go_a):
         copy(a, tag)
     with rung(~go_a, go_b):
@@ -643,8 +643,8 @@ def test_check_keeps_a_comparison_with_a_value_an_xor_stores():
 def test_check_keeps_a_comparison_with_a_value_a_hex_or_stores():
     """A hex OR keeps 16 bits, so ``(65000 - 2) | 0`` stores 64998.
 
-    The difference reaches -2 too, and its 16 bits are 65534.  So the corners of the cut
-    are 65000 and 65534, and 64998 lies below them.
+    The difference also reaches -2, whose 16 bits are 65534.  A bound taken from the
+    corners was 65000..65534, and that left out 64998.
     """
     logic = _hex_or_of_a_difference()
     assert not logic.check(select={"CMP_ALWAYS_FALSE"})

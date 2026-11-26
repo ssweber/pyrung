@@ -1141,8 +1141,9 @@ def _interval_bounds(
 
     # With the count held, a shift never falls as the value rises, whatever the value's
     # sign.  With the value held, the result only rises or only falls as the count rises.
-    # So the corners bound a shift.  A negative count raises at its corner.  A count past
-    # _WIDEST_SHIFT would build a huge int, and the result is past a double anyway.
+    # So the corners bound a shift.  When the count can be negative, the corner with the
+    # lowest count raises, and the function returns None.  A count past _WIDEST_SHIFT would
+    # build a huge int.
     if node.symbol == "<<" and b_hi > _WIDEST_SHIFT:
         return None
     if node.symbol == "**":
@@ -1166,8 +1167,8 @@ def _interval_bounds(
 
 #: The operations whose extremes over two intervals lie at the four corners.  Hold one
 #: operand, and the result only rises or only falls as the other operand rises.  A power
-#: does that only for a base of 0 or more.  ``_interval_bounds`` first sets aside a
-#: negative base and a divisor that can be 0.
+#: does that only for a base of 0 or more.  ``_interval_bounds`` handles a negative base,
+#: and a divisor that can be 0, before it computes the corners.
 _CORNER_SYMBOLS = frozenset({"+", "-", "*", "/", "//", "**", "<<", ">>"})
 
 #: The widest left shift, and the largest exponent, that ``_interval_bounds`` computes.
@@ -1180,9 +1181,10 @@ def _negative_base_power_bounds(
 ) -> tuple[float, float] | None:
     """Return bounds for a power whose base can be negative, or None.
 
-    Only one whole exponent of 1 or more gives a bound.  An odd exponent keeps the order
-    of the bases, so the ends bound the power.  An even exponent turns at 0.  With A in
-    -2..2, both ends of ``A ** 2`` give 4, but ``1 ** 2`` is 1.
+    The function returns a bound only when the exponent is a single whole number of 1 or
+    more.  An odd exponent keeps the order of the bases, so the ends bound the power.  An
+    even exponent turns at 0.  With A in -2..2, both ends of ``A ** 2`` give 4, but
+    ``1 ** 2`` is 1.
     """
     if b_lo != b_hi or b_lo < 1 or b_lo != int(b_lo):
         return None
@@ -1224,7 +1226,8 @@ def _bitwise_bounds(
         tops = [hi for lo, hi in ((a_lo, a_hi), (b_lo, b_hi)) if lo >= 0]
         return (0, min(tops)) if tops else None
     if a_lo < 0 or b_lo < 0:
-        # A negative int has unbounded high bits, so OR and XOR of one can be negative.
+        # A negative int has every bit above its top bit set, so an OR or XOR with one can
+        # be negative.
         return None
     # OR and XOR of two numbers below 2 ** n stay below 2 ** n.
     return (0, (1 << max(a_hi, b_hi).bit_length()) - 1)
