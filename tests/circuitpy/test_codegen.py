@@ -442,7 +442,7 @@ class TestGenerateCircuitPyAPI:
         with Program(strict=False) as prog:
             with rung():
                 # copy() refuses a range when the program is built, so a range goes to math().
-                (math if shown.startswith("a range") else copy)(value(), Char("Text"))
+                (math if shown.startswith("a range") else copy)(value(), Bool("Flag"))
         line = prog.rungs[0]._instructions[0].source_line
 
         message = rf"\(\) at .*test_codegen\.py:{line}\. It reads {re.escape(shown)} as a value\."
@@ -2124,14 +2124,10 @@ class TestBoardPeripheralsAndRunStop:
             pytest.param(-5, id="-5"),
         ],
     )
-    def test_fill_of_text_longer_than_a_character_flags_on_every_backend(self, monkeypatch, value):
-        """Each TXT holds one character, so the Fill writes nothing and sets the flag.
-
-        A CLICK's editor refuses a Fill of 12 or -5 into a TXT.
-        """
-        prog, watch = self._fill_into_text(value)
-        results = _on_every_backend(prog, monkeypatch, watch, scans=2)
-        assert results == {name: (*[ord("Z")] * 4, True) for name in results}
+    def test_fill_of_text_longer_than_a_character_is_refused(self, value):
+        """A CLICK's editor refuses a Fill of 12 or -5 into a TXT (OBJ-023)."""
+        with pytest.raises(ValueError, match="writes one character into every Char tag"):
+            self._fill_into_text(value)
 
     @pytest.mark.parametrize(
         "seed,source_type,target_type,stored",
@@ -2218,10 +2214,6 @@ class TestBoardPeripheralsAndRunStop:
         "store",
         [
             pytest.param(lambda r, chars, reals: copy(r, chars[1]), id="copy"),
-            pytest.param(
-                lambda r, chars, reals: blockcopy(reals.select(1, 2), chars.select(1, 2)),
-                id="blockcopy",
-            ),
         ],
     )
     def test_a_non_finite_real_into_a_char_is_zero_on_every_backend(

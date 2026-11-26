@@ -7,7 +7,14 @@ import re
 import struct
 from typing import Any
 
-from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_real, store_value
+from pyrung.core.storage import (
+    StoreTransform,
+    holds_char,
+    real_in_range,
+    store_char,
+    store_real,
+    store_value,
+)
 from pyrung.core.tag import Tag, TagType
 
 from .operands import ConstArg, ExprArg, PointerArg, TagArg
@@ -200,11 +207,9 @@ def _as_single_ascii_char(value: Any) -> str:
     """
     if not isinstance(value, str):
         raise ValueError("CHAR value must be a string")
-    if value == "":
-        return store_char(value)
-    if len(value) != 1 or ord(value) > 255:
+    if not holds_char(value):
         raise ValueError("CHAR value must be blank or one 8-bit character")
-    return value
+    return store_char(value)
 
 
 def _text_from_source_value(value: Any) -> str:

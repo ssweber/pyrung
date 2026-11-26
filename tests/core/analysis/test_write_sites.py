@@ -320,18 +320,6 @@ def test_the_characters_past_the_first_are_writes_the_copy_may_not_make() -> Non
     assert not graph.unconditional_write_before_read("PartialMsg5")
 
 
-def test_to_text_of_an_expression_runs_to_the_end_of_the_block() -> None:
-    msg = Block("ExprMsg", TagType.CHAR, 1, 30)
-    source = Dint("ExprSource")
-    with Program(strict=False) as logic:
-        with rung():
-            copy(source * source, msg[20], convert=to_text())
-    (instr,) = logic.rungs[0]._instructions
-    assert [target.name for target in instruction_write_targets(instr)] == [
-        f"ExprMsg{a}" for a in range(20, 31)
-    ]
-
-
 def test_to_text_through_a_bounded_pointer_follows_the_pointer() -> None:
     txt = ClickBlocks().txt
     pointer = Int("TextPointer", choices={990: "near the end", 995: "nearer"})

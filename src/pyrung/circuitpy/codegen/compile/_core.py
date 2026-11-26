@@ -9,6 +9,7 @@ from pyrung.circuitpy.codegen._constants import (
     _FAULT_DIVISION_ERROR_TAG,
     _FAULT_MATH_OPERATION_ERROR_TAG,
 )
+from pyrung.circuitpy.codegen._helpers import holds_char_source
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
     _source_location,
@@ -83,6 +84,7 @@ from pyrung.core.instruction import (
     UnpackToWordsInstruction,
     control,
 )
+from pyrung.core.instruction.control import not_a_char_error
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
@@ -761,6 +763,24 @@ def _compile_function_arg(value: Any, ctx: CodegenContext) -> str:
     return ctx.function_constant(value)
 
 
+def _not_a_char_check_lines(
+    call: str, fn_name: str, key: str, target: Any, result_var: str
+) -> list[str]:
+    """Return the lines that raise when a function returns a value that no Char holds.
+
+    The scan raises the same error.  A target of any other type gets no lines.
+    """
+    if _value_type_name(target) != "CHAR":
+        return []
+    before, after = not_a_char_error(call, fn_name, key, target)
+    value = f"{result_var}[{key!r}]"
+    return [
+        f"if not {holds_char_source(value)}:",
+        f"    raise (ValueError if isinstance({value}, str) else TypeError)("
+        f"{before!r} + repr({value}) + {after!r})",
+    ]
+
+
 def _compile_function_call_instruction(
     instr: FunctionCallInstruction,
     enabled_expr: str,
@@ -789,6 +809,9 @@ def _compile_function_call_instruction(
                     f'        f"{_in_f_string(f"run_function: {fn_name!r} returned no {key!r} key. It returned the keys ")}{{sorted({result_var})}}."',
                     "    )",
                 ]
+            )
+            enabled_body.extend(
+                _not_a_char_check_lines("run_function", fn_name, key, target, result_var)
             )
             value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
             enabled_body.extend(_compile_assignment_lines(target, value_expr, ctx, indent=0))
@@ -825,6 +848,12 @@ def _compile_enabled_function_call_instruction(
                     f'{" " * (indent + 8)}f"{_in_f_string(f"run_enabled_function: {fn_name!r} returned no {key!r} key. It returned the keys ")}{{sorted({result_var})}}."',
                     f"{' ' * (indent + 4)})",
                 ]
+            )
+            lines.extend(
+                " " * indent + line
+                for line in _not_a_char_check_lines(
+                    "run_enabled_function", fn_name, key, target, result_var
+                )
             )
             value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
             lines.extend(_compile_assignment_lines(target, value_expr, ctx, indent=indent))

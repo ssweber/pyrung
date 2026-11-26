@@ -33,6 +33,7 @@ from pyrung import (
     fill,
     forloop,
     immediate,
+    latch,
     lsh,
     math,
     named_array,
@@ -60,6 +61,8 @@ from pyrung.core.instruction import (
     ForLoopInstruction,
     FunctionCallInstruction,
     Instruction,
+    LatchInstruction,
+    OutInstruction,
     PackBitsInstruction,
     PackTextInstruction,
     PackWordsInstruction,
@@ -212,6 +215,8 @@ BUILDERS: dict[type[Instruction], Builder] = {
     EnabledFunctionCallInstruction: Builder(
         "run_enabled_function()", _run_enabled_function, {"outs": "Int tag"}
     ),
+    OutInstruction: Builder("out()", out, {"target": "Bool tag"}),
+    LatchInstruction: Builder("latch()", latch, {"target": "Bool tag"}),
 }
 
 
@@ -269,10 +274,22 @@ REFUSED_BEFORE = {
 }
 
 # Operands that write a result without the check, and that the check refuses because
-# CLICK refuses them.  CLICK's For refuses a count with a decimal point.
+# CLICK refuses them.  CLICK's For refuses a count with a decimal point.  CLICK's Math,
+# Out and Set refuse a TXT, and without the check they store a number or a bit in it.
 REFUSED_AS_ON_CLICK = {
     (ForLoopInstruction, "count", "real constant"),
     (ForLoopInstruction, "count", "whole real constant"),
+    *(
+        (cls, arg, kind)
+        for cls, arg in (
+            (CalcInstruction, "dest"),
+            (OutInstruction, "target"),
+            (LatchInstruction, "target"),
+        )
+        for kind in ("Char tag", "Char tag holding a digit")
+    ),
+    (OutInstruction, "target", "Char range"),
+    (LatchInstruction, "target", "Char range"),
 }
 
 # Operands that the check accepts, and that write nothing with any data.  The check does
@@ -303,7 +320,6 @@ RULE_CASES: list[tuple[type[Instruction], dict[str, Callable[[], Any]]]] = [
     (CopyInstruction, {"source": lambda: ds[1] * [c[1]], "target": lambda: df[3]}),
     (FillInstruction, {"value": lambda: ds[1] * (1, 2), "dest": lambda: txt.select(3, 4)}),
     (FillInstruction, {"value": lambda: [1], "dest": lambda: ds.select(ds[100], ds[101])}),
-    (CalcInstruction, {"expression": lambda: "A", "dest": lambda: txt[3]}),
     (CalcInstruction, {"expression": lambda: ds.select(1, 2), "dest": lambda: c[3]}),
     (CalcInstruction, {"expression": lambda: "A", "dest": lambda: dh[3]}),
     (CalcInstruction, {"expression": lambda: "-5", "dest": lambda: dh[3]}),
@@ -311,8 +327,18 @@ RULE_CASES: list[tuple[type[Instruction], dict[str, Callable[[], Any]]]] = [
     (CalcInstruction, {"expression": lambda: "1.5", "dest": lambda: dd[3]}),
     (CalcInstruction, {"expression": lambda: "1e3", "dest": lambda: df[3]}),
     (CalcInstruction, {"expression": lambda: txt[1], "dest": lambda: df[3]}),
-    (CalcInstruction, {"expression": lambda: ds[1] * (1, 2), "dest": lambda: txt[3]}),
     (CalcInstruction, {"expression": lambda: ds[1] * (1, 2), "dest": lambda: ds[3]}),
+    (OutInstruction, {"target": lambda: c[3]}),
+    (LatchInstruction, {"target": lambda: c[3]}),
+]
+
+# Cases that the rules refuse because CLICK refuses them.  Without the check, each one
+# stores a number or a bit in a TXT.
+RULE_CASES_AS_ON_CLICK: list[tuple[type[Instruction], dict[str, Callable[[], Any]]]] = [
+    (CalcInstruction, {"expression": lambda: "A", "dest": lambda: txt[3]}),
+    (CalcInstruction, {"expression": lambda: ds[1] * (1, 2), "dest": lambda: txt[3]}),
+    (OutInstruction, {"target": lambda: txt[3]}),
+    (LatchInstruction, {"target": lambda: txt[3]}),
 ]
 
 
@@ -519,10 +545,21 @@ def test_a_rule_refuses_at_build_or_writes(
     _check_case(BUILDERS[cls], cls, args, monkeypatch)
 
 
+@pytest.mark.parametrize(
+    ("cls", "args"),
+    RULE_CASES_AS_ON_CLICK,
+    ids=[f"{BUILDERS[cls].call}-{i}" for i, (cls, _) in enumerate(RULE_CASES_AS_ON_CLICK)],
+)
+def test_a_rule_refuses_what_click_refuses(
+    cls: type[Instruction], args: dict[str, Callable[[], Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _check_case(BUILDERS[cls], cls, args, monkeypatch, refused_as_on_click=True)
+
+
 def test_every_rule_has_a_refused_case_and_a_running_case() -> None:
     """Each class's rules see at least one case that builds and one that the rule refuses."""
     outcomes: dict[type[Instruction], set[bool]] = {}
-    for cls, args in RULE_CASES:
+    for cls, args in [*RULE_CASES, *RULE_CASES_AS_ON_CLICK]:
         try:
             _build(BUILDERS[cls], args)
         except (TypeError, ValueError):

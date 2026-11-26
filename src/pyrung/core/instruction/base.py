@@ -7,7 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pyrung.core.instruction.operands import FitsRegister, NumberInto, Operand, check_fields
+from pyrung.core.instruction.operands import (
+    FitsRegister,
+    NumberInto,
+    Operand,
+    TextInto,
+    check_fields,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -71,7 +77,7 @@ class Instruction(ABC):
     # What each operand field accepts, and the rules that tie two fields together
     # (``pyrung.core.instruction.operands``).
     _operands: ClassVar[dict[str, Operand]] = {}
-    _operand_rules: ClassVar[tuple[FitsRegister | NumberInto, ...]] = ()
+    _operand_rules: ClassVar[tuple[FitsRegister | NumberInto | TextInto, ...]] = ()
     # The call that a finding shows for the instruction (``validation.render``). Without
     # _call_operands, the instruction shows as ``verb(target)``.
     # - _call_operands pairs the DSL's name for each positional argument with the

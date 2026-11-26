@@ -228,7 +228,7 @@ def test_fill_of_a_number_register_or_a_real_constant_into_char_tags_is_refused(
 
 
 @pytest.mark.parametrize(
-    "value", [5, 12, "A", txt[10], True, False], ids=["5", "12", "'A'", "TXT10", "True", "False"]
+    "value", [5, "A", txt[10], True, False], ids=["5", "'A'", "TXT10", "True", "False"]
 )
 def test_fill_of_a_constant_or_a_char_into_char_tags_builds(value) -> None:
     with Program(strict=False):

@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from pyrung.core._messages import read_only_system_point
 from pyrung.core.instruction.conversions import copy_store_transform
-from pyrung.core.storage import check_real_value, store_char, store_real, store_value
+from pyrung.core.storage import (
+    CHAR_HOLDS,
+    check_real_value,
+    holds_char,
+    store_char,
+    store_real,
+    store_value,
+)
 from pyrung.core.tag import Tag as TagClass
 from pyrung.core.tag import TagType
 
@@ -31,10 +38,9 @@ def _value_a_type_holds(tag_type: TagType, value: Any, what: str) -> Any:
     sense of, rather than guessing.  It also refuses a finite REAL that no float32 holds.
     """
     if tag_type is TagType.CHAR:
-        held = store_char(value)
-        if not isinstance(held, str) or len(held) != 1:
-            raise ValueError(f"{what}: a CHAR holds one character, not {value!r}")
-        return held
+        if not holds_char(value):
+            raise ValueError(f"{what}: a CHAR holds {CHAR_HOLDS}, not {value!r}")
+        return store_char(value)
     if not isinstance(value, bool | int | float):
         raise ValueError(f"{what}: {tag_type.name} holds a number, not {value!r}")
     if tag_type is TagType.REAL:

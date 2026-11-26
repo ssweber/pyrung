@@ -123,6 +123,12 @@ def _validate_status_tags(
 # ---------------------------------------------------------------------------
 
 
+#: The shift of each character in a register, first character first.  A raw send or receive
+#: of Char tags keeps the first character in the low byte.  pyrung's Modbus server packs TXT
+#: the same way.  No one has yet read a CLICK's raw send or receive of TXT to confirm it.
+TXT_BYTE_SHIFTS = (0, 8)
+
+
 def _registers_per_tag(tag_type: TagType, register_type: RegisterType) -> int:
     """Return the number of Modbus registers (or coils) consumed by one tag."""
     if register_type in {RegisterType.COIL, RegisterType.DISCRETE_INPUT}:
@@ -134,6 +140,21 @@ def _registers_per_tag(tag_type: TagType, register_type: RegisterType) -> int:
 
 def _calculate_register_count(tag_types: list[TagType], register_type: RegisterType) -> int:
     return sum(_registers_per_tag(tt, register_type) for tt in tag_types)
+
+
+def _register_count(tag_types: list[TagType], register_type: RegisterType) -> int:
+    """Return how many registers a raw send or receive of tags of *tag_types* moves.
+
+    Each register holds two characters, one from each of two Char tags.  With an odd
+    count, a receive ignores the last high byte, and a send writes 0 there.
+    """
+    if register_type in {RegisterType.HOLDING, RegisterType.INPUT} and _all_char(tag_types):
+        return (len(tag_types) + 1) // 2
+    return _calculate_register_count(tag_types, register_type)
+
+
+def _all_char(tag_types: list[TagType]) -> bool:
+    return bool(tag_types) and all(tag_type is TagType.CHAR for tag_type in tag_types)
 
 
 def _preview_operand_tag_types(operand: Tag | BlockRange, count: int) -> list[TagType]:
@@ -152,6 +173,14 @@ def _pack_values_to_registers(
     """Pack tag values into Modbus register (or coil) values for writing."""
     if register_type == RegisterType.COIL:
         return [bool(v) for v in values]
+    if _all_char([tag.type for tag in tags]):
+        return [
+            sum(
+                ord(ch) << shift
+                for ch, shift in zip(values[i : i + 2], TXT_BYTE_SHIFTS, strict=False)
+            )
+            for i in range(0, len(values), 2)
+        ]
     registers: list[int] = []
     for value, tag in zip(values, tags, strict=True):
         if tag.type == TagType.DINT:
@@ -180,6 +209,10 @@ def _unpack_registers_to_values(
     """Unpack Modbus register (or coil) values into tag-typed values."""
     if register_type in {RegisterType.COIL, RegisterType.DISCRETE_INPUT}:
         return tuple(bool(v) for v in registers[: len(tags)])
+    if _all_char([tag.type for tag in tags]):
+        return tuple(
+            chr((int(registers[i // 2]) >> TXT_BYTE_SHIFTS[i % 2]) & 0xFF) for i in range(len(tags))
+        )
     values: list[Any] = []
     idx = 0
     for tag in tags:

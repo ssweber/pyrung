@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
 from pyrung.core.live_binding import get_active_runner
-from pyrung.core.storage import BLANK_CHAR, check_real_value, store_char
+from pyrung.core.storage import (
+    BLANK_CHAR,
+    char_default,
+    check_real_value,
+    store_char,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -199,7 +204,10 @@ class Tag:
             object.__setattr__(self, "default", defaults.get(self.type, 0))
 
         if self.type == TagType.CHAR:
-            object.__setattr__(self, "default", store_char(self.default))
+            # check() and how() read a Char tag's default as the one character it holds.
+            object.__setattr__(
+                self, "default", char_default(self.default, f"Char tag {self.name!r}")
+            )
         if self.type == TagType.REAL:
             check_real_value(self.default, f"Tag {self.name!r}: default")
             if isinstance(self.default, int):

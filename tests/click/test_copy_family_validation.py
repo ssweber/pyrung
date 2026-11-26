@@ -496,9 +496,9 @@ def test_a_constant_that_hex_would_spell_with_an_e_exports_in_decimal(write, tok
 @pytest.mark.parametrize("text", ["AB", "HELLO"])
 def test_a_fill_of_more_than_one_character_is_refused(text, dest):
     # laddercodec editor_grids copy_fill: CLICK refuses "AB" (OBJ-023). It accepts "HELLO",
-    # but its save holds the Real 0.0 and not the text.
-    (finding,) = _errors(lambda: fill(text, txt.select(*dest)))
-    assert finding.code == Code.CONSTANT_OUT_OF_RANGE
+    # but its save holds the Real 0.0 and not the text. The build refuses both.
+    with pytest.raises(ValueError, match="writes one character into every Char tag"):
+        _errors(lambda: fill(text, txt.select(*dest)))
 
 
 # --- How a refusal prints ---------------------------------------------------------------
@@ -626,8 +626,8 @@ def test_a_label_spells_a_field_as_the_call_does():
         (lambda: unpack_to_bits(ds[1], x.select(1, 16)), "unpack_to_bits(DS1, X1..X16)", "X1"),
         (lambda: fill(c[1], y.select(1, 1)), "fill(C1, Y1..Y1)", "Y1"),
         (
-            lambda: blockcopy(x.select(1, 3), txt.select(1, 3)),
-            "blockcopy(X1..X3, TXT1..TXT3)",
+            lambda: blockcopy(x.select(1, 3), ds.select(1, 3)),
+            "blockcopy(X1..X3, DS1..DS3)",
             "X1",
         ),
         (lambda: copy(ds[1], x[1]), "copy(DS1, X001)", "X001"),
@@ -827,7 +827,7 @@ def test_allow_refuses_a_code_that_no_finding_has():
 
 
 def test_allow_takes_a_pyrung_code_and_a_laddercodec_code():
-    write = lambda: blockcopy(ds.select(1, 2), txt.select(5, 6))  # noqa: E731
+    write = lambda: blockcopy(ds.select(1, 2), c.select(5, 6))  # noqa: E731
     with pytest.raises(LadderExportError, match="copy-bank-incompatible"):
         pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_PTR_CONTEXT_ONLY_COPY,))
     pyrung_to_ladder(_program(write), TagMap(), allow=(Code.COPY_BANK_INCOMPATIBLE,))

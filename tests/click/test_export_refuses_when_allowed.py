@@ -14,30 +14,9 @@ from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import validate_click_program
 from pyrung.core import Block, Int, Program, TagType, rung
 from pyrung.core.expression import LiteralExpr
-from pyrung.core.program import blockcopy, copy, fill, math, out
+from pyrung.core.program import blockcopy, copy, math, out
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
-
-
-def _fill_quote():
-    with Program() as logic:
-        with rung():
-            fill('a"b', txt.select(1, 4))
-    return logic, TagMap()
-
-
-def _fill_one_register_quote():
-    with Program() as logic:
-        with rung():
-            fill('a"b', txt.select(1, 1))
-    return logic, TagMap()
-
-
-def _fill_one_register_text():
-    with Program() as logic:
-        with rung():
-            fill("ab", txt.select(1, 1))
-    return logic, TagMap()
 
 
 def _two_texts_read_two_ways():
@@ -82,9 +61,6 @@ def _text_past_the_bank():
 
 
 _FORMS = {
-    "fill text with a quote": _fill_quote,
-    "fill of one register with a quote": _fill_one_register_quote,
-    "fill of one register with two characters": _fill_one_register_text,
     "compare of two texts that reads two ways": _two_texts_read_two_ways,
     "block copy range with a gap": _copy_range_gap,
     "math range with a gap": _math_range_gap,

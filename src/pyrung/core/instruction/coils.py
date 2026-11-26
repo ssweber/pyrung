@@ -8,7 +8,7 @@ from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import Tag, TagType
 
 from .base import Instruction, OneShotMixin
-from .operands import COIL, Coil, RangeArg, TagArg
+from .operands import COIL, Coil, RangeArg, TagArg, TextInto, check_rules
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -54,11 +54,16 @@ class OutInstruction(OneShotMixin, Instruction):
     _conditions = ()
     _structural_fields = ()
     _call_operands = (("target", "target"),)
+    _operand_rules = (TextInto(dest="target", writes="bit"),)
 
     def __init__(self, target: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
+        check_rules({}, self._operand_rules, "out()", {"target": target})
         self.target: Coil = COIL.parse("out()", "target", target)
         self._static_targets = coil_tags(self.target)
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because ``__init__`` checked the target before it parsed it."""
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         targets = self._static_targets
@@ -94,11 +99,16 @@ class LatchInstruction(Instruction):
     _conditions = ()
     _structural_fields = ()
     _call_operands = (("target", "target"),)
+    _operand_rules = (TextInto(dest="target", writes="bit"),)
     _call_keywords = ()
 
     def __init__(self, target: Any):
+        check_rules({}, self._operand_rules, "latch()", {"target": target})
         self.target: Coil = COIL.parse("latch()", "target", target)
         self._static_targets = coil_tags(self.target)
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because ``__init__`` checked the target before it parsed it."""
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:

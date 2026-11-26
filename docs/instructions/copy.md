@@ -46,6 +46,8 @@ blockcopy(DS.select(1, 3), DS[11])               # Copy DS1..DS3 → DS11..DS13
 
 A single tag as the destination gives the first address. The copy writes as many elements as the source has, as a CLICK does. If they would run past the end of the block, pyrung refuses the program when you build it.
 
+Into a TXT range, `blockcopy()` reads only a TXT range and takes no `convert=`. CLICK's Block Copy does the same. To write the text of numbers, `copy()` each number into its TXT.
+
 ## `fill` — write constant to range
 
 ```python
@@ -54,7 +56,7 @@ fill(Setpoint, Alarms.select(1, 8)) # Copy tag value to all 8 elements
 fill(5, Txt.select(1, 3))           # Txt1..Txt3 = "5"
 ```
 
-An integer constant filled into a TXT range writes its text, the same as a plain `copy()` into one TXT. Each TXT holds one character. If the text is longer, such as "12", `fill()` writes nothing and sets `system.fault.out_of_range`. CLICK's editor refuses a Fill of 12 into a TXT.
+An integer constant filled into a TXT range writes its text, the same as a plain `copy()` into one TXT. Each TXT holds one character. So `fill()` refuses a value of more than one character, such as 12 or "AB", as CLICK's editor does. To write text across a range, `copy()` it into the first TXT. Each character goes into the next TXT.
 
 `fill()` refuses a number register or an expression as the value for a TXT range, as CLICK's editor does. Copy the value into one TXT with `copy()` instead.
 
@@ -93,6 +95,8 @@ copy(DS[1], Txt[1], convert=to_binary)                         # raw byte: 123 �
 A `Word` is written in hex, so `to_text()` of 0x00AB is "AB", and "00AB" with `suppress_zero=False`.
 
 `exponential` applies to a `Real` source. `suppress_zero` applies to any other source. This matches CLICK's Copy dialog. A `Real` source ignores `suppress_zero`. The CLICK export rejects `exponential=True` from a source that is not a `Real`.
+
+`copy()` refuses an expression into a TXT, such as `copy(DS[1] + 1, Txt[1])`, with or without `convert=`. CLICK takes an expression only in Math. Store the result in a number tag with `math()`, then copy that tag into the TXT.
 
 `termination_code` appends a single ASCII character after the converted text. Pass an int (0–127), a one-character string, or a `$XX` hex string matching CLICK's native notation (e.g. `"$0D"` for carriage return). This matches the CLICK PLC Termination Code option (C0-1x and C2-x CPUs).
 

@@ -201,7 +201,7 @@ def test_a_bit_rand_bound_is_the_rand_finding_only():
 
 @pytest.mark.parametrize(
     "dest",
-    [x[1], y[1], c[1], t[1], ct[1], sc[50], xd[1], txt[1]],
+    [x[1], y[1], c[1], t[1], ct[1], sc[50], xd[1]],
     ids=lambda dest: dest.name,
 )
 def test_a_math_result_outside_the_dialogs_banks_is_refused(dest):

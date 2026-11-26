@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.storage import CHAR_HOLDS, holds_char
 from pyrung.core.tag import Tag, TagType
 
 from .base import (
@@ -22,7 +23,7 @@ from .base import (
 from .conversions import (
     _store_copy_value_to_tag_type,
 )
-from .operands import EachOperand, NumberOperand
+from .operands import EachOperand, NumberOperand, describe
 from .resolvers import (
     _fn_name,
     _set_fault_address_error,
@@ -38,6 +39,32 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.rung import Rung
+
+
+def not_a_char_error(call: str, fn_name: str, key: str, target: Any) -> tuple[str, str]:
+    """Return the text before and after the value in the error for a result no Char holds.
+
+    A function's result is known only at the scan.  The scan and the generated code both
+    raise this text, as ``TypeError`` for a value that is not a str and as ``ValueError``
+    for a str that is not one character.
+    """
+    named = describe(target)
+    return (
+        f"{call}: {fn_name!r} returned ",
+        f" for {key!r}. {named[0].upper()}{named[1:]} holds {CHAR_HOLDS}. Return one "
+        f"for {key!r}, or '' for a blank.",
+    )
+
+
+def _store_result(
+    ctx: ScanContext, call: str, fn: Callable[..., Any], key: str, value: Any, target: Any
+) -> None:
+    resolved = resolve_tag_ctx(target, ctx)
+    if resolved.type is TagType.CHAR and not holds_char(value):
+        before, after = not_a_char_error(call, _fn_name(fn), key, target)
+        error = ValueError if isinstance(value, str) else TypeError
+        raise error(before + repr(value) + after)
+    ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(value, resolved))
 
 
 class FunctionCallInstruction(OneShotMixin, Instruction):
@@ -79,8 +106,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
                     f"run_function: {_fn_name(self._fn)!r} returned no {key!r} key. "
                     f"It returned the keys {sorted(result)}."
                 )
-            resolved = resolve_tag_ctx(target, ctx)
-            ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
+            _store_result(ctx, "run_function", self._fn, key, result[key], target)
 
 
 class EnabledFunctionCallInstruction(Instruction):
@@ -124,8 +150,7 @@ class EnabledFunctionCallInstruction(Instruction):
                     f"{_fn_name(self._fn)!r} returned no {key!r} key. "
                     f"It returned the keys {sorted(result)}."
                 )
-            resolved = resolve_tag_ctx(target, ctx)
-            ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
+            _store_result(ctx, "run_enabled_function", self._fn, key, result[key], target)
 
 
 # This switch sets how many iterations a For runs with a count of 0.  The runtime, the
