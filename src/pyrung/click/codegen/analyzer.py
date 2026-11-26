@@ -770,7 +770,7 @@ def _analyze_rungs(
     validate: bool = False,
     source_name: str | None = None,
     file_name: str | None = None,
-    subroutine: bool = False,
+    subroutine: bool,
 ) -> list[_AnalyzedRung]:
     """Analyze topology of each rung.
 

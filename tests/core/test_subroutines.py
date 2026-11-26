@@ -141,7 +141,11 @@ class TestReturnEarlyPlacement:
     def test_return_early_in_the_main_program_says_what_to_do(self):
         Button = Bool("Button")
 
-        with pytest.raises(RuntimeError, match="ends a subroutine.*main program ends by itself"):
+        with pytest.raises(RuntimeError, match="call it only inside one.*ends by itself"):
             with Program():
                 with rung(Button):
                     return_early()
+
+    def test_return_early_without_a_program_is_refused(self):
+        with pytest.raises(RuntimeError, match="must be called inside a rung"):
+            return_early()

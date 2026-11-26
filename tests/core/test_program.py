@@ -2085,7 +2085,7 @@ class TestSubroutineAndCall:
 
         Run = Bool("Run")
 
-        with pytest.raises(RuntimeError, match="inside a subroutine"):
+        with pytest.raises(RuntimeError, match="call it only inside one"):
             with Program():
                 with rung(Run):
                     return_early()

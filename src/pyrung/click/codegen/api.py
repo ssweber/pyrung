@@ -175,7 +175,11 @@ def _prepare_codegen(
         )
 
     analyzed = _analyze_rungs(
-        raw_rungs, validate=validate, source_name="Main program", file_name=main_file
+        raw_rungs,
+        validate=validate,
+        source_name="Main program",
+        file_name=main_file,
+        subroutine=False,
     )
 
     all_analyzed = list(analyzed)

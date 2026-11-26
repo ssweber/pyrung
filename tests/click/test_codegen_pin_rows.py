@@ -174,7 +174,7 @@ def test_logic_check_covers_pins():
     from pyrung.click.codegen.analyzer import _analyze_rungs
     from pyrung.click.codegen.parser import _parse_rows
 
-    rungs = _analyze_rungs(_parse_rows(rows))
+    rungs = _analyze_rungs(_parse_rows(rows), subroutine=False)
     assert emitted_logic_mismatch(rungs) is None
     # Drop the jog pin's OR branch from what would be emitted. The check catches it.
     drum = next(i for r in rungs for i in r.instructions if i.pins)
