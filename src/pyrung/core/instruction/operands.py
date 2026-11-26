@@ -731,7 +731,8 @@ TextWrite = Literal["copy", "fill", "blockcopy", "receive", "send", "number", "b
 
 - ``"copy"``, ``"fill"`` and ``"blockcopy"`` store their source.
 - ``"receive"`` stores what it reads from a remote device.
-- ``"send"`` stores the Char tags in a remote device, which must hold text too.
+- ``"send"`` writes the Char tags into a remote device.  The addresses there must hold
+  text too.
 - ``"number"`` stores a number, as ``math()`` does.
 - ``"bit"`` stores True or False, as ``out()`` and ``latch()`` do.
 """
@@ -813,7 +814,8 @@ class TextInto:
             return _receive_refusal(call, value, args[self.value], target)
         if self.writes == "send":
             if isinstance(value, str):
-                # Validation and the CLICK export refuse a TXT to another CLICK bank.
+                # The CLICK export refuses a TXT to another CLICK bank, and the run sets
+                # the error flag.
                 return None
             return _bit_address_refusal(
                 call, value, args[self.value], target, "Send to a HOLDING register"

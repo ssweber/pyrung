@@ -196,6 +196,17 @@ def test_a_slot_default_is_one_character(
     assert txt[1].default == "A"
 
 
+@pytest.mark.parametrize("made_first", [False, True], ids=["slot-first", "tag-first"])
+def test_a_slot_default_of_none_gives_the_blank(made_first: bool) -> None:
+    txt = Block("TxtNone", TagType.CHAR, 1, 4)
+    if made_first:
+        txt[1]
+        txt[2]
+    txt.slot(1, default=None)
+    txt.slot(2, 3, default=None)
+    assert [txt[i].default for i in (1, 2, 3)] == ["\x00"] * 3
+
+
 @pytest.mark.parametrize("seed, error", [(5, TypeError), ("AB", ValueError)])
 def test_a_block_factory_default_is_one_character(seed: Any, error: type[Exception]) -> None:
     txt = Block("TxtFactory", TagType.CHAR, 1, 4, default_factory=lambda addr: seed)

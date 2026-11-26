@@ -39,9 +39,9 @@
   - a text constant with a character past code 255, such as "€"
 
   Fill one character, or `copy()` the value to write one character into each TXT.
-- A `Char` tag or a TXT block slot now raises when you give it a default that is not one character with a code of 0..255, or "" (it kept the value). `slot()` raises when you call it.
+- A `Char` tag or a TXT block slot now raises when its default is not "" or one character with a code of 0..255 (it kept the value). `slot()` raises when you call it.
   Give a text default, such as `"5"`.
-- `run_function()` and `run_enabled_function()` now raise `TypeError` at the scan when the function returns a value that is not text for a TXT (it stored the value). They raise `ValueError` for text that is not one character.
+- `run_function()` and `run_enabled_function()` now raise `TypeError` at the scan when the function returns a value that is not text for a TXT (it stored the value). They raise `ValueError` for text that a TXT cannot hold.
   Return one character, or "" for a blank.
 
 ### Fixes

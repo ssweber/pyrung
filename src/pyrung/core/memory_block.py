@@ -785,8 +785,13 @@ class Block:
             self._slot_names_changed += 1
         held = new_value
         if field_name == "default" and self.type is TagType.CHAR:
-            # Refuse the default here, not when a later block[addr] makes the tag.
-            held = char_default(new_value, f"Slot {self.name}[{addr}]")
+            # Refuse the default here, not when a later block[addr] makes the tag.  None
+            # asks for the blank, as it does for a tag made after this call.
+            held = (
+                BLANK_CHAR
+                if new_value is None
+                else char_default(new_value, f"Slot {self.name}[{addr}]")
+            )
         entry = self._slot_config.get(addr)
         if entry is None:
             entry = SlotConfig()
