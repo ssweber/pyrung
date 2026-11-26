@@ -24,7 +24,7 @@ math((-DS[1]) ** 2, DF[2])           # CLICK's - DS1 ^ 2, which is 4 for DS1 = 2
 
 Python groups a pyrung formula in Python's order. CLICK reads a formula in its own order, tightest first:
 
-1. a minus sign before a constant or an address
+1. a minus sign before a constant, an address, a bracket or a function
 2. `^`
 3. `*`, `/`, MOD, AND, OR and XOR, all at one level
 4. `+` and `-`

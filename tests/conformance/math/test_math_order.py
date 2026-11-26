@@ -6,8 +6,9 @@ export types each formula without brackets (``pyrung.conformance._formula``). Th
 reads it in its own order. In-process, the case's ``math()`` runs the order that pyrung's
 importer reads from the same text.
 
-A CLICK reads a minus sign before an address first. Then it reads ``^``, then ``*``, ``/``,
-MOD, AND, OR and XOR at one level, then ``+`` and ``-``. It applies each level from the left.
+A CLICK reads a minus sign before an address, a bracket or a function first. Then it reads
+``^``, then ``*``, ``/``, MOD, AND, OR and XOR at one level, then ``+`` and ``-``. It applies
+each level from the left.
 Each case runs formulas that a CLICK 4.00 on a C2-03CPU was read running on 2026-11-25 and
 2026-11-26. It expects the values read then. Most cases move each constant into a register of
 its own, so that pyrung's source keeps the operation. ``-2 ^ 2`` and ``-7 MOD 3`` keep their
@@ -15,17 +16,18 @@ constants, because they test a minus sign written against a constant. A decimal 
 into the Results. A hex case writes into a DH and copies the DH into a Result, so FFFFh reads
 -1.
 
-The ``probe`` cases ask about pairs of operators that no reading has settled
-(``formula.CONFIRMED_PAIRS`` lists the settled ones). Each probe expects the value of the order
+Each case of ``PROBES`` asks about one pair of operators. It expects the value of the order
 that pyrung applies, which follows CLICK's levels. ``PROBES`` lists each formula with that
 value and the value of the other order. ``test_each_probe_tells_the_two_orders_apart``
-computes both. When a probe case passes on a CLICK, add its pair to
-``formula.CONFIRMED_PAIRS`` with the round, and add the readings to the ``READINGS`` of
-``tests/click/test_click_formula.py``.
+computes both. A case whose pair ``formula.CONFIRMED_PAIRS`` lists is an ordinary case,
+because a reading settled the pair. The rest are probes (``probe=``). When a probe passes on a
+CLICK, add its readings to the ``READINGS`` of ``tests/click/test_click_formula.py``, and its
+pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
-No probe asks about a minus sign before ``/`` or MOD. In decimal mode the two orders give the
-same value. In hex mode the value turns on whether a CLICK divides the 16-bit form of the
-negative value, and no reading has shown that yet.
+No probe asks about a minus sign before ``/`` or MOD. A CLICK's hex MOD does not wrap a
+negative dividend to 16 bits, and its remainder takes the dividend's sign. So the two orders
+give the same value for MOD in both modes, and for ``/`` in decimal mode. For a hex ``/`` they
+differ only if a CLICK rounds a negative quotient down, and no reading has shown that yet.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -41,11 +43,14 @@ import pytest
 
 from pyrung import LiteralExpr
 from pyrung.click.codegen.formula import (
+    CONFIRMED_PAIRS,
     Address,
     BinaryOp,
     Formula,
     Negate,
     Number,
+    _scopes,
+    pair_kind,
     parse_with_unconfirmed_pairs,
 )
 from pyrung.click.codegen.utils import _guessed_order, _operator_words
@@ -170,9 +175,17 @@ def _hex_text(value: int) -> str:
     return f"{value & 0xFFFF:X}h"
 
 
+def _pair(typed: str, hex_mode: bool) -> tuple[str, str]:
+    """Return the two operators of the probe formula *typed*, in the order it writes them."""
+    tree = parse_with_unconfirmed_pairs(typed, hex_mode=hex_mode)[0]
+    [(left, _), (right, _)], *inner = _scopes(tree)
+    assert not any(inner)
+    return left, right
+
+
 def _probe(case_id: str, hex_mode: bool, first: int, readings: Sequence[tuple[str, int]]) -> Case:
     typed = _registers([readings[0][0]], "DH" if hex_mode else "DS", 1)[0][0]
-    [(left, right)] = parse_with_unconfirmed_pairs(typed, hex_mode=hex_mode)[1]
+    left, right = _pair(typed, hex_mode)
     if left == right:
         uses = f"{_operator_words(left)} twice"
     else:
@@ -182,13 +195,14 @@ def _probe(case_id: str, hex_mode: bool, first: int, readings: Sequence[tuple[st
     sentence = f"For {uses}, a CLICK applies {order}. " + " and ".join(
         f"{formula} gives {show(value)}" for formula, value in readings
     )
+    settled = {pair_kind(left), pair_kind(right)} in [{a, b} for a, b, _ in CONFIRMED_PAIRS]
     return _order_case(
         sentence,
         case_id,
         readings,
         hex_mode=hex_mode,
         first=first,
-        probe=f"whether a CLICK applies {order} for {uses}",
+        probe=None if settled else f"whether a CLICK applies {order} for {uses}",
     )
 
 
@@ -396,8 +410,8 @@ def test_each_probe_tells_the_two_orders_apart(case_id: str) -> None:
     for formula, value, other in readings:
         typed, staged = _registers([formula], prefix, 1)
         registers = {f"{prefix}{address}": number for address, number in staged.items()}
-        tree, unconfirmed = parse_with_unconfirmed_pairs(typed[0], hex_mode=hex_mode)
-        [pair] = unconfirmed
+        tree = parse_with_unconfirmed_pairs(typed[0], hex_mode=hex_mode)[0]
+        pair = _pair(typed[0], hex_mode)
         pairs.add(frozenset(pair))
         [regrouped] = [
             regrouped

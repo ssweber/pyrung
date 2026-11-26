@@ -20,9 +20,10 @@ from pyrung.click.codegen.constants import _OPERAND_PREFIXES
 
 #: CLICK's binary operators by tier, tightest first. A CLICK applies the operators of one
 #: tier from the left, so ``2 ^ 3 ^ 2`` is 64 and ``6 OR 3 AND 8`` is 0. A minus sign
-#: before an address binds tighter than every tier, so ``- DS1 ^ 2`` is 4 with DS1 = 2.
-#: The parse reads a minus sign before a bracket or a function the same way, but no CLICK
-#: has been read running one. CLICK 4.00 on a C2-03CPU was read for the rest.
+#: before an address binds tighter than every tier, so ``- DS1 ^ 2`` is 4 with DS1 = 2. A
+#: minus sign before a bracket or a function binds tighter than ``^``, ``+`` and AND. The parse
+#: reads it tightest against the other operators too. CLICK 4.00 on a C2-03CPU was read for
+#: this order.
 BINARY_TIERS: tuple[tuple[str, ...], ...] = (
     ("^",),
     ("*", "/", "MOD", "AND", "OR", "XOR"),
@@ -34,7 +35,7 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 NEGATE_ADDRESS = "a minus sign before an address"
 
 #: A minus sign before anything but an address or a constant, as an operator in
-#: :data:`CONFIRMED_PAIRS`. No CLICK reading has shown where it sits in CLICK's order.
+#: :data:`CONFIRMED_PAIRS`. The readings ran it before a bracket and before a function.
 NEGATE_GROUP = "a minus sign before a bracket, a function, a pointer, PI or another minus sign"
 
 #: The words for each kind of :data:`NEGATE_GROUP`, so that a warning names what the formula
@@ -61,10 +62,11 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "MOD", "b12"),
     ("^", "+", "b12"),
     ("^", "-", "b12"),
-    ("*", "/", "b11, b12"),
-    ("*", "MOD", "b10, b11"),
+    ("*", "/", "b11, b12, b15"),
+    ("*", "MOD", "b10, b11, b15"),
     ("*", "AND", "b11"),
     ("*", "+", "b10"),
+    ("*", "-", "b15"),
     ("/", "/", "b10"),
     ("/", "OR", "b14"),
     ("/", "+", "b12"),
@@ -75,9 +77,12 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("AND", "OR", "b10"),
     ("AND", "XOR", "b10, b11"),
     ("AND", "+", "b11"),
+    ("AND", "-", "b15"),
     ("OR", "XOR", "b11"),
     ("OR", "+", "b11"),
+    ("OR", "-", "b15"),
     ("XOR", "+", "b11"),
+    ("XOR", "-", "b15"),
     ("-", "-", "b10"),
     (NEGATE_ADDRESS, "^", "b11"),
     (NEGATE_ADDRESS, "AND", "b12"),
@@ -85,6 +90,9 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_ADDRESS, "XOR", "b14"),
     (NEGATE_ADDRESS, "+", "b12"),
     (NEGATE_ADDRESS, "-", "b12"),
+    (NEGATE_GROUP, "^", "b15"),
+    (NEGATE_GROUP, "AND", "b15"),
+    (NEGATE_GROUP, "+", "b15"),
 )
 
 #: Formulas that a CLICK was read running, as (text, hex mode), whose pairs of operators the

@@ -109,6 +109,33 @@ READINGS: list[tuple[str, str, bool, dict[str, int], float]] = [
     ("b14-3r", "3h AND 7h MOD 5h", True, {}, 3),
     ("b14-4", "6h / 2h OR 1h", True, {}, 3),
     ("b14-4r", "4h OR 6h / 2h", True, {}, 3),
+    # b15 also read t3, m1 and m1b, which give the same value in either order. It read u6
+    # too, which adds nothing to u5 and leaves open what a minus sign before LSH applies to.
+    ("b15-t1", "7h / 2h * 2h", True, {}, 6),
+    ("b15-t2", "7h / 2h * 2h + 0h", True, {}, 6),
+    ("b15-p1", "10 - 2 * 3", False, {}, 4),
+    ("b15-p1r", "2 * 3 - 1", False, {}, 5),
+    ("b15-p2", "7h - 1h AND 3h", True, {}, 6),
+    ("b15-p2r", "Ah AND 7h - 1h", True, {}, 1),
+    ("b15-p3", "5h - 1h OR 2h", True, {}, 2),
+    ("b15-p3r", "1h OR 5h - 1h", True, {}, 4),
+    ("b15-p4", "5h - 1h XOR 3h", True, {}, 3),
+    ("b15-p4r", "3h XOR 5h - 1h", True, {}, 5),
+    ("b15-u1", "- ( DS1 ) ^ 2", False, {"DS1": 4}, 16),
+    ("b15-u1x", "- ( DS1 ) ^ 3", False, {"DS1": 4}, -64),
+    ("b15-u2", "- SQRT ( DS1 ) ^ 2", False, {"DS1": 4}, 4),
+    ("b15-u2x", "- SQRT ( DS1 ) ^ 3", False, {"DS1": 4}, -8),
+    ("b15-u3", "- ( DS1 ) + 2", False, {"DS1": 4}, -2),
+    ("b15-u4", "- SQRT ( DS1 ) + 2", False, {"DS1": 4}, 0),
+    ("b15-u5", "- ( DH100 ) AND 7h", True, {"DH100": 2}, 6),
+    ("b15-m2", "DH103 * DH105 MOD DH104", True, {"DH103": 0x100, "DH105": 0x101, "DH104": 7}, 6),
+    (
+        "b15-m2b",
+        "DH103 * DH105 MOD DH104",
+        True,
+        {"DH103": 0xFF38, "DH105": 0xFE70, "DH104": 7},
+        5,
+    ),
 ]
 
 
@@ -258,27 +285,25 @@ _BRACKET = "a minus sign before a bracket"
 @pytest.mark.parametrize(
     ("text", "hex_mode", "pairs"),
     [
-        ("DS1 - DS2 * 3", False, [("-", "*")]),
-        ("DS1 * 3 - DS2", False, [("*", "-")]),
-        ("DH1 - DH2 AND 3h", True, [("-", "AND")]),
-        ("DH1 OR DH2 - 1h", True, [("OR", "-")]),
-        ("DH1 - DH2 XOR 3h", True, [("-", "XOR")]),
-        ("SQRT ( DS1 - DS2 * 3 )", False, [("-", "*")]),
+        ("DS1 / DS2 MOD 3", False, [("/", "MOD")]),
+        ("DS1 MOD 3 / DS2", False, [("MOD", "/")]),
+        ("DH1 / DH2 AND 3h", True, [("/", "AND")]),
+        ("DH1 MOD DH2 OR 1h", True, [("MOD", "OR")]),
+        ("DH1 XOR DH2 * 3h", True, [("XOR", "*")]),
+        ("SQRT ( DS1 / DS2 MOD 3 )", False, [("/", "MOD")]),
         # Two operators that do not meet still count.
-        ("DS1 - DS2 + DS3 * DS4", False, [("-", "+"), ("-", "*")]),
+        ("DS1 / DS2 + DS3 MOD DS4", False, [("/", "MOD")]),
         ("DS1 + DS2 - DS3", False, [("+", "-")]),
         ("DS1 + DS2 + DS3", False, [("+", "+")]),
         ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
-        ("DH1 / DH2 MOD 3h", True, [("/", "MOD")]),
-        ("DH1 XOR DH2 * 3h", True, [("XOR", "*")]),
         # A minus sign pairs with each operator to its right.
-        ("- ( DS1 ) ^ 2", False, [(_BRACKET, "^")]),
-        ("- ( DS1 ) * DS2 + DS3", False, [(_BRACKET, "*"), (_BRACKET, "+")]),
-        ("DS1 * - ( DS2 ) + DS3", False, [(_BRACKET, "+")]),
-        ("- SQRT ( DS1 ) ^ 2", False, [("a minus sign before a function", "^")]),
-        ("- PI ^ 2", False, [("a minus sign before PI", "^")]),
-        ("- DH[DS1] AND 3h", True, [("a minus sign before a pointer", "AND")]),
-        ("- - DS1 ^ 2", False, [("a minus sign before another minus sign", "^")]),
+        ("- ( DS1 ) * DS2", False, [(_BRACKET, "*")]),
+        ("- ( DS1 ) * DS2 - DS3", False, [(_BRACKET, "*"), (_BRACKET, "-")]),
+        ("DS1 * - ( DS2 ) - DS3", False, [(_BRACKET, "-")]),
+        ("- SQRT ( DS1 ) * 2", False, [("a minus sign before a function", "*")]),
+        ("- PI * 2", False, [("a minus sign before PI", "*")]),
+        ("- DH[DS1] OR 3h", True, [("a minus sign before a pointer", "OR")]),
+        ("- - DH1 XOR 3h", True, [("a minus sign before another minus sign", "XOR")]),
         ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
         ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
         ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
@@ -320,6 +345,10 @@ def test_the_words_for_each_minus_sign_name_its_operator() -> None:
         # Readings settled these pairs.
         ("DS1 * 2 + 3", False),
         ("DH1 AND DH2 OR DH3", True),
+        ("DS1 - DS2 * 3", False),
+        ("DH1 - DH2 XOR 3h", True),
+        ("- ( DS1 ) ^ 2", False),
+        ("- SQRT ( DS1 ) + 2", False),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
@@ -458,9 +487,9 @@ def test_imported_constants_compute_what_math_computes(
     ("text", "dest", "uses", "guess"),
     [
         ("DH1 / DH2 MOD DH3", "DH4,mode=hex", "'/' and 'MOD'", "the two from the left"),
-        ("DS1 - DS2 * 3", "DF1", "'-' and '*'", "'*' first"),
-        ("- ( DS1 ) ^ 2", "DF1", f"{_BRACKET} and '^'", "the minus sign first"),
-        ("- PI ^ 2", "DF1", "a minus sign before PI and '^'", "the minus sign first"),
+        ("DH1 XOR DH2 * 3h", "DH4,mode=hex", "'XOR' and '*'", "the two from the left"),
+        ("- ( DS1 ) * 2", "DF1", f"{_BRACKET} and '*'", "the minus sign first"),
+        ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
     ],
 )
@@ -530,6 +559,13 @@ def _program(readings):
     return ns["logic"], ns["mapping"], formulas, [ns[dest] for dest in dests]
 
 
+#: Readings whose value pyrung's ``math()`` does not give yet. A hex ``/`` in pyrung keeps the
+#: fraction until the store, so ``7h / 2h * 2h`` gives 7h. A CLICK drops the fraction at each
+#: ``/`` and gives 6h. Remove each case here in the commit that makes pyrung give the PLC's
+#: value.
+PENDING_HEX_MATH = {"b15-t1", "b15-t2"}
+
+
 def _close(got: Any, want: float) -> bool:
     return math.isclose(float(got), want, abs_tol=1e-9)
 
@@ -548,12 +584,12 @@ def test_imported_formula_gives_the_plc_value_on_every_backend(confirmed, monkey
     logic, _mapping, _formulas, dests = confirmed
     results = _on_every_backend(logic, monkeypatch, dests, scans=1)
     for backend, values in results.items():
-        wrong = [
-            (reading[0], got, reading[4])
+        wrong = {
+            reading[0]
             for reading, got in zip(READINGS, values, strict=True)
             if not _close(got, reading[4])
-        ]
-        assert wrong == [], backend
+        }
+        assert wrong == PENDING_HEX_MATH, backend
 
 
 def test_imported_formula_exports_what_click_reads_the_same(confirmed) -> None:
@@ -573,12 +609,12 @@ def test_imported_formula_exports_what_click_reads_the_same(confirmed) -> None:
     plc = PLC(ns["logic"])
     plc.step()
     tags = plc.current_state.tags
-    wrong = [
-        (reading[0], tags[dest.name], reading[4])
+    wrong = {
+        reading[0]
         for reading, dest in zip(READINGS, dests, strict=True)
         if not _close(tags[dest.name], reading[4])
-    ]
-    assert wrong == []
+    }
+    assert wrong == PENDING_HEX_MATH
 
 
 def test_imported_formula_with_an_unconfirmed_pair_imports_with_a_warning() -> None:
@@ -591,9 +627,14 @@ def test_imported_formula_with_an_unconfirmed_pair_imports_with_a_warning() -> N
             typed, staged = _registers([formula], prefix, 1)
             registers = {f"{prefix}{address}": number for address, number in staged.items()}
             readings.append((case_id, typed[0], hex_mode, registers, value))
+    unconfirmed = [
+        text
+        for _, text, hex_mode, _, _ in readings
+        if parse_click_formula(text, hex_mode=hex_mode) is None
+    ]
     with pytest.warns(UserWarning, match="no one has checked that order on a CLICK yet") as caught:
         logic, _mapping, _formulas, dests = _program(readings)
-    assert len(caught) == len(readings)
+    assert len(caught) == len(unconfirmed)
 
     # The import applies the order that the warning names.
     plc = PLC(logic)

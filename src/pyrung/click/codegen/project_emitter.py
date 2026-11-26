@@ -1184,7 +1184,7 @@ finds a path, but its failure to find one is not a failed verification.
 Python reads a formula in Python's order. CLICK reads a Math formula in its own
 order, tightest first:
 
-1. a minus sign before a constant or an address
+1. a minus sign before a constant, an address, a bracket or a function
 2. `^`
 3. `*`, `/`, MOD, AND, OR and XOR, all at one level
 4. `+` and `-`

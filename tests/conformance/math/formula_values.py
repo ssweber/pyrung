@@ -13,6 +13,7 @@ from dataclasses import replace
 from pyrung.click.codegen.formula import (
     Address,
     BinaryOp,
+    Call,
     Formula,
     Negate,
     Number,
@@ -23,33 +24,41 @@ from pyrung.click.codegen.formula import (
 def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
     """Return what a CLICK computes for *node*, by the rules the readings show.
 
-    A decimal Math computes in doubles, and its MOD keeps the dividend's sign. A hex Math
-    holds each step as 16 bits, unsigned, and its ``/`` drops the fraction.
+    A decimal Math computes in doubles, and its MOD keeps the dividend's sign. A hex Math reads
+    each DH as unsigned and computes in whole numbers of any size. Its ``/`` drops the fraction,
+    and its MOD keeps the dividend's sign. It stores the low 16 bits of the result.
     """
+    value = _value(node, hex_mode, registers)
+    return int(value) & 0xFFFF if hex_mode else value
+
+
+def _value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
     if isinstance(node, Number):
-        return int(node.value) & 0xFFFF if hex_mode else float(node.value)
+        return int(node.value) if hex_mode else float(node.value)
     if isinstance(node, Address):
         value = registers[f"{node.bank}{node.index}"]
         return value & 0xFFFF if hex_mode else float(value)
     if isinstance(node, Negate):
-        value = -click_value(node.operand, hex_mode, registers)
-        return int(value) & 0xFFFF if hex_mode else value
+        return -_value(node.operand, hex_mode, registers)
+    if isinstance(node, Call):
+        assert node.name == "SQRT", f"no model of {node.name}"
+        return math.sqrt(_value(node.args[0], hex_mode, registers))
     assert isinstance(node, BinaryOp)
-    a = click_value(node.left, hex_mode, registers)
-    b = click_value(node.right, hex_mode, registers)
+    a = _value(node.left, hex_mode, registers)
+    b = _value(node.right, hex_mode, registers)
     if hex_mode:
         x, y = int(a), int(b)
         hex_steps: dict[str, Callable[[], int]] = {
             "+": lambda: x + y,
             "-": lambda: x - y,
             "*": lambda: x * y,
-            "/": lambda: x // y,
-            "MOD": lambda: x % y,
+            "/": lambda: _truncated(x, y),
+            "MOD": lambda: x - y * _truncated(x, y),
             "AND": lambda: x & y,
             "OR": lambda: x | y,
             "XOR": lambda: x ^ y,
         }
-        return hex_steps[node.op]() & 0xFFFF
+        return hex_steps[node.op]()
     decimal_steps: dict[str, Callable[[], float]] = {
         "+": lambda: a + b,
         "-": lambda: a - b,
@@ -59,6 +68,11 @@ def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> flo
         "MOD": lambda: math.fmod(a, b),
     }
     return decimal_steps[node.op]()
+
+
+def _truncated(x: int, y: int) -> int:
+    quotient = abs(x) // abs(y)
+    return quotient if (x < 0) == (y < 0) else -quotient
 
 
 def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
