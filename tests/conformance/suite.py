@@ -100,6 +100,7 @@ from tests.conformance.drum_shift_search import (
 )
 from tests.conformance.math import (
     test_agg_more,
+    test_hex_divmod,
     test_math,
     test_math_error,
     test_math_more,
@@ -361,6 +362,8 @@ APART_GROUPS = [
     test_td_count_on.group,
     # Stores that a CLICK was read making in programs of their own.
     test_fill_binary.group,
+    # Hex Math stores that a CLICK was read making in a program of its own.
+    test_hex_divmod.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -415,6 +418,9 @@ APART_PARTS: dict[str, ApartPart] = {
     # A Fill of a number into TXT registers, and Copy Binary into a DD or a DF.  A CLICK was
     # read making each in a program of its own.
     "follow5_reads": ApartPart(("fill_binary",)),
+    # What a hex Math's division and MOD store.  A CLICK was read making each in a program
+    # of its own.
+    "follow6_reads": ApartPart(("hex_divmod",)),
     # Values staged for raw Modbus reads, and the echo of raw writes. test_raw_requests uses
     # them.
     "modbus_raw": ApartPart(("modbus_raw",)),

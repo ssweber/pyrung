@@ -98,7 +98,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.expression import Expression, log
+from pyrung.core.expression import Expression, LiteralExpr, log
 from pyrung.core.instruction import Instruction
 from pyrung.core.system_points import system
 
@@ -3047,6 +3047,70 @@ class TestBoardPeripheralsAndRunStop:
         with Program(strict=False) as prog:
             with rung():
                 math(make(n, d, z, w, r), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    #: Each row is (label, formula of the Word tags (a, b, c), their values, stored,
+    #: flags as (SC40, SC43, SC46)).  The rows are what a CLICK's hex Math did
+    #: (hardware 2026-11-26).  t1 to t3 typed constants, and here they are tags.
+    _CLICK_HEX_MATH = [
+        ("t1_each_division_truncates", lambda a, b, c: a / b * c, (7, 2, 2), 6, (0, 0, 0)),
+        ("t2_then_adds", lambda a, b, c: a / b * c + 0, (7, 2, 2), 6, (0, 0, 0)),
+        ("t3_quotient_zero", lambda a, b, c: a / b * c, (1, 2, 4), 0, (0, 0, 0)),
+        ("t1_constants", lambda a, b, c: LiteralExpr(7) / 2 * 2, (0, 0, 0), 6, (0, 0, 0)),
+        ("m1_minus_before_mod", lambda a, b, c: -a % b, (0xF0, 3, 0), 0, (0, 0, 0)),
+        ("m1b_negative_mod_sets_sc43", lambda a, b, c: -a % b, (0xF1, 7, 0), 0xFFFD, (0, 1, 0)),
+        ("m2_product_not_cut", lambda a, b, c: a * c % b, (0x100, 7, 0x101), 6, (0, 0, 0)),
+        ("m2b_unsigned_product", lambda a, b, c: a * c % b, (0xFF38, 7, 0xFE70), 5, (0, 0, 0)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make", "values", "stored", "flags"),
+        _CLICK_HEX_MATH,
+        ids=[case[0] for case in _CLICK_HEX_MATH],
+    )
+    def test_click_hex_math_on_every_backend(self, monkeypatch, label, make, values, stored, flags):
+        a, b, c = (Word(name, default=value) for name, value in zip("ABC", values, strict=True))
+        dest = Word("Dest", default=0xBEEF)
+        with Program(strict=False) as prog:
+            with rung():
+                math(make(a, b, c), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    #: Rows as in :attr:`_CLICK_HEX_MATH`, with two Word tags.  No CLICK reading has a
+    #: negative quotient.  Truncation toward zero there is pyrung's assumption, and so is
+    #: its SC43 (a CLICK sets SC43 for a negative difference or MOD, but not for a negative
+    #: OR).  Every backend must make the same assumptions.
+    _HEX_DIVISION = [
+        ("negative_quotient", lambda a, b: -a / b, (7, 2), 0xFFFD, (0, 1, 0)),
+        ("by_a_constant", lambda a, b: a / 2 * 2, (7, 2), 6, (0, 0, 0)),
+        ("by_zero", lambda a, b: a / (b - b) + 5, (7, 2), 5, (1, 0, 0)),
+        # The product passes 2 ** 53, so the dividend is a double.  The MOD brings the
+        # quotient back into range, so a wrong quotient shows.
+        ("double_dividend", lambda a, b: a * a * a * a / b % 7, (0xFFFF, 3), 3, (0, 0, 0)),
+        # A float constant divides in floats.  The quotient of 3 / 0.1 rounds to 30, and
+        # flooring the exact quotient would give 29.
+        ("float_constant_divisor", lambda a, b: a / 0.1, (3, 0), 30, (0, 0, 0)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make", "values", "stored", "flags"),
+        _HEX_DIVISION,
+        ids=[case[0] for case in _HEX_DIVISION],
+    )
+    def test_hex_division_agrees_on_every_backend(
+        self, monkeypatch, label, make, values, stored, flags
+    ):
+        a, b = (Word(name, default=value) for name, value in zip("AB", values, strict=True))
+        dest = Word("Dest", default=0xBEEF)
+        with Program(strict=False) as prog:
+            with rung():
+                math(make(a, b), dest)
 
         results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
         expected = (stored, *(bool(flag) for flag in flags))

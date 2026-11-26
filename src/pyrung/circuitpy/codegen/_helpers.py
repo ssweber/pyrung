@@ -347,6 +347,19 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return _term_fail(flags, 40)",
         "",
     ],
+    # A hex Math's / (core _op_hex_div) truncates toward zero.  A division by 0 is 0 and
+    # sets SC40.
+    "_hex_div": [
+        "def _hex_div(a, b, flags):",
+        "    if b == 0:",
+        "        return _term_fail(flags, 40)",
+        "    if isinstance(a, int) and isinstance(b, int):",
+        "        q = abs(a) // abs(b)",
+        "        return q if (a < 0) == (b < 0) else -q",
+        "    q = a / b",
+        "    return float(int(q)) if math.isfinite(q) else q",
+        "",
+    ],
     # A randint() site whose bounds are read gives 0 when the bounds are equal (46, SC46)
     # or are Inf or NaN (43, SC43) (RandIntExpr.evaluate).  The kernel reads the scan's
     # draw.  The board makes its own draw.
@@ -548,7 +561,7 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
         needed.add("_bit_int")
     if needed & {"_rand_term", "_rand_draw", "_permissive_op", "_permissive_math"}:
         needed.add("_term_fail")
-    if needed & {"_pow_calc", "_abs_int", "_calc_div", "_calc_floordiv"}:
+    if needed & {"_pow_calc", "_abs_int", "_calc_div", "_calc_floordiv", "_hex_div"}:
         needed.add("_term_fail")
     if "_pow_calc" in needed:
         needed.add("_pow")

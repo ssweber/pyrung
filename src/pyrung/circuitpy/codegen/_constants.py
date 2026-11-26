@@ -50,6 +50,7 @@ _HELPER_ORDER = (
     "_term_fail",
     "_calc_div",
     "_calc_floordiv",
+    "_hex_div",
     "_rand_term",
     "_rand_draw",
     "_mod",

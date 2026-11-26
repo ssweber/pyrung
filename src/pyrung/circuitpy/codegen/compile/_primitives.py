@@ -42,6 +42,7 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
     UnaryExpr,
+    _op_hex_div,
     _op_pow,
     may_be_float,
 )
@@ -177,6 +178,14 @@ def _compile_expression_impl(
         )
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         flags = CALC_FLAGS if strict else None
+        if expr.op is _op_hex_div:
+            # A hex Math's / truncates toward zero (core _op_hex_div).  // gives the same
+            # quotient only for whole operands.  A float constant would floor the exact
+            # quotient, and 3 // 0.1 is 29 where the rule gives 30.
+            if _non_negative_int(expr.left) and _positive_int_literal(expr.right):
+                return f"({left} // {right})"
+            ctx.mark_helper("_hex_div")
+            return f"_hex_div({left}, {right}, {flags})"
         if (not strict or not isinstance(expr, CalcBinaryExpr)) and (
             _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
         ):
@@ -505,6 +514,13 @@ def _non_negative(expr: Any) -> bool:
     return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
 
 
+def _non_negative_int(expr: Any) -> bool:
+    """Return whether *expr* is an int constant of 0 or more or a Bool or Word tag."""
+    if isinstance(expr, LiteralExpr):
+        return _non_negative_int_literal(expr)
+    return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
+
+
 def _abs_floor(expr: UnaryExpr) -> int | None:
     """Return the range bottom that an ``abs()`` swapped by calc_form (ABS_OF_TYPE) refuses."""
     for type_name, op in ABS_OF_TYPE.items():
@@ -549,7 +565,8 @@ def _int_bound(expr: Any) -> float:
             # and inf * 0 is NaN.
             return 0 if left == 0 or right == 0 else left * right
         if symbol == "/":
-            return 0
+            # A hex Math's / of integers is an integer no larger than the dividend.
+            return left if expr.op is _op_hex_div else 0
         if symbol in ("//", "%", ">>"):
             return left
         if symbol in ("&", "|", "^"):

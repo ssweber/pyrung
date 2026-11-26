@@ -4,7 +4,20 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, math, out, rung, system
+from pyrung.core import (
+    PLC,
+    Bool,
+    CompiledPLC,
+    Dint,
+    Int,
+    Program,
+    Real,
+    Word,
+    math,
+    out,
+    rung,
+    system,
+)
 
 
 class TestCalcInstruction:
@@ -88,6 +101,26 @@ class TestCalcInstruction:
         assert tags["ByTag"] == -32768
         assert tags["IntoDint"] == -32768
         assert tags["Low"] == 7
+
+    def test_a_hex_math_truncates_each_division(self, runner_factory):
+        """A hex Math truncates each ``/``, and a decimal Math keeps the fraction.
+
+        A CLICK stored 6h for ``7h / 2h * 2h`` (2026-11-26).  The same formula on Int tags
+        stores 7.
+        """
+        HexA, HexB, HexResult = Word("HexA"), Word("HexB"), Word("HexResult")
+        DecA, DecB, DecResult = Int("DecA"), Int("DecB"), Int("DecResult")
+
+        with Program() as logic:
+            with rung():
+                math(HexA / HexB * HexB, HexResult)
+                math(DecA / DecB * DecB, DecResult)
+
+        runner = runner_factory(logic)
+        runner.patch({"HexA": 7, "HexB": 2, "DecA": 7, "DecB": 2})
+        runner.step()
+        assert runner.current_state.tags["HexResult"] == 6
+        assert runner.current_state.tags["DecResult"] == 7
 
     def test_real_result(self, runner_factory):
         Enable = Bool("Enable")
