@@ -319,8 +319,6 @@ _MODE_OPERATORS = {
     True: ("+", "-", "*", "/", "MOD", "AND", "OR", "XOR"),
 }
 
-_FLAGS = ("division_error", "out_of_range", "math_operation_error")
-
 
 def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
     """Return each pair of operators that no reading settled, with its mode and a formula."""
@@ -349,21 +347,20 @@ class _PyrungRun:
         self.instruction = CalcInstruction(pyrung_expression(tree, tags), dest_type("Dest"))
         execute(self.instruction, SystemState())
 
-    def __call__(self, context: ScanContext, values: tuple[float, ...]) -> tuple[Any, ...]:
+    def __call__(self, context: ScanContext, values: tuple[float, ...]) -> Any:
         for name, value in zip(self.names, values, strict=False):
             context.set_tag(name, value)
-        for flag in _FLAGS:
-            context.set_tag(f"fault.{flag}", False)
         self.instruction.execute(context, True)
-        flags = frozenset(flag for flag in _FLAGS if context.get_tag(f"fault.{flag}"))
-        return context.get_tag("Dest"), flags
+        return context.get_tag("Dest")
 
 
 def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
     """Return how the two groupings of *text* differ, or None where they agree.
 
-    They must agree in value and flags in pyrung's ``math()`` and in the model of a CLICK, at
-    each point of the grid. A point where the model has no reading counts as a difference.
+    At each point of the grid, both groupings must give the same value and flags in the model
+    of a CLICK, and pyrung's ``math()`` must store that value. A point where the model has no
+    reading counts as a difference. pyrung's flags are not compared, because a flag that pyrung
+    gets wrong under both groupings is a flag bug, not a question of order (ruled 2026-11-26).
     """
     tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
@@ -373,9 +370,6 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
         runs = [_PyrungRun(t, bank, operand_type, dest_type) for t in (tree, regrouped)]
         context = ScanContext(SystemState())
         for values in itertools.product(grid, repeat=count):
-            pyrung = [run(context, values) for run in runs]
-            if pyrung[0] != pyrung[1]:
-                return f"pyrung gives {pyrung} for {values} into a {dest}"
             registers = {f"{bank}{index}": value for index, value in enumerate(values, 1)}
             try:
                 click = [click_result(t, hex_mode, registers, dest) for t in (tree, regrouped)]
@@ -383,6 +377,9 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
                 return f"no reading shows {unread} for {values} into a {dest}"
             if click[0] != click[1]:
                 return f"the model of a CLICK gives {click} for {values} into a {dest}"
+            pyrung = [run(context, values) for run in runs]
+            if pyrung != [click[0][0]] * 2:
+                return f"pyrung stores {pyrung} for {values} into a {dest}, a CLICK {click[0][0]}"
     return None
 
 
@@ -411,23 +408,15 @@ _BRACKET = "a minus sign before a bracket"
         # Two operators that do not meet still count.
         ("DS1 / DS2 + DS3 MOD DS4", False, [("/", "MOD")]),
         ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
-        # Both groupings give the same value, but no reading shows whether an intermediate
-        # result outside the destination's range raises SC43 (math_order/width_int).
-        ("DS1 + DS2 - DS3", False, [("+", "-")]),
-        ("DS1 + DS2 + DS3", False, [("+", "+")]),
-        ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
-        ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
-        ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
-        # Nor does a reading show this for a Word (math_order/width_word), or what a hex
-        # division or MOD by zero does inside a formula (math_order/hex_by_zero).
-        ("DH1 * DH2 * DH3", True, [("*", "*")]),
+        # Both groupings give the same value, but no reading shows what a hex division or MOD
+        # by zero does inside a formula (math_order/hex_by_zero).
         ("- DH1 / DH2", True, [(NEGATE_ADDRESS, "/")]),
         ("- DH1 MOD DH2", True, [(NEGATE_ADDRESS, "MOD")]),
+        ("- ( DH1 ) / DH2", True, [(_BRACKET, "/")]),
         # A minus sign pairs with each operator to its right.
-        ("- ( DS1 ) * DS2", False, [(_BRACKET, "*")]),
-        ("- ( DS1 ) * DS2 - DS3", False, [(_BRACKET, "*"), (_BRACKET, "-")]),
+        ("- ( DS1 ) * DS2 - DS3", False, [(_BRACKET, "-")]),
+        ("- ( DS1 ) - DS2 * DS3", False, [(_BRACKET, "-")]),
         ("DS1 * - ( DS2 ) - DS3", False, [(_BRACKET, "-")]),
-        ("- SQRT ( DS1 ) * 2", False, [("a minus sign before a function", "*")]),
         ("- PI * 2", False, [("a minus sign before PI", "*")]),
         ("- DH[DS1] OR 3h", True, [("a minus sign before a pointer", "OR")]),
         ("- - DH1 XOR 3h", True, [("a minus sign before another minus sign", "XOR")]),
@@ -483,6 +472,17 @@ def test_the_words_for_each_minus_sign_name_its_operator() -> None:
         ("DH1 AND DH2 AND DH3", True),
         ("DH1 OR DH2 OR DH3", True),
         ("DH1 XOR DH2 XOR DH3", True),
+        ("DS1 + DS2 + DS3", False),
+        ("DS1 * DS2 * DS3", False),
+        ("DS1 + DS2 - DS3", False),
+        ("- DS2 * 4", False),
+        ("- DS1 / 2", False),
+        ("- DS2 MOD 3", False),
+        ("- ( DS1 ) * DS2", False),
+        ("- SQRT ( DS1 ) * 2", False),
+        ("DH1 + DH2 - DH3", True),
+        ("DH1 * DH2 * DH3", True),
+        ("- DH1 * DH2", True),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
@@ -622,7 +622,7 @@ def test_imported_constants_compute_what_math_computes(
     [
         ("DH1 / DH2 MOD DH3", "DH4,mode=hex", "'/' and 'MOD'", "the two from the left"),
         ("DH1 XOR DH2 * 3h", "DH4,mode=hex", "'XOR' and '*'", "the two from the left"),
-        ("- ( DS1 ) * 2", "DF1", f"{_BRACKET} and '*'", "the minus sign first"),
+        ("- ( DS1 ) - 2", "DF1", f"{_BRACKET} and '-'", "the minus sign first"),
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
     ],

@@ -98,22 +98,33 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
 #: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
 #: readings.
-READ_FORMULAS: tuple[tuple[str, bool], ...] = (
-    ("5 - 3 + 1", False),
-    ("- DS1 * 3", False),
-    ("- DS1 MOD 3", False),
-)
+READ_FORMULAS: tuple[tuple[str, bool], ...] = (("5 - 3 + 1", False),)
 
-#: Pairs of operators whose two groupings give the same value and the same fault flags, as
-#: (first operator, second operator, hex mode) in the order that the formula writes them. Sam
-#: ruled on 2026-11-26 that such a pair needs no reading. ``tests/click/test_click_formula.py``
-#: computes both groupings over a grid of values, with pyrung's ``math()`` and with a model of
-#: what the readings show a CLICK does. It checks that this list holds each pair that agrees in
-#: both. A pair agrees only if a reading shows each step of both groupings.
+#: Pairs of operators whose two groupings give the same value and the same fault flags on a
+#: CLICK, as (first operator, second operator, hex mode) in the order that the formula writes
+#: them. Sam ruled on 2026-11-26 that such a pair needs no reading.
+#: ``tests/click/test_click_formula.py`` computes both groupings over a grid of values, with a
+#: model of what the readings show a CLICK does. It checks that this list holds each pair whose
+#: groupings agree there, and whose value pyrung's ``math()`` stores. A pair agrees only if a
+#: reading shows each step of both groupings.
 SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
+    ("+", "+", False),
+    ("+", "-", False),
+    ("*", "*", False),
+    (NEGATE_ADDRESS, "*", False),
+    (NEGATE_ADDRESS, "/", False),
+    (NEGATE_ADDRESS, "MOD", False),
+    (NEGATE_GROUP, "*", False),
+    (NEGATE_GROUP, "/", False),
+    (NEGATE_GROUP, "MOD", False),
+    ("+", "+", True),
+    ("+", "-", True),
+    ("*", "*", True),
     ("AND", "AND", True),
     ("OR", "OR", True),
     ("XOR", "XOR", True),
+    (NEGATE_ADDRESS, "*", True),
+    (NEGATE_GROUP, "*", True),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.

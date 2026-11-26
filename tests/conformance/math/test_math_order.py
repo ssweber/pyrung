@@ -25,27 +25,28 @@ CLICK, add its readings to the ``READINGS`` of ``tests/click/test_click_formula.
 pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
 No probe asks about a minus sign before ``/`` or MOD. Both orders give the same value in
-pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them apart. They
-can differ only at a step that no reading shows. The ``WIDTHS`` cases ask about those steps.
-Each brackets its formulas, so the order is fixed and only the step is read. Each expects
-what pyrung does.
+pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them apart.
+``formula.SAME_VALUE_PAIRS`` holds them in decimal mode. In hex mode they wait on what a
+division or MOD by zero does inside a formula.
 
-- ``width_int``: an intermediate past the destination's range. Result1 is
-  ``( DS 32767 + DS 1 ) - DS 1`` into an Int, and Result2 is ``( DS -32768 - DS 1 ) + DS 1``.
-  ``numeric/intermediate_fits_32_bits`` shows that a CLICK keeps such an intermediate whole.
-  Result3 is 1 when ``( DD 2147483647 + DD 1 ) - DD 1`` into a DD is 2147483647, and 2 when it
-  is 2147483646. ErrorCode adds 1, 2 and 4 for SC43 after each. In pyrung none raises SC43.
-- ``width_word``: an intermediate past a Word. Result1 is ``( DH FFFFh + DH 1h ) - DH 1h``,
-  and FFFFh reads -1 there. Result2 is ``( DH 0h - DH 1h ) + DH 1h``. A Word that saturates
-  reads FFFEh and 1h. ErrorCode adds 1 and 2 for SC43 after each.
-- ``hex_by_zero``: a hex division or MOD by zero, into DHs preset to 99h. Result1 is
-  ``DH 5h MOD DH 0h``. Result2 is ``( DH 5h / DH 0h ) + DH 1h``, and Result3 is
-  ``( DH 5h MOD DH 0h ) + DH 1h``. pyrung reads 0h, 1h and 1h. If the whole formula is 0,
-  Result2 and Result3 read 0h. If the write is skipped, each reads 99h. ErrorCode adds 1, 2
-  and 4 for SC40 after each, and pyrung reads 2.
+The ``WIDTHS`` cases each bracket their formulas, so the order is fixed and only one step is
+read. ``width_int`` and ``width_word`` run formulas that a CLICK was read running on
+2026-11-26 (reading round b17, cases b1 to b4, b1x and b2x), and expect the values read then.
+A CLICK keeps each intermediate whole and raises SC43 only for the value that it stores.
 
-Once a CLICK has run them, ``formula.SAME_VALUE_PAIRS`` can take the pairs whose groupings
-then agree.
+- ``width_int``: ``( DS 32767 + DS 1 ) - DS 1`` (Result1) and ``( DS 300 * DS 300 ) / DS 400``
+  (Result2) into an Int. Result3 is 1 when ``( DD 2147483647 + DD 1 ) - DD 1`` into a DD is
+  2147483647, and 2 when it is 2147483646. Result4 is 1 when ``( DD 100000 * DD 100000 ) /
+  DD 100000`` is 100000, 2 for 14100 (a 32-bit wrap) and 3 for 21474 (a step held at the top
+  of a DD). ErrorCode adds 1, 2, 4 and 8 for SC43 after each.
+- ``width_word``: ``( DH FFFFh + DH 1h ) - DH 1h`` (Result1, FFFFh reads -1) and
+  ``( DH 0h - DH 1h ) + DH 1h`` (Result2). A Word that saturates reads FFFEh and 1h. ErrorCode
+  adds 1 and 2 for SC43 after each.
+- ``hex_by_zero`` (probe): into DHs preset to 99h, ``( DH 5h / DH 0h ) + DH 1h`` (Result1) and
+  ``( DH 5h MOD DH 0h ) + DH 1h`` (Result2). pyrung reads 1h and 1h. If the whole formula is
+  0, each reads 0h. If the write is skipped, each reads 99h. ErrorCode adds 1 and 2 for SC40
+  after each, and pyrung reads 1. b17 read a lone ``DH 5h MOD DH 0h`` as 0h with SC46, so the
+  case leaves that formula out. It does not read SC46, which pyrung does not raise yet.
 
 CLICK's dialog refused ``5 - - DS1``, so it may refuse ``negneg_power`` too. The case then
 never runs on the PLC.
@@ -248,28 +249,35 @@ SC43 = system.fault.out_of_range
 
 
 def prove_width_int(slot: Any) -> None:
-    top, one, bottom = ds[4461], ds[4462], ds[4463]
-    dint_top, dint_one, dint_dest = dd[173], dd[174], dd[175]
+    top, one, three_hundred, four_hundred = ds[4461], ds[4462], ds[4463], ds[4464]
+    dint_top, dint_one, dint_sum, big, dint_product = (dd[n] for n in range(173, 178))
     with rung(*once(slot)):
         math((top + one) - one, slot.Result1)
     flag_bit(slot, SC43, slot.ErrorCode, 1)
     with rung(*once(slot)):
-        math((bottom - one) + one, slot.Result2)
+        math((three_hundred * three_hundred) / four_hundred, slot.Result2)
     flag_bit(slot, SC43, slot.ErrorCode, 2)
     with rung(*once(slot)):
-        math((dint_top + dint_one) - dint_one, dint_dest)
+        math((dint_top + dint_one) - dint_one, dint_sum)
     flag_bit(slot, SC43, slot.ErrorCode, 4)
-    class_of(slot, dint_dest, [2147483647, 2147483646], slot.Result3)
+    with rung(*once(slot)):
+        math((big * big) / big, dint_product)
+    flag_bit(slot, SC43, slot.ErrorCode, 8)
+    class_of(slot, dint_sum, [2147483647, 2147483646], slot.Result3)
+    class_of(slot, dint_product, [100000, 14100, 21474], slot.Result4)
     finish(slot)
 
 
 def init_width_int(slot: Any) -> None:
     copy(32767, ds[4461])
     copy(1, ds[4462])
-    copy(-32768, ds[4463])
+    copy(300, ds[4463])
+    copy(400, ds[4464])
     copy(2147483647, dd[173])
     copy(1, dd[174])
+    copy(100000, dd[176])
     copy(0, dd[175])
+    copy(0, dd[177])
 
 
 def prove_width_word(slot: Any) -> None:
@@ -295,18 +303,14 @@ def init_width_word(slot: Any) -> None:
 def prove_hex_by_zero(slot: Any) -> None:
     five, zero, one = dh[39], dh[40], dh[41]
     with rung(*once(slot)):
-        math(five % zero, dh[42])
+        math((five / zero) + one, dh[42])
     flag_bit(slot, SC40, slot.ErrorCode, 1)
     with rung(*once(slot)):
-        math((five / zero) + one, dh[43])
+        math((five % zero) + one, dh[43])
     flag_bit(slot, SC40, slot.ErrorCode, 2)
-    with rung(*once(slot)):
-        math((five % zero) + one, dh[44])
-    flag_bit(slot, SC40, slot.ErrorCode, 4)
     with rung(*once(slot)):
         copy(dh[42], slot.Result1)
         copy(dh[43], slot.Result2)
-        copy(dh[44], slot.Result3)
     finish(slot)
 
 
@@ -314,40 +318,40 @@ def init_hex_by_zero(slot: Any) -> None:
     copy(5, dh[39])
     copy(0, dh[40])
     copy(1, dh[41])
-    fill(0x99, dh.select(42, 44))
+    fill(0x99, dh.select(42, 43))
 
 
-#: The cases that ask about a step no reading shows, in the order of the manifest.
+#: The cases that bracket their formulas to read one step, in the order of the manifest.
 WIDTHS = [
     case(
-        "An Int intermediate past 32767 or below -32768 is kept: ( 32767 + 1 ) - 1 is 32767 "
-        "(Result1) and ( -32768 - 1 ) + 1 is -32768 (Result2). A Dint one is kept too "
-        "(Result3 = 1). None raises SC43 (ErrorCode = 0)",
+        "A Math keeps each intermediate whole and checks only the value it stores. "
+        "( 32767 + 1 ) - 1 is 32767 (Result1) and ( 300 * 300 ) / 400 is 225 (Result2) "
+        "into an Int. ( 2147483647 + 1 ) - 1 is 2147483647 (Result3 = 1) and "
+        "( 100000 * 100000 ) / 100000 is 100000 (Result4 = 1) into a DD. None raises SC43 "
+        "(ErrorCode = 0)",
         ladder=prove_width_int,
         init=init_width_int,
         id="width_int",
-        expect={"Result1": 32767, "Result2": -32768, "Result3": 1, "ErrorCode": 0},
-        probe="whether an intermediate past the destination's range raises SC43",
+        expect={"Result1": 32767, "Result2": 225, "Result3": 1, "Result4": 1, "ErrorCode": 0},
     ),
     case(
-        "A Word intermediate past FFFFh or below 0h is kept: ( FFFFh + 1h ) - 1h is FFFFh "
-        "(Result1 = -1) and ( 0h - 1h ) + 1h is 0h (Result2). Neither raises SC43 "
-        "(ErrorCode = 0)",
+        "A hex Math keeps each intermediate whole: ( FFFFh + 1h ) - 1h is FFFFh (Result1 = -1) "
+        "and ( 0h - 1h ) + 1h is 0h (Result2). Neither raises SC43 (ErrorCode = 0)",
         ladder=prove_width_word,
         init=init_width_word,
         id="width_word",
         expect={"Result1": -1, "Result2": 0, "ErrorCode": 0},
-        probe="whether a Word intermediate past FFFFh or below 0h is kept, and raises SC43",
     ),
     case(
-        "A hex division or MOD by zero is 0, and the rest of the formula runs: 5h MOD 0h is 0h "
-        "(Result1), ( 5h / 0h ) + 1h is 1h (Result2) and ( 5h MOD 0h ) + 1h is 1h (Result3). "
-        "Only the division raises SC40 (ErrorCode = 2)",
+        "A hex division or MOD by zero inside a formula is 0, and the rest of the formula "
+        "runs: ( 5h / 0h ) + 1h is 1h (Result1) and ( 5h MOD 0h ) + 1h is 1h (Result2). Only "
+        "the division raises SC40 (ErrorCode = 1)",
         ladder=prove_hex_by_zero,
         init=init_hex_by_zero,
         id="hex_by_zero",
-        expect={"Result1": 0, "Result2": 1, "Result3": 1, "ErrorCode": 2},
-        probe="what a hex division or MOD by zero stores, and whether it raises SC40",
+        expect={"Result1": 1, "Result2": 1, "ErrorCode": 1},
+        probe="what a hex division or MOD by zero inside a formula stores, and whether the "
+        "division raises SC40",
     ),
 ]
 

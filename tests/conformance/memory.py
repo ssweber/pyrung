@@ -536,11 +536,11 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     # The follow5_reads part.
     "fill_binary": {"TXT": range(451, 455), "DD": range(451, 455), "DF": range(451, 454)},
     # The follow5_order part.  Each order case takes a run of 10.  The WIDTHS cases take
-    # DS4461..DS4463, DD173..DD175 and DH34..DH44.
+    # DS4461..DS4464, DD173..DD177 and DH34..DH43.
     "math_order": {
-        "DS": (range(4101, 4191), range(4231, 4281), range(4441, 4464)),
-        "DD": range(173, 176),
-        "DH": (range(34, 45), range(201, 401)),
+        "DS": (range(4101, 4191), range(4231, 4281), range(4441, 4465)),
+        "DD": range(173, 178),
+        "DH": (range(34, 44), range(201, 401)),
     },
     # The follow6_reads part.
     "hex_divmod": {"DH": range(141, 168)},
