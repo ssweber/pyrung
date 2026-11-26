@@ -21,9 +21,9 @@ from pyrung.click.codegen.constants import _OPERAND_PREFIXES
 #: CLICK's binary operators by tier, tightest first. A CLICK applies the operators of one
 #: tier from the left, so ``2 ^ 3 ^ 2`` is 64 and ``6 OR 3 AND 8`` is 0. A minus sign
 #: before an address binds tighter than every tier, so ``- DS1 ^ 2`` is 4 with DS1 = 2. A
-#: minus sign before a bracket or a function binds tighter than ``^``, ``+`` and AND. The parse
-#: reads it tightest against the other operators too. CLICK 4.00 on a C2-03CPU was read for
-#: this order.
+#: minus sign before a bracket binds tighter than ``^``, ``+`` and AND. A minus sign before a
+#: function binds tighter than ``^`` and ``+``. The parse reads a minus sign tightest against
+#: the other operators too. CLICK 4.00 on a C2-03CPU was read for this order.
 BINARY_TIERS: tuple[tuple[str, ...], ...] = (
     ("^",),
     ("*", "/", "MOD", "AND", "OR", "XOR"),
@@ -34,12 +34,11 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 #: before a constant is part of the constant (CLICK stores ``-2`` as H-2), so it is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
 
-#: A minus sign before a bracket or a function, as an operator in :data:`CONFIRMED_PAIRS`.
-NEGATE_GROUP = "a minus sign before a bracket or a function"
-
-#: The words for each kind of :data:`NEGATE_GROUP`, so that a warning names what the formula
-#: has.
-_NEGATE_GROUP_WORDS = ("a minus sign before a bracket", "a minus sign before a function")
+#: A minus sign before a bracket, and before a function, as operators in
+#: :data:`CONFIRMED_PAIRS`. They are two operators, because a function can raise an error of
+#: its own.
+NEGATE_BRACKET = "a minus sign before a bracket"
+NEGATE_FUNCTION = "a minus sign before a function"
 
 #: A minus sign before a pointer, before PI and before another minus sign. Each is an operator
 #: of its own, because no reading has run one yet.
@@ -89,9 +88,11 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_ADDRESS, "XOR", "b14"),
     (NEGATE_ADDRESS, "+", "b12"),
     (NEGATE_ADDRESS, "-", "b12"),
-    (NEGATE_GROUP, "^", "b15"),
-    (NEGATE_GROUP, "AND", "b15"),
-    (NEGATE_GROUP, "+", "b15"),
+    (NEGATE_BRACKET, "^", "b15"),
+    (NEGATE_BRACKET, "AND", "b15"),
+    (NEGATE_BRACKET, "+", "b15"),
+    (NEGATE_FUNCTION, "^", "b15"),
+    (NEGATE_FUNCTION, "+", "b15"),
 )
 
 #: Formulas that a CLICK was read running, as (text, hex mode), whose pairs of operators the
@@ -114,9 +115,9 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     (NEGATE_ADDRESS, "*", False),
     (NEGATE_ADDRESS, "/", False),
     (NEGATE_ADDRESS, "MOD", False),
-    (NEGATE_GROUP, "*", False),
-    (NEGATE_GROUP, "/", False),
-    (NEGATE_GROUP, "MOD", False),
+    (NEGATE_BRACKET, "*", False),
+    (NEGATE_BRACKET, "/", False),
+    (NEGATE_BRACKET, "MOD", False),
     ("+", "+", True),
     ("+", "-", True),
     ("*", "*", True),
@@ -124,7 +125,7 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     ("OR", "OR", True),
     ("XOR", "XOR", True),
     (NEGATE_ADDRESS, "*", True),
-    (NEGATE_GROUP, "*", True),
+    (NEGATE_BRACKET, "*", True),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
@@ -261,8 +262,9 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     each bracket scope. A scope is the whole formula outside brackets, the inside of one
     bracket, or one argument of a function. So ``DS1 - DS2 + DS3 * DS4`` needs the pairs
     ``- +``, ``- *`` and ``+ *``, and ``( DS1 - DS2 ) * 3`` needs none. A minus sign is an
-    operator too, of the kind :data:`NEGATE_ADDRESS`, :data:`NEGATE_GROUP`,
-    :data:`NEGATE_POINTER`, :data:`NEGATE_PI` or :data:`NEGATE_MINUS`.
+    operator too, of the kind :data:`NEGATE_ADDRESS`, :data:`NEGATE_BRACKET`,
+    :data:`NEGATE_FUNCTION`, :data:`NEGATE_POINTER`, :data:`NEGATE_PI` or
+    :data:`NEGATE_MINUS`.
 
     A minus sign applies before every operator to its left in its scope, so it pairs only with
     the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A formula
@@ -291,18 +293,17 @@ def parse_with_unconfirmed_pairs(
             for second, second_is_minus in operators[index + 1 :]:
                 if second_is_minus:
                     continue
-                kinds = (pair_kind(first), pair_kind(second))
-                if (*kinds, hex_mode) in _SAME_VALUE:
+                if (first, second, hex_mode) in _SAME_VALUE:
                     continue
-                if frozenset(kinds) not in _CONFIRMED:
+                if frozenset((first, second)) not in _CONFIRMED:
                     pairs.setdefault(frozenset((first, second)), (first, second))
     return tree, tuple(pairs.values())
 
 
 def operator_kind(node: Formula) -> str | None:
-    """Return the operator of *node* in words for a warning, or None.
+    """Return the operator of *node* as :data:`CONFIRMED_PAIRS` names it, or None.
 
-    :func:`pair_kind` turns the words into the operator that :data:`CONFIRMED_PAIRS` names.
+    The name also reads as words in a warning.
     """
     if isinstance(node, BinaryOp):
         return node.op
@@ -312,19 +313,14 @@ def operator_kind(node: Formula) -> str | None:
     if isinstance(operand, Address) and not operand.bracketed:
         return NEGATE_ADDRESS
     if operand.bracketed:
-        return _NEGATE_GROUP_WORDS[0]
+        return NEGATE_BRACKET
     if isinstance(operand, (Call, RangeCall)):
-        return _NEGATE_GROUP_WORDS[1]
+        return NEGATE_FUNCTION
     if isinstance(operand, Pointer):
         return NEGATE_POINTER
     if isinstance(operand, Pi):
         return NEGATE_PI
     return NEGATE_MINUS
-
-
-def pair_kind(words: str) -> str:
-    """Return the operator that :data:`CONFIRMED_PAIRS` names for the *words* of an operator."""
-    return NEGATE_GROUP if words in _NEGATE_GROUP_WORDS else words
 
 
 def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:

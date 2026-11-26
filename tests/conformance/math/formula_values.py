@@ -15,6 +15,7 @@ from typing import Any
 
 from pyrung import PI, LiteralExpr
 from pyrung.click.codegen.formula import (
+    _CLICK_FUNC_TO_PYTHON,
     Address,
     BinaryOp,
     Call,
@@ -22,8 +23,10 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
+    RangeCall,
     operator_kind,
 )
+from pyrung.core import expression
 
 #: pyrung's operator for each of CLICK's.
 _OPERATORS: dict[str, Callable[[Any, Any], Any]] = {
@@ -75,6 +78,7 @@ def click_result(
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
       a negative divisor
     - an error or Inf from ``^``
+    - every function but SQRT, and SQRT in hex mode
 
     A row such as b17 c1 is case c1 of reading round b17. A CLICK 4.00 on a C2-03CPU was read
     running it on 2026-11-26.
@@ -100,6 +104,18 @@ class _Guard:
             raise Unread(f"hex {op} by zero inside a formula")
         self.flags.add("division_error" if op == "/" else "math_operation_error")
         return 0
+
+    def function(self, name: str, args: list[float]) -> float:
+        # SQRT(4) is 2 (b15 u2 and u4). SQRT of a negative is 0 with SC46, and the rest of the
+        # formula runs (``math_terms/error_terms``). Each other function was read at a few
+        # inputs only (``math_more/functions``, ``math_error/math_errors_do_not_stop``).
+        if name != "SQRT" or self.hex_mode:
+            raise Unread(f"{name} in a formula")
+        (x,) = args
+        if x < 0:
+            self.flags.add("math_operation_error")
+            return 0
+        return math.sqrt(x)
 
     def intermediate(self, value: float) -> None:
         # A CLICK keeps each intermediate whole and checks only the value that it stores. No
@@ -141,9 +157,17 @@ def _value(
     if isinstance(node, Address):
         value = registers[f"{node.bank}{node.index}"]
         return value & 0xFFFF if hex_mode else float(value)
+    if isinstance(node, RangeCall):
+        if guard is None:
+            raise AssertionError(f"no model of {node.name}")
+        raise Unread(f"{node.name} in a formula")
     if isinstance(node, Call):
-        assert node.name == "SQRT", f"no model of {node.name}"
-        result = math.sqrt(_value(node.args[0], hex_mode, registers, guard, False))
+        args = [_value(arg, hex_mode, registers, guard, False) for arg in node.args]
+        if guard is not None:
+            result = guard.function(node.name, args)
+        else:
+            assert node.name == "SQRT", f"no model of {node.name}"
+            result = math.sqrt(args[0])
     elif isinstance(node, Negate):
         result = -_value(node.operand, hex_mode, registers, guard, False)
     else:
@@ -232,6 +256,10 @@ def pyrung_expression(node: Formula, tags: Mapping[int, Any]) -> Any:
         return -(LiteralExpr(0) - inner)
     if isinstance(node, Negate):
         return -pyrung_expression(node.operand, tags)
+    if isinstance(node, Call):
+        name = _CLICK_FUNC_TO_PYTHON[node.name]
+        function = abs if name == "abs" else getattr(expression, name)
+        return function(*(pyrung_expression(arg, tags) for arg in node.args))
     assert isinstance(node, BinaryOp)
     left, right = pyrung_expression(node.left, tags), pyrung_expression(node.right, tags)
     return _OPERATORS[node.op](left, right)

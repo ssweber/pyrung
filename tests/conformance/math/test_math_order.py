@@ -65,7 +65,6 @@ import pytest
 from pyrung.click.codegen.formula import (
     CONFIRMED_PAIRS,
     _scopes,
-    pair_kind,
     parse_with_unconfirmed_pairs,
 )
 from pyrung.click.codegen.utils import _guessed_order, _operator_words
@@ -189,7 +188,7 @@ def _probe(case_id: str, hex_mode: bool, first: int, readings: Sequence[tuple[st
     sentence = f"For {uses}, a CLICK applies {order}. " + " and ".join(
         f"{formula} gives {show(value)}" for formula, value in readings
     )
-    settled = {pair_kind(left), pair_kind(right)} in [{a, b} for a, b, _ in CONFIRMED_PAIRS]
+    settled = {left, right} in [{a, b} for a, b, _ in CONFIRMED_PAIRS]
     return _order_case(
         sentence,
         case_id,
