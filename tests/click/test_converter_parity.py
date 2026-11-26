@@ -3,9 +3,10 @@
 pyrung keeps its own converter rule, so that a program fails when you build it, not when you
 export it.  laddercodec's ``Copy`` judges each pair as CLICK's Copy dialog offers it.  For
 every source, target and converter below, the test builds laddercodec's ``Copy`` and notes
-whether it raises a ``FieldError`` with the code ``copy-converter-bank``.  Then it builds the
-same ``copy()`` in pyrung and notes whether it raises a converter refusal.  The two answers
-must agree, except for the pairs that ``ONLY_LADDERCODEC_REFUSES`` and
+whether it raises a ``FieldError`` with the code ``copy-converter-bank`` or
+``copy-bank-incompatible``.  laddercodec gives the second code for a text constant.  Then
+it builds the same ``copy()`` in pyrung and notes whether it raises a converter refusal.
+The two answers must agree, except for the pairs that ``ONLY_LADDERCODEC_REFUSES`` and
 ``ONLY_PYRUNG_REFUSES`` list.
 
 A second test checks a Bool source into TXT the same way, for Copy and for Fill.
@@ -38,7 +39,7 @@ _BANKS = {
 }
 #: The banks that CLICK lets a pointer address.
 _POINTER_BANKS = ("DS", "DD", "DH", "DF", "TXT")
-_CONSTANTS = (55, -2, 32767, -32768, 40000, -32769, 1.5, -0.5)
+_CONSTANTS = (55, -2, 32767, -32768, 40000, -32769, 1.5, -0.5, 2.0)
 _TARGET_BANKS = ("DS", "DD", "DH", "DF", "TXT", "YD")
 
 #: Each operand as laddercodec's text and as a function that returns pyrung's operand.
@@ -57,9 +58,11 @@ def _operands(banks: tuple[str, ...], number: int) -> list[Operand]:
     return operands
 
 
-SOURCES = _operands(tuple(_BANKS), 1) + [
-    (str(value), lambda value=value: value) for value in _CONSTANTS
-]
+SOURCES = (
+    _operands(tuple(_BANKS), 1)
+    + [(str(value), lambda value=value: value) for value in _CONSTANTS]
+    + [('"5"', lambda: "5")]
+)
 TARGETS = _operands(_TARGET_BANKS, 2)
 CONVERTERS = {
     "to_value": to_value,
@@ -69,11 +72,15 @@ CONVERTERS = {
 }
 
 
+#: The codes of a laddercodec refusal that the converter and the source decide.
+_CONVERTER_CODES = (Code.COPY_CONVERTER_BANK, Code.COPY_BANK_INCOMPATIBLE)
+
+
 def _laddercodec_refuses(source: str, target: str, converter: str) -> bool:
     try:
         Copy(source, target, convert=converter)
     except FieldError as refused:
-        return any(error.code is Code.COPY_CONVERTER_BANK for error in refused.errors)
+        return any(error.code in _CONVERTER_CODES for error in refused.errors)
     return False
 
 
@@ -97,7 +104,7 @@ ONLY_LADDERCODEC_REFUSES: frozenset[tuple[str, str, str]] = frozenset()
 #: laddercodec main (#182) refuses Copy Binary into a TXT from every Real source.
 ONLY_PYRUNG_REFUSES = frozenset(
     (source, target, "to_binary")
-    for source in ("DF1", "DF[DS1]", "1.5", "-0.5")
+    for source in ("DF1", "DF[DS1]", "1.5", "-0.5", "2.0")
     for target in ("TXT2", "TXT[DS2]")
 )
 
@@ -141,6 +148,21 @@ def _refuses(build: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
     return False
 
 
+def _refuses_a_bool(build: Callable[..., Any], *args: Any) -> bool:
+    """Return whether pyrung refuses the form for its Bool source, and raise any other refusal."""
+    try:
+        build(*args)
+    except ValueError as refused:
+        message = str(refused)
+        if (
+            message.startswith(("copy() got the ", "fill() got the "))
+            and "writes no Bool" in message
+        ):
+            return True
+        raise
+    return False
+
+
 def _pyrung_copy(source: Any, target: Any, convert: Any) -> None:
     with Program(strict=False):
         with rung(x[2]):
@@ -167,10 +189,10 @@ def test_copy_and_fill_refuse_a_bool_source_into_txt_as_laddercodec_does() -> No
             for name in ("none", *CONVERTERS):
                 convert = None if name == "none" else name
                 theirs = _refuses(Copy, source_text, target_text, convert=convert)
-                ours = _refuses(_pyrung_copy, source(), target(), CONVERTERS.get(name))
+                ours = _refuses_a_bool(_pyrung_copy, source(), target(), CONVERTERS.get(name))
                 if ours != (theirs or (constant and convert is not None)):
                     differ.append((source_text, target_text, name))
         theirs = _refuses(Fill, source_text, "TXT2", "TXT4")
-        if _refuses(_pyrung_fill, source()) != theirs:
+        if _refuses_a_bool(_pyrung_fill, source()) != theirs:
             differ.append((source_text, "TXT2..TXT4", "fill"))
     assert differ == []

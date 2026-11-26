@@ -277,7 +277,8 @@ def _refuse_converter_from(
 ) -> None:
     """Raise ``ValueError`` for a source that CLICK's Copy dialog offers *convert* no option for.
 
-    The target already suits the converter.  ``to_value`` and ``to_ascii`` read a TXT.
+    The target already suits the converter.  ``to_value`` and ``to_ascii`` read a TXT, and
+    CLICK refuses a text constant for them.
     ``to_text()`` and ``to_binary`` write a number into TXT, so a text source has nothing for
     them to convert.  CLICK's dialog also hides Copy Binary from a DF into a TXT, and
     laddercodec refuses a Real constant there too.
@@ -288,9 +289,9 @@ def _refuse_converter_from(
         isinstance(source, ConstArg) and isinstance(source.value, float)
     )
     if convert.mode in ("value", "ascii"):
-        if text:
+        if kind is TagType.CHAR:
             return
-        reads = "only a Char tag or a text constant"
+        reads = "only a Char tag or a Char pointer"
     elif convert.mode in ("text", "binary") and text:
         reads = "a number, not text"
     elif convert.mode == "binary" and real and target_type is TagType.CHAR:
@@ -464,7 +465,8 @@ class CopyInstruction(OneShotMixin, Instruction):
             advice = (
                 'Copy the text "1" or "0" instead.'
                 if isinstance(source, bool)
-                else 'Copy the text "1" in a rung that has the Bool as its condition.'
+                else 'Copy the text "1" in a rung that has the Bool as its condition, and "0" '
+                "in a rung that has its inverse."
             )
             raise ValueError(
                 f"copy() got {describe(source)} as the source and {describe(authored_dest)} as "
@@ -871,8 +873,8 @@ class FillInstruction(OneShotMixin, Instruction):
             # CLICK's editor refuses a C, X, Y, T, CT or SC there.
             raise ValueError(
                 f"fill() got {describe(value)} as the value and {describe(dest)} as the "
-                "target. fill() writes no Bool tag into Char tags. Fill True or False in a "
-                "rung that has the Bool as its condition."
+                "target. fill() writes no Bool tag into Char tags. Fill True in a rung that has "
+                "the Bool as its condition, and False in a rung that has its inverse."
             )
         if copy_source_kind(value) is TagType.CHAR and dest_type in _NUMBER_TYPES:
             raise TypeError(

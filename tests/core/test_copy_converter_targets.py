@@ -265,7 +265,8 @@ def test_a_copy_of_a_bool_tag_into_a_char_is_refused(
         _build(build_source(), build_target(), None if converter is None else CONVERTERS[converter])
     assert str(refused.value) == (
         f"copy() got {shown} as the source and {named} as the target. copy() writes no Bool "
-        'into a Char tag. Copy the text "1" in a rung that has the Bool as its condition.'
+        'into a Char tag. Copy the text "1" in a rung that has the Bool as its condition, and '
+        '"0" in a rung that has its inverse.'
     )
 
 
@@ -291,8 +292,8 @@ def test_a_fill_of_a_bool_tag_into_char_tags_is_refused(source: str) -> None:
                 fill(build_source(), txt.select(1, 3))
     assert str(refused.value) == (
         f"fill() got {shown} as the value and the range TXT1..TXT3 of Char tags as the "
-        "target. fill() writes no Bool tag into Char tags. Fill True or False in a rung that "
-        "has the Bool as its condition."
+        "target. fill() writes no Bool tag into Char tags. Fill True in a rung that has the "
+        "Bool as its condition, and False in a rung that has its inverse."
     )
 
 
@@ -307,21 +308,35 @@ _ADVICE = "Leave convert out, or use a converter that matches the source and tar
             lambda: ds[2],
             "to_value",
             "the Int tag DS1",
-            "only a Char tag or a text constant",
+            "only a Char tag or a Char pointer",
         ),
         (
             lambda: dd[ds[1]],
             lambda: dh[2],
             "to_ascii",
             "the Dint pointer DD[DS1]",
-            "only a Char tag or a text constant",
+            "only a Char tag or a Char pointer",
         ),
         (
             lambda: 55,
             lambda: dd[2],
             "to_value",
             "the constant 55",
-            "only a Char tag or a text constant",
+            "only a Char tag or a Char pointer",
+        ),
+        (
+            lambda: "7",
+            lambda: ds[2],
+            "to_value",
+            "the text '7'",
+            "only a Char tag or a Char pointer",
+        ),
+        (
+            lambda: "A",
+            lambda: dd[2],
+            "to_ascii",
+            "the text 'A'",
+            "only a Char tag or a Char pointer",
         ),
         (lambda: txt[1], lambda: txt[2], "to_text()", "the Char tag TXT1", "a number, not text"),
         (
@@ -370,7 +385,6 @@ def test_a_converter_from_a_source_that_clicks_dialog_offers_no_option_for_is_re
     "source,target,converter",
     [
         (lambda: txt[1], lambda: ds[2], "to_value"),
-        (lambda: "7", lambda: ds[2], "to_value"),
         (lambda: txt[ds[1]], lambda: dd[2], "to_ascii"),
         (lambda: ds[1], lambda: txt[2], "to_text()"),
         (lambda: dd[1], lambda: txt[2], "to_binary"),

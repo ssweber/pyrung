@@ -17,14 +17,14 @@
 
 - `copy()` now raises `ValueError` when you build a program with a converter that cannot store into its target, such as `to_value` into a TXT (it built).
   Leave `convert` out, or copy into a tag type that the converter writes.
-- `copy()` with a converter now raises `ValueError` when you build it from a source that CLICK's Copy dialog offers that converter no option for, such as `to_value` from an `Int`, `to_text()` from a TXT, or `to_binary` from 55 into a `Dint` (it built, then stored 0 or nothing). The Copy page lists the sources that build.
+- `copy()` now raises `ValueError` at build when CLICK's Copy dialog offers no such option for its converter and source, such as `to_value` from an `Int`, `to_text()` from a TXT, or `to_binary` from 55 into a `Dint` (it built, and most of these wrote nothing).
   Leave `convert` out, or use a converter that matches the source and target.
 - `fill()` of a number register or an expression into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the number).
   Copy the value into one TXT with `copy()`, or fill a constant.
 - `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). CLICK accepts it.
   Copy the constant into one TXT with `copy()`.
 - A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT.
-  Copy the text "1" or "0" in a rung that has the Bool as its condition.
+  Copy the text "1" in a rung that has the Bool as its condition, and "0" in a rung that has its inverse.
 
 ### Fixes
 

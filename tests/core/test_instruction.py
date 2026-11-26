@@ -1733,41 +1733,37 @@ class TestSearchInstruction:
 
 
 class TestCopyTextModifiers:
-    def test_copy_to_value_expands_sequential_destinations(self):
+    def test_copy_to_value_of_a_text_constant_is_refused(self):
+        """CLICK's Copy dialog offers Copy Character Value only from a TXT."""
         from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import CopyInstruction
 
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = CopyInstruction("123", DS[1], convert=to_value)
-        new_state = execute(instr, SystemState())
-
-        assert new_state.tags["DS1"] == 1
-        assert new_state.tags["DS2"] == 2
-        assert new_state.tags["DS3"] == 3
+        with pytest.raises(ValueError, match=r"^copy\(\) got convert=to_value with the text"):
+            CopyInstruction("123", DS[1], convert=to_value)
 
     def test_copy_to_value_non_digit_sets_out_of_range_and_skips_write(self):
         from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import CopyInstruction
 
+        CH = Block("CH", TagType.CHAR, 1, 10)
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = CopyInstruction("1A3", DS[1], convert=to_value)
-        new_state = execute(instr, SystemState().with_tags({"DS1": 9, "DS2": 9, "DS3": 9}))
+        instr = CopyInstruction(CH[1], DS[1], convert=to_value)
+        new_state = execute(instr, SystemState().with_tags({"CH1": "A", "DS1": 9}))
 
         assert new_state.tags["fault.out_of_range"] is True
         assert new_state.tags["DS1"] == 9
-        assert new_state.tags["DS2"] == 9
-        assert new_state.tags["DS3"] == 9
 
     def test_copy_to_ascii_converts_char_codes(self):
         from pyrung.core.copy_converters import to_ascii
         from pyrung.core.instruction import CopyInstruction
 
+        CH = Block("CH", TagType.CHAR, 1, 10)
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = CopyInstruction("AZ", DS[1], convert=to_ascii)
-        new_state = execute(instr, SystemState())
+        instr = CopyInstruction(CH[1], DS[1], convert=to_ascii)
+        new_state = execute(instr, SystemState().with_tags({"CH1": "Z"}))
 
-        assert new_state.tags["DS1"] == 65
-        assert new_state.tags["DS2"] == 90
+        assert new_state.tags["DS1"] == 90
 
     def test_copy_to_text_do_not_suppress_zero(self):
         from pyrung.core.copy_converters import to_text

@@ -1,7 +1,7 @@
 """A store that writes several elements stops at the end of its block.
 
-A text (``to_text()``, a Real copied into a TXT, a string literal) or a text's digits
-(``to_value``) is written into the target and the elements after it.  Past the end of the
+A text (``to_text()``, a Real copied into a TXT, a string literal) is written into the
+target and the elements after it.  Past the end of the
 block the rest are dropped.  They set no flag and write no tag past the block, the same as
 a single write past the end.  A target below the block keeps its address error.  What a
 CLICK does at the end of its TXT bank has not been read yet.  Writing what fits is
@@ -26,7 +26,6 @@ from pyrung.core import (
     Bool,
     Char,
     CompiledPLC,
-    Int,
     Program,
     TagType,
     copy,
@@ -35,7 +34,6 @@ from pyrung.core import (
     rung,
     system,
     to_text,
-    to_value,
 )
 from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.storage import BLANK_CHAR
@@ -147,45 +145,6 @@ def test_a_text_literal_writes_what_fits(engine, monkeypatch):
     assert [values[tag.name] for tag in watch] == [BLANK_CHAR, "A", "B", "C", "D"]
     assert bool(values[SC43.name]) is False
     assert _past(names, "TXT", 1000) == []
-
-
-@pytest.mark.parametrize("engine", _ENGINES)
-def test_digits_into_numbers_write_what_fits(engine, monkeypatch):
-    """``to_value`` writes one digit into each DS.  DS4500 ends the bank."""
-    blocks = ClickBlocks()
-    ds, txt = blocks.ds, blocks.txt
-    watch = _watched(ds, 4498, 4500)
-    with Program(strict=False) as prog:
-        with rung():
-            copy("123", txt[1])
-            copy(txt[1], ds[4499], convert=to_value)
-            copy("1234", ds[4499], convert=to_value)
-        with rung(*(tag == 9 for tag in watch)):
-            out(Bool("Seen"))
-
-    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
-    assert [values[tag.name] for tag in watch] == [0, 1, 2]
-    assert bool(values[SC43.name]) is False
-    assert _past(names, "DS", 4500) == []
-
-
-@pytest.mark.parametrize("engine", _ENGINES)
-def test_a_bad_digit_past_the_end_still_faults(engine, monkeypatch):
-    """The text is converted whole before it is stored.  A character that is not a digit
-    leaves every element unchanged and raises SC43, also past the end.  That is pyrung's choice."""
-    blocks = ClickBlocks()
-    ds = blocks.ds
-    watch = _watched(ds, 4499, 4500)
-    with Program(strict=False) as prog:
-        with rung():
-            copy(7, ds[4499])
-            copy("12x", ds[4499], convert=to_value)
-        with rung(*(tag == 9 for tag in watch)):
-            out(Bool("Seen"))
-
-    values, _names = _scan(prog, engine, [*watch, SC43], monkeypatch)
-    assert [values[tag.name] for tag in watch] == [7, 0]
-    assert bool(values[SC43.name]) is True
 
 
 @pytest.mark.parametrize("engine", _ENGINES)
@@ -321,30 +280,21 @@ def test_a_text_into_a_mapped_block_ends_with_that_block(engine, bank_read_first
 _BEFORE = ["fresh", "bank_read", "legacy_compiled"]
 
 
-def _mapped_scalar_program(kind: str, before: str):
+def _mapped_scalar_program(before: str):
     """A scalar tag that a TagMap maps onto a bank slot, then a store of several elements.
 
-    The store is a text into ``Name`` on TXT3, or digits into ``Count`` on DS4499.  Before
-    the scan, *before* reads the bank's address or compiles a legacy kernel, which reads
-    every bank address."""
-    blocks = ClickBlocks()
-    txt, ds = blocks.txt, blocks.ds
-    if kind == "text":
-        target, slot = Char("Name"), txt[3]
-        after, store = [txt[4], txt[5]], lambda: copy("ABC", target)
-        sentinel: Any = "#"
-    else:
-        target, slot = Int("Count"), ds[4499]
-        after, store = [ds[4500]], lambda: copy("1234", target, convert=to_value)
-        sentinel = 9
+    The store is a text into ``Name`` on TXT3.  Before the scan, *before* reads the bank's
+    address or compiles a legacy kernel, which reads every bank address."""
+    txt = ClickBlocks().txt
+    target, slot = Char("Name"), txt[3]
+    after, sentinel = [txt[4], txt[5]], "#"
     TagMap({target: slot}, include_system=False)
     if before == "bank_read":
-        bank = txt if kind == "text" else ds
-        assert bank[slot._pyrung_block_addr] is target
+        assert txt[slot._pyrung_block_addr] is target
     watch = [target, *after]
     with Program(strict=False) as prog:
         with rung():
-            store()
+            copy("ABC", target)
         with rung(*(tag == sentinel for tag in watch)):
             out(Bool("Seen"))
     if before == "legacy_compiled":
@@ -357,22 +307,11 @@ def _mapped_scalar_program(kind: str, before: str):
 def test_a_text_into_a_tag_mapped_onto_the_bank_writes_the_next_slots(engine, before, monkeypatch):
     """With ``TagMap({Name: txt[3]})``, "ABC" into Name writes TXT3..TXT5.  A CLICK does
     the same, however the bank was read before."""
-    prog, watch = _mapped_scalar_program("text", before)
+    prog, watch = _mapped_scalar_program(before)
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
     assert [values[tag.name] for tag in watch] == ["A", "B", "C"]
     assert bool(values[SC43.name]) is False
     assert "TXT3" not in names
-
-
-@pytest.mark.parametrize("engine", _ENGINES)
-@pytest.mark.parametrize("before", _BEFORE)
-def test_digits_into_a_tag_mapped_onto_the_bank_write_what_fits(engine, before, monkeypatch):
-    """``Count`` on DS4499: "1234" writes 1 there and 2 in DS4500.  The rest is dropped."""
-    prog, watch = _mapped_scalar_program("digits", before)
-    values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
-    assert [values[tag.name] for tag in watch] == [1, 2]
-    assert bool(values[SC43.name]) is False
-    assert _past(names, "DS", 4500) == []
 
 
 _ODD_NAMES = ["Q{0}", "Q{", r"Q\x", 'Q"x', "Q'x"]
