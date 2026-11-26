@@ -12,6 +12,7 @@ writes for the case's ``math()``. So the PLC runs the same operations as the in-
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import replace
 
@@ -21,9 +22,11 @@ from pyrung.click.codegen.formula import (
     Formula,
     Negate,
     Number,
+    Pi,
     parse_with_unconfirmed_pairs,
 )
 from pyrung.click.codegen.utils import _parse_af_args
+from pyrung.click.ladder.translator import click_real_literal
 
 Row = tuple[str, ...]
 
@@ -83,7 +86,15 @@ def _typed_token(token: str, typed: str, marker: str) -> str:
 
 
 def _as_subtraction(node: Formula) -> Formula:
-    """Return *node* with each minus sign written as ``0 - x``, as the exporter writes it."""
+    """Return *node* with each minus sign written as ``0 - x``, as the exporter writes it.
+
+    The exporter writes PI as a Real constant of 7 digits, so a typed PI stands for that
+    constant. The two differ only past the seventh digit.
+    """
+    if isinstance(node, Pi):
+        exported = click_real_literal(math.pi)
+        assert exported is not None
+        return Number(float(exported))
     if isinstance(node, Negate):
         return BinaryOp("-", Number(0), _as_subtraction(node.operand))
     if isinstance(node, BinaryOp):

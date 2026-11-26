@@ -1,15 +1,19 @@
 """What a CLICK computes for a parsed Math formula, and the formula regrouped one pair at a time.
 
 ``tests/click/test_click_formula.py`` checks the parse against the readings of a CLICK with
-these. ``test_math_order.py`` checks that each probe case tells two orders apart.
+these, and finds the pairs whose groupings agree. ``test_math_order.py`` checks that each probe
+case tells two orders apart.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator
+import operator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
+from typing import Any
 
+from pyrung import PI, LiteralExpr
 from pyrung.click.codegen.formula import (
     Address,
     BinaryOp,
@@ -17,8 +21,32 @@ from pyrung.click.codegen.formula import (
     Formula,
     Negate,
     Number,
+    Pi,
     operator_kind,
 )
+
+#: pyrung's operator for each of CLICK's.
+_OPERATORS: dict[str, Callable[[Any, Any], Any]] = {
+    "+": operator.add,
+    "-": operator.sub,
+    "*": operator.mul,
+    "/": operator.truediv,
+    "^": operator.pow,
+    "MOD": operator.mod,
+    "AND": operator.and_,
+    "OR": operator.or_,
+    "XOR": operator.xor,
+}
+
+#: The range of each integer destination.
+_RANGES = {"Int": (-32768, 32767), "Dint": (-(2**31), 2**31 - 1), "Word": (0, 0xFFFF)}
+
+#: The largest finite float32, the range of a Real.
+_REAL_MAX = 3.4028234663852886e38
+
+
+class Unread(Exception):
+    """No reading shows what a CLICK does at this step of a formula."""
 
 
 def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
@@ -28,24 +56,104 @@ def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> flo
     each DH as unsigned and computes in whole numbers of any size. Its ``/`` drops the fraction,
     and its MOD keeps the dividend's sign. It stores the low 16 bits of the result.
     """
-    value = _value(node, hex_mode, registers)
+    value = _value(node, hex_mode, registers, None)
     return int(value) & 0xFFFF if hex_mode else value
 
 
-def _value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
+def click_result(
+    node: Formula, hex_mode: bool, registers: dict[str, int], dest: str
+) -> tuple[float, frozenset[str]]:
+    """Return what a CLICK stores in a *dest* for *node*, and the fault flags it raises.
+
+    *dest* is ``Int``, ``Dint``, ``Real`` or ``Word``. Raise :class:`Unread` at each step that
+    no reading shows. These steps are:
+
+    - an intermediate result outside the destination's range, except in a Real
+      (``faults/real_intermediate_range`` read one past it, with no flag)
+    - a division or MOD by zero inside a formula, and a hex MOD by zero
+    - an error or Inf from ``^``
+    """
+    guard = _Guard(hex_mode, dest)
+    return guard.store(_value(node, hex_mode, registers, guard))
+
+
+class _Guard:
+    """Collect the flags of one formula, and refuse each step that no reading shows."""
+
+    def __init__(self, hex_mode: bool, dest: str) -> None:
+        self.hex_mode = hex_mode
+        self.dest = dest
+        self.flags: set[str] = set()
+
+    def by_zero(self, op: str, outermost: bool) -> float:
+        # Only a division or MOD by zero as the whole formula was read (``numeric/div_by_zero``,
+        # ``math_more/math_errors``, ``hex_math/rotates_and_bits``).
+        if not outermost or (op == "MOD" and self.hex_mode):
+            raise Unread(f"{op} by zero")
+        if op == "/":
+            self.flags.add("division_error")
+        return 0
+
+    def intermediate(self, value: float) -> None:
+        if not math.isfinite(value):
+            raise Unread(f"intermediate {value}")
+        if self.dest == "Real":
+            return
+        low, high = _RANGES[self.dest]
+        if not low <= value <= high:
+            raise Unread(f"intermediate {value} outside a {self.dest}")
+
+    def store(self, value: float) -> tuple[float, frozenset[str]]:
+        if not math.isfinite(value):
+            raise Unread(f"result {value}")
+        if self.dest == "Real":
+            # A Real result past a float32 is Inf with SC43 (``numeric/real_overflow_stays_finite``).
+            if abs(value) > _REAL_MAX:
+                self.flags.add("out_of_range")
+                value = math.copysign(math.inf, value)
+            return value, frozenset(self.flags)
+        # The store truncates and wraps, with SC43 (``numeric/real_to_int_truncates``,
+        # ``faults/math_store_out_of_range``, ``hex_math/shifts``).
+        whole = int(value)
+        low, high = _RANGES[self.dest]
+        if not low <= whole <= high:
+            self.flags.add("out_of_range")
+        span = high - low + 1
+        return (whole - low) % span + low, frozenset(self.flags)
+
+
+def _value(
+    node: Formula,
+    hex_mode: bool,
+    registers: dict[str, int],
+    guard: _Guard | None,
+    outermost: bool = True,
+) -> float:
     if isinstance(node, Number):
         return int(node.value) if hex_mode else float(node.value)
+    if isinstance(node, Pi):
+        return math.pi
     if isinstance(node, Address):
         value = registers[f"{node.bank}{node.index}"]
         return value & 0xFFFF if hex_mode else float(value)
-    if isinstance(node, Negate):
-        return -_value(node.operand, hex_mode, registers)
     if isinstance(node, Call):
         assert node.name == "SQRT", f"no model of {node.name}"
-        return math.sqrt(_value(node.args[0], hex_mode, registers))
-    assert isinstance(node, BinaryOp)
-    a = _value(node.left, hex_mode, registers)
-    b = _value(node.right, hex_mode, registers)
+        result = math.sqrt(_value(node.args[0], hex_mode, registers, guard, False))
+    elif isinstance(node, Negate):
+        result = -_value(node.operand, hex_mode, registers, guard, False)
+    else:
+        assert isinstance(node, BinaryOp)
+        a = _value(node.left, hex_mode, registers, guard, False)
+        b = _value(node.right, hex_mode, registers, guard, False)
+        if guard is not None and node.op in ("/", "MOD") and b == 0:
+            return guard.by_zero(node.op, outermost)
+        result = _step(node.op, a, b, hex_mode, guard)
+    if guard is not None and not outermost:
+        guard.intermediate(result)
+    return result
+
+
+def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> float:
     if hex_mode:
         x, y = int(a), int(b)
         hex_steps: dict[str, Callable[[], int]] = {
@@ -58,7 +166,9 @@ def _value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
             "OR": lambda: x | y,
             "XOR": lambda: x ^ y,
         }
-        return hex_steps[node.op]()
+        return hex_steps[op]()
+    if op == "^" and guard is not None and not _power_is_read(a, b):
+        raise Unread(f"{a} ^ {b}")
     decimal_steps: dict[str, Callable[[], float]] = {
         "+": lambda: a + b,
         "-": lambda: a - b,
@@ -67,12 +177,42 @@ def _value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> float:
         "^": lambda: a**b,
         "MOD": lambda: math.fmod(a, b),
     }
-    return decimal_steps[node.op]()
+    return decimal_steps[op]()
+
+
+def _power_is_read(a: float, b: float) -> bool:
+    """Return whether *a* ``^`` *b* is a finite double, which needs no reading of an error."""
+    if (a == 0 and b <= 0) or (a < 0 and b != int(b)):
+        return False
+    try:
+        return math.isfinite(a**b)
+    except OverflowError:
+        return False
 
 
 def _truncated(x: int, y: int) -> int:
     quotient = abs(x) // abs(y)
     return quotient if (x < 0) == (y < 0) else -quotient
+
+
+def pyrung_expression(node: Formula, tags: Mapping[int, Any]) -> Any:
+    """Return the pyrung expression of *node*, in the order of the tree, with *tags* by number."""
+    if isinstance(node, Address):
+        return tags[node.index]
+    if isinstance(node, Number):
+        return LiteralExpr(node.value)
+    if isinstance(node, Pi):
+        return PI
+    if isinstance(node, Negate) and isinstance(node.operand, Negate):
+        # pyrung's export refuses a minus sign right after another one (CLICK's OBJ-1001). So
+        # the inner one becomes 0 - x, which computes the same.
+        inner = pyrung_expression(node.operand.operand, tags)
+        return -(LiteralExpr(0) - inner)
+    if isinstance(node, Negate):
+        return -pyrung_expression(node.operand, tags)
+    assert isinstance(node, BinaryOp)
+    left, right = pyrung_expression(node.left, tags), pyrung_expression(node.right, tags)
+    return _OPERATORS[node.op](left, right)
 
 
 def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:

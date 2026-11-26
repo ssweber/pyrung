@@ -24,31 +24,28 @@ because a reading settled the pair. The rest are probes (``probe=``). When a pro
 CLICK, add its readings to the ``READINGS`` of ``tests/click/test_click_formula.py``, and its
 pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
-No probe asks about a minus sign before ``/`` or MOD. A CLICK's hex MOD does not wrap a
-negative dividend to 16 bits, and its remainder takes the dividend's sign. So the two orders
-give the same value for MOD in both modes, and for ``/`` in decimal mode. For a hex ``/`` they
-differ only if a CLICK rounds a negative quotient down, and no reading has shown that yet.
+No probe asks about a minus sign before ``/`` or MOD. Both orders give the same value in
+pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them apart. They
+can differ only at a step that no reading shows. Such a step is an intermediate result outside
+the destination's range, or a division by zero inside a formula. Once readings show those
+steps, ``formula.SAME_VALUE_PAIRS`` can take the pairs.
+
+CLICK's dialog refused ``5 - - DS1``, so it may refuse ``negneg_power`` too. The case then
+never runs on the PLC.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
 
 from __future__ import annotations
 
-import operator
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
-from pyrung import LiteralExpr
 from pyrung.click.codegen.formula import (
     CONFIRMED_PAIRS,
-    Address,
-    BinaryOp,
-    Formula,
-    Negate,
-    Number,
     _scopes,
     pair_kind,
     parse_with_unconfirmed_pairs,
@@ -56,24 +53,12 @@ from pyrung.click.codegen.formula import (
 from pyrung.click.codegen.utils import _guessed_order, _operator_words
 from pyrung.conformance import Case, Group, assert_all_passed, case, run
 from pyrung.core import copy, fill, math, rung
-from tests.conformance.math.formula_values import click_value, regroupings
+from tests.conformance.math.formula_values import click_value, pyrung_expression, regroupings
 from tests.conformance.memory import dh, ds
 from tests.conformance.probe_kit import finish, once
 
 #: A constant of a formula. A minus sign written against it is part of it (``-7``).
 _CONSTANT = re.compile(r"(?<![\w-])-?\b[0-9][0-9A-Fa-f]*h?\b")
-
-_OPERATORS: dict[str, Callable[[Any, Any], Any]] = {
-    "+": operator.add,
-    "-": operator.sub,
-    "*": operator.mul,
-    "/": operator.truediv,
-    "^": operator.pow,
-    "MOD": operator.mod,
-    "AND": operator.and_,
-    "OR": operator.or_,
-    "XOR": operator.xor,
-}
 
 _RESULTS = ("Result1", "Result2", "Result3", "Result4")
 
@@ -102,18 +87,6 @@ def _registers(formulas: Sequence[str], prefix: str, first: int) -> tuple[list[s
     return typed, {address: value for value, address in addresses.items()}
 
 
-def _expression(node: Formula, bank: Any) -> Any:
-    """Return the pyrung expression of *node*, in the order of the tree."""
-    if isinstance(node, Address):
-        return bank[node.index]
-    if isinstance(node, Number):
-        return LiteralExpr(node.value)
-    if isinstance(node, Negate):
-        return -_expression(node.operand, bank)
-    assert isinstance(node, BinaryOp)
-    return _OPERATORS[node.op](_expression(node.left, bank), _expression(node.right, bank))
-
-
 def _order_case(
     sentence: str,
     case_id: str,
@@ -140,10 +113,10 @@ def _order_case(
         with rung(*once(slot)):
             for tree, dest, field in zip(trees, dests, _RESULTS, strict=False):
                 if hex_mode:
-                    math(_expression(tree, bank), dh[dest])
+                    math(pyrung_expression(tree, bank), dh[dest])
                     copy(dh[dest], getattr(slot, field))
                 else:
-                    math(_expression(tree, bank), getattr(slot, field))
+                    math(pyrung_expression(tree, bank), getattr(slot, field))
         finish(slot)
 
     def init(slot: Any) -> None:
@@ -176,11 +149,14 @@ def _hex_text(value: int) -> str:
 
 
 def _pair(typed: str, hex_mode: bool) -> tuple[str, str]:
-    """Return the two operators of the probe formula *typed*, in the order it writes them."""
+    """Return the first and last operators of the probe formula *typed*.
+
+    A probe of a minus sign before another minus sign has the second minus sign between them.
+    """
     tree = parse_with_unconfirmed_pairs(typed, hex_mode=hex_mode)[0]
-    [(left, _), (right, _)], *inner = _scopes(tree)
+    operators, *inner = _scopes(tree)
     assert not any(inner)
-    return left, right
+    return operators[0][0], operators[-1][0]
 
 
 def _probe(case_id: str, hex_mode: bool, first: int, readings: Sequence[tuple[str, int]]) -> Case:
@@ -227,17 +203,26 @@ PROBES: dict[str, tuple[bool, tuple[tuple[str, int, int], ...]]] = {
     "negb_and": (True, (("- ( 2h ) AND 3h", 2, -2),)),
     "negb_or": (True, (("- ( 2h ) OR 1h", -1, -3),)),
     "negb_xor": (True, (("- ( 3h ) XOR 1h", -4, -2),)),
+    "negpi_power": (False, (("- PI ^ 2", 9, -9),)),
+    "negneg_power": (False, (("- - 2 ^ 2", 4, -4),)),
+}
+
+
+#: The first register of each probe case, in the order of ``PROBES``. A decimal case takes ten
+#: DS registers, and a hex case ten DH registers.
+_PROBE_REGISTERS = {
+    False: (*range(4231, 4281, 10), *range(4441, 4461, 10)),
+    True: tuple(range(271, 401, 10)),
 }
 
 
 def _probes() -> list[Case]:
     """Return the probe cases, each on ten registers of its own after the other cases'."""
-    first = {False: 4231, True: 271}
+    first = {hex_mode: iter(registers) for hex_mode, registers in _PROBE_REGISTERS.items()}
     cases = []
     for case_id, (hex_mode, readings) in PROBES.items():
         values = [(formula, value) for formula, value, _ in readings]
-        cases.append(_probe(case_id, hex_mode, first[hex_mode], values))
-        first[hex_mode] += 10
+        cases.append(_probe(case_id, hex_mode, next(first[hex_mode]), values))
     return cases
 
 
@@ -418,9 +403,10 @@ def test_each_probe_tells_the_two_orders_apart(case_id: str) -> None:
             for parent, child, _, regrouped in regroupings(tree)
             if {parent, child} == set(pair)
         ]
+        # A case stores into an Int or a DH, and the store drops the fraction.
         cut = 0xFFFF if hex_mode else -1
-        assert click_value(tree, hex_mode, registers) == value & cut
-        assert click_value(regrouped, hex_mode, registers) == other & cut
+        assert int(click_value(tree, hex_mode, registers)) == value & cut
+        assert int(click_value(regrouped, hex_mode, registers)) == other & cut
         assert value != other
     assert len(pairs) == 1
 

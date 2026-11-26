@@ -34,19 +34,18 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 #: before a constant is part of the constant (CLICK stores ``-2`` as H-2), so it is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
 
-#: A minus sign before anything but an address or a constant, as an operator in
-#: :data:`CONFIRMED_PAIRS`. The readings ran it before a bracket and before a function.
-NEGATE_GROUP = "a minus sign before a bracket, a function, a pointer, PI or another minus sign"
+#: A minus sign before a bracket or a function, as an operator in :data:`CONFIRMED_PAIRS`.
+NEGATE_GROUP = "a minus sign before a bracket or a function"
 
 #: The words for each kind of :data:`NEGATE_GROUP`, so that a warning names what the formula
 #: has.
-_NEGATE_GROUP_WORDS = (
-    "a minus sign before a bracket",
-    "a minus sign before a function",
-    "a minus sign before a pointer",
-    "a minus sign before PI",
-    "a minus sign before another minus sign",
-)
+_NEGATE_GROUP_WORDS = ("a minus sign before a bracket", "a minus sign before a function")
+
+#: A minus sign before a pointer, before PI and before another minus sign. Each is an operator
+#: of its own, because no reading has run one yet.
+NEGATE_POINTER = "a minus sign before a pointer"
+NEGATE_PI = "a minus sign before PI"
+NEGATE_MINUS = "a minus sign before another minus sign"
 
 #: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
 #: readings. Two operators meet when one is an operand of the other, and the operand has no
@@ -105,6 +104,18 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (
     ("- DS1 MOD 3", False),
 )
 
+#: Pairs of operators whose two groupings give the same value and the same fault flags, as
+#: (first operator, second operator, hex mode) in the order that the formula writes them. Sam
+#: ruled on 2026-11-26 that such a pair needs no reading. ``tests/click/test_click_formula.py``
+#: computes both groupings over a grid of values, with pyrung's ``math()`` and with a model of
+#: what the readings show a CLICK does. It checks that this list holds each pair that agrees in
+#: both. A pair agrees only if every intermediate result stays in a range that a reading shows.
+SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
+    ("AND", "AND", True),
+    ("OR", "OR", True),
+    ("XOR", "XOR", True),
+)
+
 # CLICK's Math functions, and the Python names that the importer writes for them.
 _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
     "SQRT": "sqrt",
@@ -153,6 +164,7 @@ _TOKEN_RE = re.compile(
 _TIER_OF = {op: index for index, ops in enumerate(BINARY_TIERS) for op in ops}
 _WORD_OPS = frozenset(op for ops in BINARY_TIERS for op in ops if op.isalpha())
 _CONFIRMED = frozenset(frozenset((first, second)) for first, second, _ in CONFIRMED_PAIRS)
+_SAME_VALUE = frozenset(SAME_VALUE_PAIRS)
 
 
 @dataclass(frozen=True)
@@ -238,11 +250,12 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     each bracket scope. A scope is the whole formula outside brackets, the inside of one
     bracket, or one argument of a function. So ``DS1 - DS2 + DS3 * DS4`` needs the pairs
     ``- +``, ``- *`` and ``+ *``, and ``( DS1 - DS2 ) * 3`` needs none. A minus sign is an
-    operator too, of the kind :data:`NEGATE_ADDRESS` or :data:`NEGATE_GROUP`.
+    operator too, of the kind :data:`NEGATE_ADDRESS`, :data:`NEGATE_GROUP`,
+    :data:`NEGATE_POINTER`, :data:`NEGATE_PI` or :data:`NEGATE_MINUS`.
 
-    The grammar gives the only exemptions. A minus sign applies before every operator to its
-    left in its scope, so it pairs only with the operators to its right. A formula with the
-    tree of one in :data:`READ_FORMULAS` is confirmed.
+    A minus sign applies before every operator to its left in its scope, so it pairs only with
+    the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A formula
+    with the tree of one in :data:`READ_FORMULAS` is confirmed.
     """
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
@@ -253,9 +266,10 @@ def parse_with_unconfirmed_pairs(
 ) -> tuple[Formula, tuple[tuple[str, str], ...]]:
     """Return the tree of *text* in :data:`BINARY_TIERS` order, and its unconfirmed pairs.
 
-    Each pair is one that :func:`parse_click_formula` needs, and no reading in
-    :data:`CONFIRMED_PAIRS` settled it. Each pair lists its operators in the order that the
-    formula writes them. Raise ValueError for text that is not a formula.
+    Each pair is one that :func:`parse_click_formula` needs. No reading in
+    :data:`CONFIRMED_PAIRS` settled it, and :data:`SAME_VALUE_PAIRS` does not list it. Each
+    pair lists its operators in the order that the formula writes them. Raise ValueError for
+    text that is not a formula.
     """
     tree = _Parser(text, hex_mode=hex_mode).parse()
     if (tree, hex_mode) in _read_trees():
@@ -266,7 +280,10 @@ def parse_with_unconfirmed_pairs(
             for second, second_is_minus in operators[index + 1 :]:
                 if second_is_minus:
                     continue
-                if frozenset((pair_kind(first), pair_kind(second))) not in _CONFIRMED:
+                kinds = (pair_kind(first), pair_kind(second))
+                if (*kinds, hex_mode) in _SAME_VALUE:
+                    continue
+                if frozenset(kinds) not in _CONFIRMED:
                     pairs.setdefault(frozenset((first, second)), (first, second))
     return tree, tuple(pairs.values())
 
@@ -288,10 +305,10 @@ def operator_kind(node: Formula) -> str | None:
     if isinstance(operand, (Call, RangeCall)):
         return _NEGATE_GROUP_WORDS[1]
     if isinstance(operand, Pointer):
-        return _NEGATE_GROUP_WORDS[2]
+        return NEGATE_POINTER
     if isinstance(operand, Pi):
-        return _NEGATE_GROUP_WORDS[3]
-    return _NEGATE_GROUP_WORDS[4]
+        return NEGATE_PI
+    return NEGATE_MINUS
 
 
 def pair_kind(words: str) -> str:

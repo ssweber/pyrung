@@ -9,6 +9,7 @@ outputs: the imported program (in-process and on the generated P1AM code) and it
 
 from __future__ import annotations
 
+import itertools
 import math
 import re
 from typing import Any
@@ -23,7 +24,11 @@ from pyrung.click.codegen.formula import (
     CONFIRMED_PAIRS,
     NEGATE_ADDRESS,
     NEGATE_GROUP,
+    NEGATE_MINUS,
+    NEGATE_PI,
+    NEGATE_POINTER,
     READ_FORMULAS,
+    SAME_VALUE_PAIRS,
     Address,
     BinaryOp,
     Call,
@@ -38,12 +43,21 @@ from pyrung.click.codegen.formula import (
 )
 from pyrung.click.ladder.types import LadderBundle
 from pyrung.conformance._formula import _as_subtraction
-from pyrung.core import PLC, Int, Program, Word, copy, rung
+from pyrung.core import PLC, Dint, Int, Program, Real, Word, copy, rung
 from pyrung.core import math as math_instruction
+from pyrung.core.context import ScanContext
+from pyrung.core.instruction.calc import CalcInstruction
+from pyrung.core.state import SystemState
 from tests.circuitpy.test_codegen import _on_every_backend
 from tests.click.helpers import exec_with_source
+from tests.conformance.math.formula_values import (
+    Unread,
+    click_result,
+    pyrung_expression,
+    regroupings,
+)
 from tests.conformance.math.formula_values import click_value as _click_value
-from tests.conformance.math.formula_values import regroupings
+from tests.conftest import execute
 
 #: (case, formula as CLICK displays it, hex mode, register values, value the PLC read).
 #: A hex value is the 16 bits a DH holds.
@@ -218,6 +232,9 @@ def test_click_formula_parse_refuses_what_is_not_a_formula(text: str) -> None:
         parse_click_formula(text)
 
 
+_MINUS_SIGNS = {NEGATE_ADDRESS, NEGATE_GROUP, NEGATE_POINTER, NEGATE_PI, NEGATE_MINUS}
+
+
 def _settled_pairs() -> dict[frozenset[str], set[str]]:
     """Return each pair of operators that the readings settle, with the rounds of those readings.
 
@@ -249,8 +266,8 @@ def _settled_pairs() -> dict[frozenset[str], set[str]]:
     for pair, orders in ruled_out.items():
         if len(pair) == 1:
             needed = set(pair)
-        elif pair & {NEGATE_ADDRESS, NEGATE_GROUP}:
-            needed = set(pair - {NEGATE_ADDRESS, NEGATE_GROUP})
+        elif pair & _MINUS_SIGNS:
+            needed = set(pair - _MINUS_SIGNS)
         else:
             first, second = sorted(pair)
             needed = {first, second, "left"}
@@ -279,6 +296,106 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
     assert list(READ_FORMULAS) == unsettled
 
 
+#: The values that each pair of operators runs over. The whole numbers reach the ends of the
+#: Int and Dint ranges. Sam accepted that a Real formula may round differently in its last bit
+#: (2026-11-26). So each Real is exact in a double, and the sum of any two stays exact.
+_WHOLE_GRID = (0, 1, -1, 2, -2, 3, 7, 32767, -32768, 2147483647, -2147483648)
+_REAL_GRID = (*_WHOLE_GRID, 1.5, -2.5, 0.25, 2.0**40, -(2.0**40))
+_HEX_GRID = (0, 1, 2, 3, 7, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF)
+
+#: Each destination of a mode, with its type, the type of the operands and their values.
+_DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] = {
+    False: (
+        ("Int", Int, Dint, _WHOLE_GRID),
+        ("Dint", Dint, Dint, _WHOLE_GRID),
+        ("Real", Real, Real, _REAL_GRID),
+    ),
+    True: (("Word", Word, Word, _HEX_GRID),),
+}
+
+#: The binary operators of each mode.
+_MODE_OPERATORS = {
+    False: ("+", "-", "*", "/", "^", "MOD"),
+    True: ("+", "-", "*", "/", "MOD", "AND", "OR", "XOR"),
+}
+
+_FLAGS = ("division_error", "out_of_range", "math_operation_error")
+
+
+def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
+    """Return each pair of operators that no reading settled, with its mode and a formula."""
+    confirmed = {frozenset((a, b)) for a, b, _ in CONFIRMED_PAIRS}
+    pairs = []
+    for hex_mode, ops in _MODE_OPERATORS.items():
+        bank = "DH" if hex_mode else "DS"
+        texts = [f"{bank}1 {a} {bank}2 {b} {bank}3" for a in ops for b in ops]
+        texts += [f"- {bank}1 {b} {bank}2" for b in ops]
+        texts += [f"- ( {bank}1 ) {b} {bank}2" for b in ops]
+        for text in texts:
+            tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
+            [(first, _), (second, _)] = next(formula_module._scopes(tree))
+            first, second = pair_kind(first), pair_kind(second)
+            if frozenset((first, second)) not in confirmed:
+                pairs.append((first, second, hex_mode, text))
+    return pairs
+
+
+class _PyrungRun:
+    """One formula as a pyrung ``math()``, built once and run for many values."""
+
+    def __init__(self, tree: Any, bank: str, operand_type: Any, dest_type: Any) -> None:
+        self.names = [f"{bank}{index}" for index in (1, 2, 3)]
+        tags = {index: operand_type(name) for index, name in enumerate(self.names, 1)}
+        self.instruction = CalcInstruction(pyrung_expression(tree, tags), dest_type("Dest"))
+        execute(self.instruction, SystemState())
+
+    def __call__(self, context: ScanContext, values: tuple[float, ...]) -> tuple[Any, ...]:
+        for name, value in zip(self.names, values, strict=False):
+            context.set_tag(name, value)
+        for flag in _FLAGS:
+            context.set_tag(f"fault.{flag}", False)
+        self.instruction.execute(context, True)
+        flags = frozenset(flag for flag in _FLAGS if context.get_tag(f"fault.{flag}"))
+        return context.get_tag("Dest"), flags
+
+
+def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
+    """Return how the two groupings of *text* differ, or None where they agree.
+
+    They must agree in value and flags in pyrung's ``math()`` and in the model of a CLICK, at
+    each point of the grid. A point where the model has no reading counts as a difference.
+    """
+    tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
+    [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
+    bank = "DH" if hex_mode else "DS"
+    count = 3 if f"{bank}3" in text else 2
+    for dest, dest_type, operand_type, grid in _DESTINATIONS[hex_mode]:
+        runs = [_PyrungRun(t, bank, operand_type, dest_type) for t in (tree, regrouped)]
+        context = ScanContext(SystemState())
+        for values in itertools.product(grid, repeat=count):
+            pyrung = [run(context, values) for run in runs]
+            if pyrung[0] != pyrung[1]:
+                return f"pyrung gives {pyrung} for {values} into a {dest}"
+            registers = {f"{bank}{index}": value for index, value in enumerate(values, 1)}
+            try:
+                click = [click_result(t, hex_mode, registers, dest) for t in (tree, regrouped)]
+            except Unread as unread:
+                return f"no reading shows {unread} for {values} into a {dest}"
+            if click[0] != click[1]:
+                return f"the model of a CLICK gives {click} for {values} into a {dest}"
+    return None
+
+
+def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
+    differ = {
+        (first, second, hex_mode): _how_the_groupings_differ(text, hex_mode)
+        for first, second, hex_mode, text in _unconfirmed_pairs()
+    }
+    agree = {pair for pair, how in differ.items() if how is None}
+    assert len(set(SAME_VALUE_PAIRS)) == len(SAME_VALUE_PAIRS)
+    assert set(SAME_VALUE_PAIRS) == agree, differ
+
+
 _BRACKET = "a minus sign before a bracket"
 
 
@@ -293,9 +410,16 @@ _BRACKET = "a minus sign before a bracket"
         ("SQRT ( DS1 / DS2 MOD 3 )", False, [("/", "MOD")]),
         # Two operators that do not meet still count.
         ("DS1 / DS2 + DS3 MOD DS4", False, [("/", "MOD")]),
+        ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
+        # Both groupings give the same value, but no reading shows the flags of an
+        # intermediate result outside the destination's range.
         ("DS1 + DS2 - DS3", False, [("+", "-")]),
         ("DS1 + DS2 + DS3", False, [("+", "+")]),
-        ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
+        ("DH1 * DH2 * DH3", True, [("*", "*")]),
+        ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
+        # Nor does a reading show a division or MOD by zero inside a formula.
+        ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
+        ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
         # A minus sign pairs with each operator to its right.
         ("- ( DS1 ) * DS2", False, [(_BRACKET, "*")]),
         ("- ( DS1 ) * DS2 - DS3", False, [(_BRACKET, "*"), (_BRACKET, "-")]),
@@ -304,9 +428,11 @@ _BRACKET = "a minus sign before a bracket"
         ("- PI * 2", False, [("a minus sign before PI", "*")]),
         ("- DH[DS1] OR 3h", True, [("a minus sign before a pointer", "OR")]),
         ("- - DH1 XOR 3h", True, [("a minus sign before another minus sign", "XOR")]),
-        ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
-        ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
-        ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
+        # The readings that settled a minus sign before a bracket settle none of these.
+        ("- PI ^ 2", False, [(NEGATE_PI, "^")]),
+        ("- DS[DS1] ^ 2", False, [(NEGATE_POINTER, "^")]),
+        ("- - DS1 ^ 2", False, [(NEGATE_MINUS, "^")]),
+        ("- - DS1 + 2", False, [(NEGATE_MINUS, "+")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
@@ -317,9 +443,10 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
 
 
 def test_the_words_for_each_minus_sign_name_its_operator() -> None:
-    for words in (_BRACKET, "a minus sign before PI", "a minus sign before a pointer"):
+    for words in (_BRACKET, "a minus sign before a function"):
         assert pair_kind(words) == NEGATE_GROUP
-    assert pair_kind(NEGATE_ADDRESS) == NEGATE_ADDRESS
+    for kind in (NEGATE_ADDRESS, NEGATE_POINTER, NEGATE_PI, NEGATE_MINUS):
+        assert pair_kind(kind) == kind
 
 
 @pytest.mark.parametrize(
@@ -349,6 +476,10 @@ def test_the_words_for_each_minus_sign_name_its_operator() -> None:
         ("DH1 - DH2 XOR 3h", True),
         ("- ( DS1 ) ^ 2", False),
         ("- SQRT ( DS1 ) + 2", False),
+        # Both groupings give the same value and flags (SAME_VALUE_PAIRS).
+        ("DH1 AND DH2 AND DH3", True),
+        ("DH1 OR DH2 OR DH3", True),
+        ("DH1 XOR DH2 XOR DH3", True),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
@@ -636,13 +767,16 @@ def test_imported_formula_with_an_unconfirmed_pair_imports_with_a_warning() -> N
         logic, _mapping, _formulas, dests = _program(readings)
     assert len(caught) == len(unconfirmed)
 
-    # The import applies the order that the warning names.
+    # The import applies the order that the warning names. A probe stores into an Int, which
+    # drops the fraction.
     plc = PLC(logic)
     plc.step()
     tags = plc.current_state.tags
     wrong = [
         (reading[0], tags[dest.name], reading[4])
         for reading, dest in zip(readings, dests, strict=True)
-        if not _close(tags[dest.name], reading[4] & 0xFFFF if reading[2] else reading[4])
+        if not _close(
+            math.trunc(tags[dest.name]), reading[4] & 0xFFFF if reading[2] else reading[4]
+        )
     ]
     assert wrong == []
