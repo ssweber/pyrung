@@ -256,6 +256,10 @@ def _compile_expression_impl(
                 ctx.mark_helper(helper)
                 compiled = f"{helper}({left}, {right}, {flags})"
             return _calc_step(expr, compiled, ctx, strict)
+        if expr.symbol == "**" and left.startswith("-"):
+            # Python applies ** before a minus sign on its left, so -2 ** 2 is -4. A
+            # negative constant is the only operand that renders with a bare sign.
+            left = f"({left})"
         return _calc_step(expr, f"({left} {expr.symbol} {right})", ctx, strict)
 
     if isinstance(expr, UnaryExpr):
