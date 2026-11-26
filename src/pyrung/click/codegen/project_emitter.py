@@ -1192,14 +1192,15 @@ order, tightest first:
 CLICK works from the left within each level. The importer writes the brackets
 that keep CLICK's grouping, and the export to CLICK brackets every operation.
 Add the brackets yourself when you copy a CLICK formula by hand.
-`DH1 OR DH2 AND 8h` is `(dh[1] | dh[2]) & 0x8`, not `dh[1] | dh[2] & 0x8`. `^`
-is power in CLICK and XOR in Python, so write CLICK's `^` as `**`. CLICK applies `^` from the left as
-well, so `2 ^ 3 ^ 2` is 64, which Python writes `(2**3)**2`.
+`DH1 OR DH2 AND 8h` is `(dh[1] | dh[2]) & 0x8`, not `dh[1] | dh[2] & 0x8`.
+`^` is power in CLICK and XOR in Python, so write CLICK's `^` as `**`. CLICK
+applies `^` from the left as well, so `2 ^ 3 ^ 2` is 64, which Python writes
+`(2**3)**2`.
 
 Python computes an operation between two plain numbers when it loads the file,
-in Python's arithmetic. `LiteralExpr(5) / 0` leaves the division for the Math to
-run at scan time, so it stores 0 and sets the division-error flag. Imported code
-writes such a constant this way. Keep the `LiteralExpr` when you edit the formula.
+in Python's arithmetic. `LiteralExpr(5) / 0` leaves the division for `math()`
+to run at scan time, so it stores 0 and sets the division-error flag. The
+importer writes such a constant this way. Keep the `LiteralExpr` when you edit the formula.
 
 ## Reference
 

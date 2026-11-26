@@ -38,7 +38,7 @@ math(LiteralExpr(5) / 0, DS[1])        # stores 0 and sets the division-error fl
 math((LiteralExpr(2) - 9) % 3, DS[2])  # stores -1, as a CLICK does
 ```
 
-Python computes an operation between two plain numbers when it loads the file, in Python's arithmetic. `math(5 / 0, DS[1])` raises `ZeroDivisionError` then, and `(2 - 9) % 3` is 2. Wrap the first constant in `LiteralExpr` and the Math runs the operation at scan time. The importer writes such a constant this way.
+Python computes an operation between two plain numbers when it loads the file, in Python's arithmetic. `math(5 / 0, DS[1])` raises `ZeroDivisionError` then, and `(2 - 9) % 3` is 2. Wrap the first constant in `LiteralExpr` and `math()` runs the operation at scan time. The importer writes such a constant this way.
 
 ## Overflow behavior
 

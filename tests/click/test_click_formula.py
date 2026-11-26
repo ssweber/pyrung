@@ -17,11 +17,13 @@ import pytest
 
 from pyrung import LiteralExpr
 from pyrung.click import ladder_to_pyrung, pyrung_to_ladder
+from pyrung.click.codegen import formula as formula_module
 from pyrung.click.codegen.formula import (
     _TIER_OF,
     CONFIRMED_PAIRS,
     NEGATE_ADDRESS,
     NEGATE_GROUP,
+    READ_FORMULAS,
     Address,
     BinaryOp,
     Call,
@@ -30,6 +32,7 @@ from pyrung.click.codegen.formula import (
     Pi,
     Pointer,
     RangeCall,
+    pair_kind,
     parse_click_formula,
     parse_with_unconfirmed_pairs,
 )
@@ -122,9 +125,7 @@ READINGS: list[tuple[str, str, bool, dict[str, int], float]] = [
 def test_click_formula_parse_gives_what_the_plc_read(
     text: str, hex_mode: bool, registers: dict[str, int], value: float
 ) -> None:
-    # A reading may leave its pair unsettled, as - DS1 MOD 3 does, so this takes the parse
-    # that applies such a pair in pyrung's order.
-    tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
+    tree = parse_click_formula(text, hex_mode=hex_mode)
     assert tree is not None
     assert _click_value(tree, hex_mode, registers) == value
 
@@ -194,10 +195,11 @@ def _settled_pairs() -> dict[frozenset[str], set[str]]:
     """Return each pair of operators that the readings settle, with the rounds of those readings.
 
     Two operators could apply in three orders. Either one applies first, or both apply from
-    the left. A reading rules an order out when the formula, grouped in that order, gives another
+    the left. Only two operators that meet have one other grouping, so only they are tested.
+    A reading rules an order out when the formula, grouped in that order, gives another
     value. A pair is settled when the readings rule out each order but the parse's. So a pair
     from two levels needs a reading with the tighter operator on the right, and a pair from
-    one level needs a reading of each order. Applying - before + never changes the value.
+    one level needs a reading of each order.
     """
     ruled_out: dict[frozenset[str], set[str]] = {}
     rounds: dict[frozenset[str], set[str]] = {}
@@ -210,6 +212,7 @@ def _settled_pairs() -> dict[frozenset[str], set[str]]:
             except ZeroDivisionError:
                 # This model of a CLICK has no value for a division by zero.
                 continue
+            parent, child = pair_kind(parent), pair_kind(child)
             pair = frozenset((parent, child))
             # With the child on the right, the regrouping also stands for both from the left.
             orders = {parent} if child_is_left else {parent, "left"}
@@ -228,8 +231,6 @@ def _settled_pairs() -> dict[frozenset[str], set[str]]:
                 needed.discard(min(pair, key=_TIER_OF.__getitem__))
             else:
                 needed.discard("left")
-            if pair == {"+", "-"}:
-                needed.discard("-")
         if needed <= orders:
             settled[pair] = rounds[pair]
     return settled
@@ -241,31 +242,59 @@ def test_confirmed_pairs_are_the_pairs_that_the_readings_settle() -> None:
     assert listed == _settled_pairs()
 
 
+def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypatch) -> None:
+    monkeypatch.setattr(formula_module, "_read_trees", list)
+    unsettled = [
+        (text, hex_mode)
+        for _, text, hex_mode, _, _ in READINGS
+        if parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[1]
+    ]
+    assert list(READ_FORMULAS) == unsettled
+
+
+_BRACKET = "a minus sign before a bracket"
+
+
 @pytest.mark.parametrize(
-    ("text", "hex_mode", "pair"),
+    ("text", "hex_mode", "pairs"),
     [
-        ("DS1 - DS2 * 3", False, ("-", "*")),
-        ("DS1 * 3 - DS2", False, ("*", "-")),
-        ("DH1 - DH2 AND 3h", True, ("-", "AND")),
-        ("DH1 OR DH2 - 1h", True, ("OR", "-")),
-        ("DH1 - DH2 XOR 3h", True, ("-", "XOR")),
-        ("SQRT ( DS1 - DS2 * 3 )", False, ("-", "*")),
-        ("- ( DS1 ) ^ 2", False, (NEGATE_GROUP, "^")),
-        ("- SQRT ( DS1 ) ^ 2", False, (NEGATE_GROUP, "^")),
-        ("- ( DS1 ) + 2", False, (NEGATE_GROUP, "+")),
-        ("- DH[DS1] AND 3h", True, (NEGATE_GROUP, "AND")),
-        ("- DS1 / 2", False, (NEGATE_ADDRESS, "/")),
-        ("- DS1 MOD 3", False, (NEGATE_ADDRESS, "MOD")),
-        ("DS1 MOD DS2 MOD 3", False, ("MOD", "MOD")),
-        ("DH1 / DH2 MOD 3h", True, ("/", "MOD")),
-        ("DH1 XOR DH2 * 3h", True, ("XOR", "*")),
+        ("DS1 - DS2 * 3", False, [("-", "*")]),
+        ("DS1 * 3 - DS2", False, [("*", "-")]),
+        ("DH1 - DH2 AND 3h", True, [("-", "AND")]),
+        ("DH1 OR DH2 - 1h", True, [("OR", "-")]),
+        ("DH1 - DH2 XOR 3h", True, [("-", "XOR")]),
+        ("SQRT ( DS1 - DS2 * 3 )", False, [("-", "*")]),
+        # Two operators that do not meet still count.
+        ("DS1 - DS2 + DS3 * DS4", False, [("-", "+"), ("-", "*")]),
+        ("DS1 + DS2 - DS3", False, [("+", "-")]),
+        ("DS1 + DS2 + DS3", False, [("+", "+")]),
+        ("DS1 MOD DS2 MOD 3", False, [("MOD", "MOD")]),
+        ("DH1 / DH2 MOD 3h", True, [("/", "MOD")]),
+        ("DH1 XOR DH2 * 3h", True, [("XOR", "*")]),
+        # A minus sign pairs with each operator to its right.
+        ("- ( DS1 ) ^ 2", False, [(_BRACKET, "^")]),
+        ("- ( DS1 ) * DS2 + DS3", False, [(_BRACKET, "*"), (_BRACKET, "+")]),
+        ("DS1 * - ( DS2 ) + DS3", False, [(_BRACKET, "+")]),
+        ("- SQRT ( DS1 ) ^ 2", False, [("a minus sign before a function", "^")]),
+        ("- PI ^ 2", False, [("a minus sign before PI", "^")]),
+        ("- DH[DS1] AND 3h", True, [("a minus sign before a pointer", "AND")]),
+        ("- - DS1 ^ 2", False, [("a minus sign before another minus sign", "^")]),
+        ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
+        ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
+        ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
-    text: str, hex_mode: bool, pair: tuple[str, str]
+    text: str, hex_mode: bool, pairs: list[tuple[str, str]]
 ) -> None:
     assert parse_click_formula(text, hex_mode=hex_mode) is None
-    assert parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[1] == (pair,)
+    assert parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[1] == tuple(pairs)
+
+
+def test_the_words_for_each_minus_sign_name_its_operator() -> None:
+    for words in (_BRACKET, "a minus sign before PI", "a minus sign before a pointer"):
+        assert pair_kind(words) == NEGATE_GROUP
+    assert pair_kind(NEGATE_ADDRESS) == NEGATE_ADDRESS
 
 
 @pytest.mark.parametrize(
@@ -277,14 +306,23 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("( - DS1 ) ^ 2", False),
         ("- ( DS1 ^ 2 )", False),
         ("SQRT ( DS1 - DS2 ) * 3", False),
-        # The order of these pairs never changes the value.
-        ("DS1 + DS2 + DS3", False),
-        ("DH1 AND DH2 AND DH3", True),
-        ("- ( DS1 ) * 3", False),
+        # A minus sign applies before each operator to its left.
         ("- - DS1", False),
+        ("DS1 / - DS2", False),
+        ("DS1 MOD - DS2", False),
+        ("DS1 + - ( DS2 + 1 )", False),
+        ("DS1 ^ - ( DS2 )", False),
+        ("DS1 * - ( DS2 + 1 )", False),
+        # A CLICK was read running these.
+        ("5 - 3 + 1", False),
+        ("- DS1 * 3", False),
+        ("- DS1 MOD 3", False),
+        # Readings settled these pairs.
+        ("DS1 * 2 + 3", False),
+        ("DH1 AND DH2 OR DH3", True),
     ],
 )
-def test_click_formula_parse_needs_no_reading_for_a_pair_that_cannot_change_the_value(
+def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
     text: str, hex_mode: bool
 ) -> None:
     assert parse_click_formula(text, hex_mode=hex_mode) is not None
@@ -334,6 +372,7 @@ def _math_line(code: str) -> str:
         ("math(-7 MOD 3,DF1)", "math(LiteralExpr(-7) % 3, DF1)"),
         ("math(5 / 0 + DS1,DF1)", "math(LiteralExpr(5) / 0 + DS1, DF1)"),
         ("math(ABS ( 2 - 3 ),DS1)", "math(abs(LiteralExpr(2) - 3), DS1)"),
+        ("math(ABS ( -3 ) / 0,DS1)", "math(LiteralExpr(abs(-3)) / 0, DS1)"),
         ("math(DS1 MOD 3,DS2)", "math(DS1 % 3, DS2)"),
     ],
 )
@@ -375,8 +414,21 @@ def _hand_written(build, dest_type, operand_type) -> Program:
             Word,
             0x8000,
         ),
+        ("math(ABS ( -7 ) MOD 0,DS2)", "DS2", lambda _: LiteralExpr(7) % 0, Int, Int, 0),
+        ("math(ABS ( -3 ) / 0,DS2)", "DS2", lambda _: LiteralExpr(3) / 0, Int, Int, 0),
+        ("math(ABS ( 0 ) ^ 0,DS2)", "DS2", lambda _: LiteralExpr(0) ** 0, Int, Int, 0),
+        ("math(ABS ( -7 ) MOD -3,DS2)", "DS2", lambda _: LiteralExpr(7) % -3, Int, Int, 1),
     ],
-    ids=["divide-by-0", "0-to-the-0", "mod-of-a-difference", "hex-wraps-at-the-scan"],
+    ids=[
+        "divide-by-0",
+        "0-to-the-0",
+        "mod-of-a-difference",
+        "hex-wraps-at-the-scan",
+        "abs-mod-0",
+        "abs-divide-by-0",
+        "abs-0-to-the-0",
+        "abs-mod-negative",
+    ],
 )
 def test_imported_constants_compute_what_math_computes(
     token, dest, build, dest_type, operand_type, value, runner_factory, monkeypatch
@@ -399,16 +451,17 @@ def test_imported_constants_compute_what_math_computes(
     want = hand.current_state.tags
     assert got[ns[dest].name] == want["Dest"] == value
     assert [got[f] for f in _FAULTS] == [want[f] for f in _FAULTS]
-    assert got["fault.division_error"] is (token == "math(5 / 0,DS2)")
+    assert got["fault.division_error"] is ("/ 0," in token)
 
 
 @pytest.mark.parametrize(
     ("text", "dest", "uses", "guess"),
     [
-        ("DH1 / DH2 MOD DH3", "DH4,mode=hex", "/ and MOD", "them from the left"),
-        ("DS1 - DS2 * 3", "DF1", "- and *", "* first"),
-        ("- ( DS1 ) ^ 2", "DF1", f"{NEGATE_GROUP} and ^", "the minus sign first"),
-        ("DS1 MOD DS2 MOD 3", "DS3", "MOD twice", "them from the left"),
+        ("DH1 / DH2 MOD DH3", "DH4,mode=hex", "'/' and 'MOD'", "the two from the left"),
+        ("DS1 - DS2 * 3", "DF1", "'-' and '*'", "'*' first"),
+        ("- ( DS1 ) ^ 2", "DF1", f"{_BRACKET} and '^'", "the minus sign first"),
+        ("- PI ^ 2", "DF1", "a minus sign before PI and '^'", "the minus sign first"),
+        ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(
@@ -418,9 +471,9 @@ def test_imported_formula_with_an_unconfirmed_pair_warns(
         ladder_to_pyrung(_bundle(f"math({text},{dest})"))
     messages = [str(w.message) for w in caught]
     assert messages == [
-        f"The Math formula {text!r} uses {uses} with no brackets between them. pyrung applies "
-        f"{guess}, but no one has checked that order on a CLICK yet. Add brackets to the "
-        "formula in CLICK to fix the order."
+        f"The Math formula {text!r} uses {uses} with no brackets between the two. pyrung "
+        f"applies {guess}, but no one has checked that order on a CLICK yet. Add brackets to "
+        "the formula in CLICK to set the order."
     ]
     assert all(m.isascii() for m in messages)
 
@@ -483,7 +536,12 @@ def _close(got: Any, want: float) -> bool:
 
 @pytest.fixture(scope="module")
 def confirmed() -> tuple[Any, ...]:
-    return _program(READINGS)
+    # The program moves each reading onto registers of its own, so the formulas of
+    # READ_FORMULAS no longer match a reading's tree, and each warns once.
+    with pytest.warns(UserWarning) as caught:
+        program = _program(READINGS)
+    assert len(caught) == len(READ_FORMULAS)
+    return program
 
 
 def test_imported_formula_gives_the_plc_value_on_every_backend(confirmed, monkeypatch) -> None:

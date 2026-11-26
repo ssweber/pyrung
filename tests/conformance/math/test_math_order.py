@@ -48,7 +48,7 @@ from pyrung.click.codegen.formula import (
     Number,
     parse_with_unconfirmed_pairs,
 )
-from pyrung.click.codegen.utils import _guessed_order
+from pyrung.click.codegen.utils import _guessed_order, _operator_words
 from pyrung.conformance import Case, Group, assert_all_passed, case, run
 from pyrung.core import copy, fill, math, rung
 from tests.conformance.math.formula_values import click_value, regroupings
@@ -173,7 +173,10 @@ def _hex_text(value: int) -> str:
 def _probe(case_id: str, hex_mode: bool, first: int, readings: Sequence[tuple[str, int]]) -> Case:
     typed = _registers([readings[0][0]], "DH" if hex_mode else "DS", 1)[0][0]
     [(left, right)] = parse_with_unconfirmed_pairs(typed, hex_mode=hex_mode)[1]
-    uses = f"two {left}s" if left == right else f"{left} and {right}"
+    if left == right:
+        uses = f"{_operator_words(left)} twice"
+    else:
+        uses = f"{_operator_words(left)} and {_operator_words(right)}"
     order = _guessed_order(left, right)
     show = _hex_text if hex_mode else str
     sentence = f"For {uses}, a CLICK applies {order}. " + " and ".join(

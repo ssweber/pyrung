@@ -539,11 +539,14 @@ def _render_parsed_formula(
 ) -> str:
     """Render the parsed *formula* of *text*, and warn once for each unconfirmed pair in it."""
     for first, second in pairs:
-        uses = f"{first} twice" if first == second else f"{first} and {second}"
+        if first == second:
+            uses = f"{_operator_words(first)} twice"
+        else:
+            uses = f"{_operator_words(first)} and {_operator_words(second)}"
         warnings.warn(
-            f"The Math formula {text!r} uses {uses} with no brackets between them. pyrung "
+            f"The Math formula {text!r} uses {uses} with no brackets between the two. pyrung "
             f"applies {_guessed_order(first, second)}, but no one has checked that order on a "
-            "CLICK yet. Add brackets to the formula in CLICK to fix the order.",
+            "CLICK yet. Add brackets to the formula in CLICK to set the order.",
             stacklevel=2,
         )
 
@@ -616,9 +619,12 @@ def _render_number(value: int | float, is_hex: bool, text: str) -> tuple[str, in
 
 
 def _is_python_number(node: Formula) -> bool:
-    """Return whether *node* renders as a plain Python number."""
+    """Return whether Python computes *node* to a plain number when it loads the file."""
     if isinstance(node, Negate):
         return _is_python_number(node.operand)
+    if isinstance(node, Call) and _CLICK_FUNC_TO_PYTHON[node.name] == "abs":
+        # ABS is Python's builtin abs, which gives a plain number for a plain number.
+        return len(node.args) == 1 and _is_python_number(node.args[0])
     return isinstance(node, Number)
 
 
@@ -636,7 +642,9 @@ def _has_constant_operation(node: Formula) -> bool:
 
 
 def _token_needs_literal_expr(token: str) -> bool:
-    """Return whether the rendered AF *token* holds ``LiteralExpr``, so its file imports it."""
+    """Return whether the importer writes ``LiteralExpr`` for the CLICK instruction *token*,
+    so its file must import it.
+    """
     open_paren = token.find("(")
     if open_paren <= 0 or not token.endswith(")"):
         return False
@@ -655,13 +663,18 @@ def _token_needs_literal_expr(token: str) -> bool:
     return False
 
 
+def _operator_words(operator: str) -> str:
+    """Return *operator* as a warning names it. A binary operator goes in quotes."""
+    return f"'{operator}'" if operator in _TIER_OF else operator
+
+
 def _guessed_order(first: str, second: str) -> str:
     """Return the words that say how pyrung orders two operators that no reading has ordered."""
-    if first not in _TIER_OF or second not in _TIER_OF:
+    if first not in _TIER_OF:
         return "the minus sign first"
     if _TIER_OF[first] == _TIER_OF[second]:
-        return "them from the left"
-    return f"{first if _TIER_OF[first] < _TIER_OF[second] else second} first"
+        return "the two from the left"
+    return f"'{first if _TIER_OF[first] < _TIER_OF[second] else second}' first"
 
 
 def _sub_range(

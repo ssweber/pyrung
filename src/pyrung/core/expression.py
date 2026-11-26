@@ -503,7 +503,7 @@ class TagExpr(Expression):
 
 
 class LiteralExpr(Expression):
-    """A constant that a Math runs as part of its formula at scan time.
+    """A constant that ``math()`` keeps in its formula, so the operation on it runs at scan time.
 
     Python computes an operation between two numbers when it loads the source, before
     pyrung sees the operation. ``math(5 / 0, DS1)`` raises ``ZeroDivisionError`` then.

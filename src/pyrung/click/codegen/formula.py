@@ -33,15 +33,27 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 #: before a constant is part of the constant (CLICK stores ``-2`` as H-2), so it is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
 
-#: A minus sign before a bracket, a function, a pointer, PI or another minus sign. No CLICK
-#: reading has shown where it sits in CLICK's order.
-NEGATE_GROUP = "a minus sign before a bracket or a function"
+#: A minus sign before anything but an address or a constant, as an operator in
+#: :data:`CONFIRMED_PAIRS`. No CLICK reading has shown where it sits in CLICK's order.
+NEGATE_GROUP = "a minus sign before a bracket, a function, a pointer, PI or another minus sign"
 
-#: The pairs of operators whose order readings of a CLICK settled, with the rounds of those
-#: readings. Take two operators that meet in a formula (see :func:`parse_click_formula`). A
-#: reading of that formula rules out an order of the two when the formula, grouped in that
-#: order, gives another value. A pair is settled once its readings rule out every order but
-#: CLICK's. ``tests/click/test_click_formula.py`` checks this list against its readings.
+#: The words for each kind of :data:`NEGATE_GROUP`, so that a warning names what the formula
+#: has.
+_NEGATE_GROUP_WORDS = (
+    "a minus sign before a bracket",
+    "a minus sign before a function",
+    "a minus sign before a pointer",
+    "a minus sign before PI",
+    "a minus sign before another minus sign",
+)
+
+#: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
+#: readings. Two operators meet when one is an operand of the other, and the operand has no
+#: brackets of its own. Only two operators that meet have one other grouping to test, so a
+#: reading settles nothing about the rest. A reading rules out an order of two operators that
+#: meet when the formula, grouped in that order, gives another value. A pair is settled once
+#: its readings rule out every order but CLICK's. ``tests/click/test_click_formula.py``
+#: checks this list against its readings.
 CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "^", "b10"),
     ("^", "*", "b11"),
@@ -66,7 +78,6 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("OR", "XOR", "b11"),
     ("OR", "+", "b11"),
     ("XOR", "+", "b11"),
-    ("+", "-", "b11"),
     ("-", "-", "b10"),
     (NEGATE_ADDRESS, "^", "b11"),
     (NEGATE_ADDRESS, "AND", "b12"),
@@ -76,11 +87,15 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_ADDRESS, "-", "b12"),
 )
 
-#: The order of these pairs never changes the value, so no reading needs to settle them.
-#: They are the same one of ``+ * AND OR XOR`` twice, two minus signs, and a minus sign
-#: with ``*``.
-_ORDER_FREE_SAME = frozenset({"+", "*", "AND", "OR", "XOR"})
-_NEGATIONS = frozenset({NEGATE_ADDRESS, NEGATE_GROUP})
+#: Formulas that a CLICK was read running, as (text, hex mode), whose pairs of operators the
+#: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
+#: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
+#: readings.
+READ_FORMULAS: tuple[tuple[str, bool], ...] = (
+    ("5 - 3 + 1", False),
+    ("- DS1 * 3", False),
+    ("- DS1 MOD 3", False),
+)
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
 _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
@@ -211,14 +226,15 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     In hex mode (*hex_mode*) a bare number is hex, as CLICK's dialog reads it: ``255`` is
     0x255. Raise ValueError for text that is not a formula.
 
-    Return None unless a CLICK reading has settled the order of every pair of operators
-    that meet in the tree. Two operators meet when one is an operand of the other and no
-    bracket of its own holds it. In ``DS1 - DS2 * 3``, ``-`` and ``*`` meet. In
-    ``( DS1 - DS2 ) * 3`` no two operators meet. An operator inside a function's brackets
-    meets none outside them. A minus sign is an operator too, of the kind
-    :data:`NEGATE_ADDRESS` or :data:`NEGATE_GROUP`. A pair needs no reading when its order
-    never changes the value. The rule assumes that CLICK ranks its operators, so two
-    operators that meet only through a third follow from the pairs that do meet.
+    Return None unless a CLICK reading has settled the order of every pair of operators in
+    each bracket scope. A scope is the whole formula outside brackets, the inside of one
+    bracket, or one argument of a function. So ``DS1 - DS2 + DS3 * DS4`` needs the pairs
+    ``- +``, ``- *`` and ``+ *``, and ``( DS1 - DS2 ) * 3`` needs none. A minus sign is an
+    operator too, of the kind :data:`NEGATE_ADDRESS` or :data:`NEGATE_GROUP`.
+
+    The grammar gives the only exemptions. A minus sign applies before every operator to its
+    left in its scope, so it pairs only with the operators to its right. A formula with the
+    tree of one in :data:`READ_FORMULAS` is confirmed.
     """
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
@@ -229,64 +245,89 @@ def parse_with_unconfirmed_pairs(
 ) -> tuple[Formula, tuple[tuple[str, str], ...]]:
     """Return the tree of *text* in :data:`BINARY_TIERS` order, and its unconfirmed pairs.
 
-    Each pair meets in the tree, as :func:`parse_click_formula` says, and no reading in
+    Each pair is one that :func:`parse_click_formula` needs, and no reading in
     :data:`CONFIRMED_PAIRS` settled it. Each pair lists its operators in the order that the
     formula writes them. Raise ValueError for text that is not a formula.
     """
     tree = _Parser(text, hex_mode=hex_mode).parse()
+    if (tree, hex_mode) in _read_trees():
+        return tree, ()
     pairs: dict[frozenset[str], tuple[str, str]] = {}
-    for parent, child, child_is_left in _meetings(tree):
-        first, second = (child, parent) if child_is_left else (parent, child)
-        key = frozenset((first, second))
-        if key not in _CONFIRMED and not _order_free(first, second):
-            pairs.setdefault(key, (first, second))
+    for operators in _scopes(tree):
+        for index, (first, _) in enumerate(operators):
+            for second, second_is_minus in operators[index + 1 :]:
+                if second_is_minus:
+                    continue
+                if frozenset((pair_kind(first), pair_kind(second))) not in _CONFIRMED:
+                    pairs.setdefault(frozenset((first, second)), (first, second))
     return tree, tuple(pairs.values())
 
 
 def operator_kind(node: Formula) -> str | None:
-    """Return the operator of *node* as :data:`CONFIRMED_PAIRS` names it, or None."""
+    """Return the operator of *node* in words for a warning, or None.
+
+    :func:`pair_kind` turns the words into the operator that :data:`CONFIRMED_PAIRS` names.
+    """
     if isinstance(node, BinaryOp):
         return node.op
-    if isinstance(node, Negate):
-        operand = node.operand
-        if isinstance(operand, Address) and not operand.bracketed:
-            return NEGATE_ADDRESS
-        return NEGATE_GROUP
-    return None
+    if not isinstance(node, Negate):
+        return None
+    operand = node.operand
+    if isinstance(operand, Address) and not operand.bracketed:
+        return NEGATE_ADDRESS
+    if operand.bracketed:
+        return _NEGATE_GROUP_WORDS[0]
+    if isinstance(operand, (Call, RangeCall)):
+        return _NEGATE_GROUP_WORDS[1]
+    if isinstance(operand, Pointer):
+        return _NEGATE_GROUP_WORDS[2]
+    if isinstance(operand, Pi):
+        return _NEGATE_GROUP_WORDS[3]
+    return _NEGATE_GROUP_WORDS[4]
 
 
-def _meetings(node: Formula) -> Iterator[tuple[str, str, bool]]:
-    """Yield each pair of operators that meet in *node*, in the order the formula writes them.
+def pair_kind(words: str) -> str:
+    """Return the operator that :data:`CONFIRMED_PAIRS` names for the *words* of an operator."""
+    return NEGATE_GROUP if words in _NEGATE_GROUP_WORDS else words
 
-    Each item is the outer operator, the inner one, and whether the inner one is the outer
-    one's left operand.
+
+def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:
+    """Yield the operators of each bracket scope of *tree*, in the order the formula writes
+    them, each with whether it is a minus sign before its operand.
     """
-    if isinstance(node, Call):
-        for arg in node.args:
-            yield from _meetings(arg)
-        return
-    parent = operator_kind(node)
-    if isinstance(node, BinaryOp):
-        operands = ((node.left, True), (node.right, False))
-    elif isinstance(node, Negate):
-        operands = ((node.operand, False),)
-    else:
-        return
-    for operand, is_left in operands:
-        child = operator_kind(operand)
-        if is_left:
-            yield from _meetings(operand)
-        if parent is not None and child is not None and not operand.bracketed:
-            yield parent, child, is_left
-        if not is_left:
-            yield from _meetings(operand)
+    operators: list[tuple[str, bool]] = []
+    inner: list[Formula] = []
+
+    def walk(node: Formula, outermost: bool = False) -> None:
+        if node.bracketed and not outermost:
+            inner.append(node)
+        elif isinstance(node, BinaryOp):
+            walk(node.left)
+            operators.append((node.op, False))
+            walk(node.right)
+        elif isinstance(node, Negate):
+            words = operator_kind(node)
+            assert words is not None
+            operators.append((words, True))
+            walk(node.operand)
+        elif isinstance(node, Call):
+            inner.extend(node.args)
+
+    walk(tree, outermost=True)
+    yield operators
+    for node in inner:
+        yield from _scopes(node)
 
 
-def _order_free(first: str, second: str) -> bool:
-    if first == second and first in _ORDER_FREE_SAME:
-        return True
-    pair = {first, second}
-    return pair <= _NEGATIONS or (bool(pair & _NEGATIONS) and "*" in pair)
+_READ_TREES: list[tuple[Formula, bool]] = []
+
+
+def _read_trees() -> list[tuple[Formula, bool]]:
+    if READ_FORMULAS and not _READ_TREES:
+        _READ_TREES.extend(
+            (_Parser(text, hex_mode=hex_mode).parse(), hex_mode) for text, hex_mode in READ_FORMULAS
+        )
+    return _READ_TREES
 
 
 class _Parser:
