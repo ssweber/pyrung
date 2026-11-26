@@ -233,8 +233,9 @@ def _compile_expression_impl(
         ):
             # A Math's MOD truncates, so the result has the sign of the dividend.
             # A MOD by 0 is 0 with SC46.  Both follow the core's _op_mod.  Python's
-            # % floors instead.  A nonzero constant divisor cannot set SC46, so that
-            # MOD passes no flag list, and the Math has no fault write to trace.
+            # % floors instead.  A nonzero constant divisor never sets SC46, so that
+            # call passes None for the flag list.  A Math with no other failing step
+            # then builds no flag list.
             # Every call passes three arguments, because scan_trace matches a helper
             # call by its argument count and does not fill in a default.
             ctx.mark_helper("_mod")

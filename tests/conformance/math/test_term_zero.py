@@ -1,4 +1,4 @@
-"""A quiet Math error's 0 in a larger formula: the ``term_zero`` group (part ``follow2_values``).
+"""A failing Math step's 0 in a larger formula: the ``term_zero`` group (part ``follow2_values``).
 
 On a CLICK, a division by 0 and a SQRT of a negative each zero their own term, not the
 formula.  The ``... + 5`` formulas read 5, 5, 5 (``math_terms/error_terms``).  A CLICK also

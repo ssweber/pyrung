@@ -274,7 +274,9 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
     - In hex mode AND, OR and XOR each give 16 unsigned bits, and a later step reads
       those 16 bits.  With DH1 = 2h, ``- DH1 OR 0h`` stores FFFEh and
       ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
-      2026-11-26).
+      2026-11-26).  An operand past 16 bits gets the same cut, with no SC43.  So
+      ``DH1 * DH2 OR 0h`` with 100h and 100h stores 0000h.  That is pyrung's
+      assumption, and no reading covers it.
 
     Return *expression* itself when nothing changes (no operation in it).
     """
