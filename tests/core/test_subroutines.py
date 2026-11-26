@@ -147,5 +147,8 @@ class TestReturnEarlyPlacement:
                     return_early()
 
     def test_return_early_without_a_program_is_refused(self):
-        with pytest.raises(RuntimeError, match="must be called inside a rung"):
-            return_early()
+        Button = Bool("Button")
+
+        with pytest.raises(RuntimeError, match="while a Program is open"):
+            with rung(Button):
+                return_early()
