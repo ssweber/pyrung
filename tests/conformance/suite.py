@@ -105,6 +105,7 @@ from tests.conformance.math import (
     test_math_error,
     test_math_flags,
     test_math_more,
+    test_math_order,
     test_math_terms,
     test_numeric,
     test_real_sum,
@@ -363,6 +364,8 @@ APART_GROUPS = [
     test_td_count_on.group,
     # Stores that a CLICK was read making in programs of their own.
     test_fill_binary.group,
+    # The order in which a CLICK reads a Math formula typed without brackets.
+    test_math_order.group,
     # Hex Math stores that a CLICK was read making in a program of its own.
     test_hex_divmod.group,
     # Which fault flags a Math sets, read on a CLICK in a program of its own.
@@ -421,6 +424,8 @@ APART_PARTS: dict[str, ApartPart] = {
     # A Fill of a number into TXT registers, and Copy Binary into a DD or a DF.  A CLICK was
     # read making each in a program of its own.
     "follow5_reads": ApartPart(("fill_binary",)),
+    # Math formulas typed without brackets, read in CLICK's order.
+    "follow5_order": ApartPart(("math_order",)),
     # What a hex Math's division and MOD store, and which fault flags a Math sets.  A CLICK
     # was read making each in a program of its own.
     "follow6_reads": ApartPart(("hex_divmod", "math_flags")),

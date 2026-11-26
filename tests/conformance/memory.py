@@ -535,6 +535,8 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "td_count_on": {"T": range(321, 324)},
     # The follow5_reads part.
     "fill_binary": {"TXT": range(451, 455), "DD": range(451, 455), "DF": range(451, 454)},
+    # The follow5_order part.  Each case takes a run of 10.
+    "math_order": {"DS": range(4101, 4191), "DH": range(201, 341)},
     # The follow6_reads part.
     "hex_divmod": {"DH": range(141, 168)},
     "math_flags": {"DH": range(168, 195), "DS": range(4301, 4308), "C": range(741, 748)},

@@ -59,6 +59,7 @@
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
+- Importing a CLICK project keeps CLICK's order in a Math formula, so `6h OR 3h AND 8h` computes 0 as on a CLICK (it computed 6).
 
 ## v0.18.1 (2026-11-25)
 

@@ -332,3 +332,32 @@ mod_by_zero = 4
 or_result_unsigned = 5
 hex_by_zero_goes_on = 6
 false_rung_clears_sc46 = 7
+
+[groups.math_order]
+base = 1801 # Conf_MathOrder: DS1801..DS2040
+slots = 23
+
+[groups.math_order.cases]
+dec_tiers = 1
+dec_power = 2
+dec_minus_power = 3
+dec_div_level = 4
+dec_add_after = 5
+dec_sub_after = 6
+dec_power_mod = 7
+dec_minus_mul = 8
+dec_minus_add = 9
+hex_tiers = 10
+hex_level = 11
+hex_or_xor = 12
+hex_and_mul = 13
+hex_minus_and = 14
+hex_minus_or = 15
+hex_mod_and_div_or = 16
+div_mod = 17
+div_and = 18
+div_xor = 19
+mod_or = 20
+mod_xor = 21
+mul_or = 22
+mul_xor = 23
