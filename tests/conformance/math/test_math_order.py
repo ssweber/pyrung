@@ -59,6 +59,9 @@ do, and expects what pyrung gives.
 - Result3 is 1 when ``DD 2147483647 * DD 2147483647`` into a DD is 0, 2 for 1 and 3 for
   2147483647. Result4 is the same formula into an Int. As a double the product is
   2^62 - 2^32, whose low 32 bits are 0. The low bits of the whole product are 1.
+- Scratch is ``DF 1.0 + DF 1.0E+17 + DF -1.0E+17`` into an Int. It is 0 from the left and 1
+  with the second ``+`` first. A slot has four Results, so the case reads this one in
+  ``Scratch``, which it uses for nothing else.
 
 When the case passes on a CLICK, add its readings to ``READINGS``, and widen the stores that
 ``formula_values._STORES_READ`` reads.
@@ -350,6 +353,7 @@ def prove_doubles(slot: Any) -> None:
         math(a * b * c, product)
         math(top * top_again, square)
         math(top * top_again, slot.Result4)
+        math(df[173] + df[174] + df[175], slot.Scratch)
     class_of(slot, product, DOUBLES_PRODUCTS, slot.Result2)
     class_of(slot, square, [0, 1, 2147483647], slot.Result3)
     finish(slot)
@@ -364,12 +368,16 @@ def init_doubles(slot: Any) -> None:
     fill(2147483647, dd.select(182, 183))
     copy(0, dd[181])
     copy(0, dd[184])
+    copy(1.0, df[173])
+    copy(1.0e17, df[174])
+    copy(-1.0e17, df[175])
 
 
 #: The formulas of the ``doubles`` case that read an order, with their register values.
 DOUBLES: tuple[tuple[str, dict[str, Any]], ...] = (
     ("DF170 + DF171 - DF172", {"DF170": 1.0, "DF171": float32(1.0e17), "DF172": float32(1.0e17)}),
     ("DD178 * DD179 * DD180", {"DD178": 164999119, "DD179": 114975250, "DD180": 58}),
+    ("DF173 + DF174 + DF175", {"DF173": 1.0, "DF174": float32(1.0e17), "DF175": float32(-1.0e17)}),
 )
 
 #: What a DD stores for 164999119 * 114975250 * 58: the product of the doubles from the left,
@@ -413,19 +421,22 @@ DOUBLES_CASE = case(
     "A Math applies + and - from the left in doubles. 1.0 + 1.0E+17 - 1.0E+17 is 0 into an "
     "Int (Result1), and 1 with the - first. A Math applies two * from the left. 164999119 * "
     "114975250 * 58 into a DD is 1322058880 (Result2 = 1), and 1322058752 with the second * "
-    "first (2). 2147483647 * 2147483647 is 0 into a DD (Result3 = 1) and into an Int (Result4)",
+    "first (2). 2147483647 * 2147483647 is 0 into a DD (Result3 = 1) and into an Int "
+    "(Result4). 1.0 + 1.0E+17 + -1.0E+17 is 0 into an Int (Scratch), and 1 with the second + "
+    "first",
     ladder=prove_doubles,
     init=init_doubles,
     id="doubles",
-    expect={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": 0},
+    expect={"Result1": 0, "Result2": 1, "Result3": 1, "Result4": 0, "Scratch": 0},
     formulas=[
         "DF170 + DF171 - DF172",
         "DD178 * DD179 * DD180",
         "DD182 * DD183",
         "DD182 * DD183",
+        "DF173 + DF174 + DF175",
     ],
     probe="whether a CLICK applies + and -, and * twice, from the left where a double rounds, "
-    "and what it stores for a value past 2^53",
+    "and + twice, and what it stores for a value past 2^53",
 )
 
 
