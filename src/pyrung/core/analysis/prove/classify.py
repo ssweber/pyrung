@@ -1118,7 +1118,9 @@ def _interval_bounds(
     a_lo, a_hi = left
     b_lo, b_hi = right
 
-    if node.symbol == "/" and b_lo <= 0 <= b_hi:
+    if node.symbol in ("/", "//") and b_lo <= 0 <= b_hi:
+        # When the divisor can be 0, the corners do not bound the quotient.  With D in
+        # -10..10, the corners of 10 // D are -1 and 1, but 10 // 1 is 10.
         return None
 
     if node.symbol == "%":
@@ -1143,6 +1145,11 @@ def _interval_bounds(
     # _WIDEST_SHIFT would build a huge int, and the result is past a double anyway.
     if node.symbol == "<<" and b_hi > _WIDEST_SHIFT:
         return None
+    # When the base is 0 or more, a power only rises or only falls as one operand rises.
+    # With A in -2..2, both corners of A ** 2 are 4, but 1 ** 2 is 1.  An exponent past
+    # _WIDEST_SHIFT would build a huge int.
+    if node.symbol == "**" and (a_lo < 0 or max(abs(b_lo), abs(b_hi)) > _WIDEST_SHIFT):
+        return None
 
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
@@ -1158,9 +1165,11 @@ def _interval_bounds(
 
 #: The operations whose extremes over two intervals lie at the four corners.  Hold one
 #: operand, and the result only rises or only falls as the other operand rises.
+#: ``_interval_bounds`` first sets aside a divisor that can be 0 and a negative base.
 _CORNER_SYMBOLS = frozenset({"+", "-", "*", "/", "//", "**", "<<", ">>"})
 
-#: The widest left shift that ``_interval_bounds`` computes.  2 ** 1024 is past a double.
+#: The widest left shift, and the largest exponent, that ``_interval_bounds`` computes.
+#: 2 ** 1024 is past a double.
 _WIDEST_SHIFT = 1024
 
 

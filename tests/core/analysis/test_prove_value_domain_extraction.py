@@ -554,6 +554,26 @@ def _wide_power() -> Program:
     return logic
 
 
+def _power_of_a_negative() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, d3 = Int("A"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, -2, 1, 2)
+        with rung():
+            math(a**2, d3)
+    return logic
+
+
+def _floor_division_by_a_span_through_zero() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    d, d3 = Int("D"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, d, -10, 1, 10)
+        with rung():
+            math(10 // d, d3)
+    return logic
+
+
 _STORED_VALUE_PROGRAMS = {
     "decimal_xor": _decimal_xor,
     "hex_or_of_a_difference": _hex_or_of_a_difference,
@@ -561,6 +581,8 @@ _STORED_VALUE_PROGRAMS = {
     "shift_of_a_negative": _shift_of_a_negative,
     "wide_shift": _wide_shift,
     "wide_power": _wide_power,
+    "power_of_a_negative": _power_of_a_negative,
+    "floor_division_by_a_span_through_zero": _floor_division_by_a_span_through_zero,
 }
 
 
