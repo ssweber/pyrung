@@ -17,7 +17,11 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._helpers import _render_helper_defs
 from pyrung.circuitpy.codegen.context import CodegenContext
-from pyrung.circuitpy.codegen.render_modbus import _df_words, _modbus_protocol_lines
+from pyrung.circuitpy.codegen.render_modbus import (
+    _df_words,
+    _modbus_protocol_lines,
+    _raw_register_lines,
+)
 
 
 def _render_runtime(ctx: CodegenContext) -> str:
@@ -204,51 +208,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
         "",
     ]
 
-    lines.extend(
-        [
-            "def _mb_client_raw_pack_register_values(values, tag_types, word_order):",
-            "    _regs = []",
-            "    for _vi in range(len(values)):",
-            "        _tt = tag_types[_vi]",
-            "        _v = values[_vi]",
-            "        if _tt == 'DINT':",
-            "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-            "            _bi = '>i' if word_order == 'high_low' else '<i'",
-            "            _regs.extend(struct.unpack(_bo, struct.pack(_bi, int(_v))))",
-            "        elif _tt == 'REAL':",
-            "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-            "            _bf = '>f' if word_order == 'high_low' else '<f'",
-            "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
-            "        elif _tt == 'INT':",
-            "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
-            "        else:",
-            "            _regs.append(int(_v) & 0xFFFF)",
-            "    return _regs",
-            "",
-            "def _mb_client_raw_unpack_register_values(regs, tag_types, word_order):",
-            "    _values = []",
-            "    _ri = 0",
-            "    for _tt in tag_types:",
-            "        if _tt == 'DINT':",
-            "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-            "            _bi = '>i' if word_order == 'high_low' else '<i'",
-            "            _values.append(struct.unpack(_bi, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
-            "            _ri += 2",
-            "        elif _tt == 'REAL':",
-            "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-            "            _bf = '>f' if word_order == 'high_low' else '<f'",
-            "            _values.append(struct.unpack(_bf, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
-            "            _ri += 2",
-            "        elif _tt == 'INT':",
-            "            _values.append(struct.unpack('<h', struct.pack('<H', int(regs[_ri]) & 0xFFFF))[0])",
-            "            _ri += 1",
-            "        else:",
-            "            _values.append(int(regs[_ri]) & 0xFFFF)",
-            "            _ri += 1",
-            "    return _values",
-            "",
-        ]
-    )
+    lines.extend(_raw_register_lines())
 
     lines.extend(
         [

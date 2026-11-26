@@ -11,6 +11,7 @@ from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
 from pyrung.circuitpy.codegen._constants import _STORE_TYPE_HELPERS
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.core.instruction.send_receive.helpers import TXT_BYTE_SHIFTS
 from pyrung.core.system_points import system
 
 #: The server reads XD and YD from the X and Y bits, not from tags mapped to them.
@@ -96,6 +97,61 @@ def _cell_runs(ctx: CodegenContext, is_coil: bool) -> list[tuple[str, str, int, 
                     continue
             runs.append((bank, symbol, first, first + width - 1, index))
     return runs
+
+
+def _raw_register_lines() -> list[str]:
+    """Return the helpers that pack and unpack the registers of a raw-address job.
+
+    The runtime library and a code.py that holds its own helpers emit the same lines.
+    """
+    return [
+        "def _mb_client_raw_pack_register_values(values, tag_types, word_order):",
+        "    _regs = []",
+        "    for _vi in range(len(values)):",
+        "        _tt = tag_types[_vi]",
+        "        _v = values[_vi]",
+        "        if _tt == 'DINT':",
+        "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+        "            _bi = '>i' if word_order == 'high_low' else '<i'",
+        "            _regs.extend(struct.unpack(_bo, struct.pack(_bi, int(_v))))",
+        "        elif _tt == 'REAL':",
+        "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+        "            _bf = '>f' if word_order == 'high_low' else '<f'",
+        "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+        "        elif _tt == 'INT':",
+        "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
+        "        else:",
+        "            _regs.append(int(_v) & 0xFFFF)",
+        "    return _regs",
+        "",
+        "def _mb_client_raw_unpack_register_values(regs, tag_types, word_order):",
+        "    if tag_types and all(_tt == 'CHAR' for _tt in tag_types):",
+        "        return [",
+        f"            chr((int(regs[_i // 2]) >> {TXT_BYTE_SHIFTS!r}[_i % 2]) & 0xFF)",
+        "            for _i in range(len(tag_types))",
+        "        ]",
+        "    _values = []",
+        "    _ri = 0",
+        "    for _tt in tag_types:",
+        "        if _tt == 'DINT':",
+        "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+        "            _bi = '>i' if word_order == 'high_low' else '<i'",
+        "            _values.append(struct.unpack(_bi, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
+        "            _ri += 2",
+        "        elif _tt == 'REAL':",
+        "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+        "            _bf = '>f' if word_order == 'high_low' else '<f'",
+        "            _values.append(struct.unpack(_bf, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
+        "            _ri += 2",
+        "        elif _tt == 'INT':",
+        "            _values.append(struct.unpack('<h', struct.pack('<H', int(regs[_ri]) & 0xFFFF))[0])",
+        "            _ri += 1",
+        "        else:",
+        "            _values.append(int(regs[_ri]) & 0xFFFF)",
+        "            _ri += 1",
+        "    return _values",
+        "",
+    ]
 
 
 def _df_words(value: str) -> str:
@@ -1162,51 +1218,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
     ]
 
     if any(s.bank is None for s in specs):
-        lines.extend(
-            [
-                "def _mb_client_raw_pack_register_values(values, tag_types, word_order):",
-                "    _regs = []",
-                "    for _vi in range(len(values)):",
-                "        _tt = tag_types[_vi]",
-                "        _v = values[_vi]",
-                "        if _tt == 'DINT':",
-                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-                "            _bi = '>i' if word_order == 'high_low' else '<i'",
-                "            _regs.extend(struct.unpack(_bo, struct.pack(_bi, int(_v))))",
-                "        elif _tt == 'REAL':",
-                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-                "            _bf = '>f' if word_order == 'high_low' else '<f'",
-                "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
-                "        elif _tt == 'INT':",
-                "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
-                "        else:",
-                "            _regs.append(int(_v) & 0xFFFF)",
-                "    return _regs",
-                "",
-                "def _mb_client_raw_unpack_register_values(regs, tag_types, word_order):",
-                "    _values = []",
-                "    _ri = 0",
-                "    for _tt in tag_types:",
-                "        if _tt == 'DINT':",
-                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-                "            _bi = '>i' if word_order == 'high_low' else '<i'",
-                "            _values.append(struct.unpack(_bi, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
-                "            _ri += 2",
-                "        elif _tt == 'REAL':",
-                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
-                "            _bf = '>f' if word_order == 'high_low' else '<f'",
-                "            _values.append(struct.unpack(_bf, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
-                "            _ri += 2",
-                "        elif _tt == 'INT':",
-                "            _values.append(struct.unpack('<h', struct.pack('<H', int(regs[_ri]) & 0xFFFF))[0])",
-                "            _ri += 1",
-                "        else:",
-                "            _values.append(int(regs[_ri]) & 0xFFFF)",
-                "            _ri += 1",
-                "    return _values",
-                "",
-            ]
-        )
+        lines.extend(_raw_register_lines())
 
     for spec in specs:
         target = targets[spec.target_name]

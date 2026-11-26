@@ -37,6 +37,7 @@ from .helpers import (
     _normalize_operand_tags,
     _pack_values_to_registers,
     _preview_operand_tag_types,
+    _receive_register_count,
     _unpack_registers_to_values,
     _validate_status_tags,
 )
@@ -670,7 +671,8 @@ def _resolve_remote_start(
                 "because they are read-only. Use a HOLDING or COIL address."
             )
         tag_types = _preview_operand_tag_types(operand, effective_count)
-        register_count = _calculate_register_count(tag_types, remote_start.register_type)
+        count_registers = _calculate_register_count if is_send else _receive_register_count
+        register_count = count_registers(tag_types, remote_start.register_type)
         start_addr = remote_start.address
         addresses = tuple(range(start_addr, start_addr + register_count))
         return (None, start_addr, addresses, remote_start, register_count)

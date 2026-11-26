@@ -46,6 +46,15 @@ def computed_real(value: Any) -> Any:
 BLANK_CHAR = "\x00"
 
 
+#: The error that a plain Char store raises for a value that is not text.  Every runtime
+#: raises the same text.  Build-time rules refuse every write that could store a number in
+#: a Char, so this error means a path skipped them.
+NOT_TEXT_IN_CHAR = (
+    "pyrung tried to store {!r} in a Char tag. A Char tag holds only text. "
+    "This is a bug in pyrung. Please report it."
+)
+
+
 def store_char(value: Any) -> Any:
     """Return the value a CHAR holds when *value* is stored.  ``""`` becomes NUL.
 
@@ -119,6 +128,13 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
         return value
     if kind == "real":
         return store_real(value)
+    if kind == "char":
+        # The copy-family handlers turn TypeError and ValueError into the out-of-range
+        # flag.  A RuntimeError reaches the caller, so a write that skipped the build rules
+        # fails loudly.
+        if not isinstance(value, str):
+            raise RuntimeError(NOT_TEXT_IN_CHAR.format(value))
+        return store_char(value)
     if isinstance(value, float) and not math.isfinite(value):
         # A clamp pins +/-Inf at its bound.  An infinity that wraps is 0.
         if kind == "bool":
@@ -132,8 +148,6 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
         return 0
     if kind == "bool":
         return bool(value)
-    if kind == "char":
-        return store_char(value)
     if kind not in {"clamp", "wrap", "word"}:
         raise ValueError(f"unknown store transform: {kind!r}")
     if storage.lower is None or storage.upper is None:

@@ -117,4 +117,14 @@ A plan step that sets one of these tags stands for the device's answer. The busy
 
 `remote_start` can be a CLICK address string (e.g. `"DS1"`) for CLICK-to-CLICK communication, or a `ModbusAddress` for raw Modbus devices.
 
+```python
+receive(
+    target=peer,
+    remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+    dest=Txt.select(1, 3),
+)
+```
+
+From a raw holding or input register, `receive()` reads two characters into TXT tags. The low byte holds the first character. pyrung's Modbus server packs TXT the same way. CLICK's editor accepts only an even number of TXT tags here. pyrung also runs an odd number, and ignores the high byte of the last register. `receive()` refuses a coil or a discrete input into TXT tags.
+
 For more on the soft-PLC Modbus setup, see [CLICK PLC — ClickDataProvider](../dialects/click.md).

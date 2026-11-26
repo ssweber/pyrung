@@ -16,7 +16,7 @@ from pyrung.circuitpy.codegen._constants import (
     _INT_MAX,
     _INT_MIN,
 )
-from pyrung.core.storage import REAL_MAX, WORD_STORE_FLOOR
+from pyrung.core.storage import NOT_TEXT_IN_CHAR, REAL_MAX, WORD_STORE_FLOOR
 
 _HELPER_DEFS: dict[str, list[str]] = {
     "_clamp_int": [
@@ -174,6 +174,14 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "def _store_copy_value_to_type(value, dest_type):",
         '    if dest_type == "REAL":',
         "        return _store_real(value)",
+        '    if dest_type == "CHAR":',
+        "        if not isinstance(value, str):",
+        f"            raise RuntimeError({NOT_TEXT_IN_CHAR!r}.format(value))",
+        '        if value == "":',
+        '            return "\\x00"',
+        "        if len(value) != 1 or ord(value) > 255:",
+        '            raise ValueError("CHAR value must be blank or one 8-bit character")',
+        "        return value",
         "    if isinstance(value, float) and not math.isfinite(value):",
         "        # A clamp pins +/-Inf at its bound; NaN, and anything that wraps, is 0.",
         '        if value == value and dest_type == "INT":',
@@ -189,14 +197,6 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "        return int(value) & 0xFFFF",
         '    if dest_type == "BOOL":',
         "        return bool(value)",
-        '    if dest_type == "CHAR":',
-        "        if not isinstance(value, str):",
-        "            return value",
-        '        if value == "":',
-        '            return "\\x00"',
-        "        if len(value) != 1 or ord(value) > 255:",
-        '            raise ValueError("CHAR value must be blank or one 8-bit character")',
-        "        return value",
         "    return value",
         "",
     ],

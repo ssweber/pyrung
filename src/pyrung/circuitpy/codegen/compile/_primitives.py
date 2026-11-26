@@ -1274,7 +1274,10 @@ def _calc_store_expr(value_expr: str, dest_type: str, mode: str, ctx: CodegenCon
     if dest_type == "REAL":
         return f"float({value_expr})"
     if dest_type == "CHAR":
-        return value_expr
+        raise TypeError(
+            "math() cannot write into a Char tag, because a Char tag holds only text. "
+            "This is a bug in pyrung. Please report it."
+        )
     if dest_type == "WORD":
         return f"(int({value_expr}) & 0xFFFF)"
     if dest_type == "INT":
