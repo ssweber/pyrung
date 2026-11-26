@@ -349,20 +349,62 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
     assert list(READ_FORMULAS) == unsettled
 
 
-#: The values that each pair of operators runs over. The whole numbers reach the ends of the
-#: Int and Dint ranges. 164999119 * 114975250 * 58 passes 2^53, so a double rounds its
-#: product, and the two groupings round it to different values. Each Real is a float32, as a DF
-#: holds it. In one grouping, 1.0 + 1.0E+17 - 1.0E+17 loses the 1.0 before the large Reals cancel.
+# The grid holds a stand-in for each class of value that an operand of a CLICK formula can take.
+# Beside each class is how the model of a CLICK (``formula_values.click_steps``) treats it.
+#
+# In decimal mode:
+#
+# - An integer register at 0, 1 and -1, at odd and even values, and at the ends of an Int and a
+#   Dint (_WHOLE_GRID). The model reads each.
+# - A DF at 0, at fractions and at the ends of a float32 (3.4028235E+38 and 1.4E-45), with
+#   both signs (_REAL_GRID). The model reads each as a double.
+# - A DF at -0.0 (_REAL_GRID). The model reads it as a double. No reading shows a CLICK holding
+#   -0.0.
+# - Reals that cancel: 1.0 with 1.0E+17 and 1.0E+30, with both signs (_REAL_GRID). The model
+#   reads them in doubles, and a double drops the 1.0 from 1.0 + 1.0E+17.
+# - A DF at Inf, -Inf or NaN (_REAL_GRID). The model leaves each step on one unread.
+# - A constant that no DF holds, 0.1 (a stand-in). The model reads it as a double.
+# - A longer formula past 2^53, and a longer formula of Reals up to 1.0E+120 (the product). The
+#   model reads both in doubles.
+# - A longer formula from 1.0E-300 to 1.0E+300 (the power). With the other operand of the pair,
+#   a step passes the largest double or falls below the smallest. The model leaves such a step
+#   unread.
+# - Inf or NaN from a longer formula. A step that overflows gives one, or a step on a DF that
+#   holds one. The model leaves that step unread, so the pair never sees the value.
+#
+# In hex mode:
+#
+# - A DH at 0, at 1, at mixed bits and at the ends of each half (_HEX_GRID and _PLAIN_HEX_GRID).
+#   The model reads each as unsigned.
+# - A constant from 0h to FFFFh (the stand-in FFFFh). The model reads it as unsigned.
+# - A longer formula past FFFFh, past FDA93880h and past 2^53 (the product). The model reads it
+#   up to FDA93880h. It leaves a larger value unread, and an AND, OR or XOR of one past FFFFh.
+# - A longer formula below 0, down to -FFFFh (the difference). The model reads it in each step
+#   but three. It leaves unread a ``/`` whose quotient has a fraction, a MOD by it, and an AND,
+#   OR or XOR of one below -FFFFh.
+# - Every hex step works in whole numbers, so no hex value is a fraction, -0, Inf or NaN.
+#
+# A function, PI or a pointer gives a value from one of these classes. The model reads SQRT
+# only, and in decimal mode only.
+
+#: The whole numbers reach the ends of the Int and Dint ranges. 164999119 * 114975250 * 58
+#: passes 2^53, so a double rounds its product, and the two groupings round it to different
+#: values.
 _WHOLE_GRID = (
     *(0, 1, -1, 2, -2, 3, 7, 32767, -32768, 2147483647, -2147483648),
     *(164999119, 114975250, 58),
 )
+
+#: Each Real is a float32, as a DF holds it. In one grouping, 1.0 + 1.0E+17 - 1.0E+17 loses
+#: the 1.0 before the large Reals cancel.
 _REAL_GRID = tuple(
     float32(value)
     for value in (
         *_WHOLE_GRID,
         *(1.5, -2.5, 0.25, 2.0**40, -(2.0**40)),
         *(1.0e17, -1.0e17, 1.0e30, -1.0e30),
+        *(-0.0, 3.4028234663852886e38, -3.4028234663852886e38, 2.0**-149, -(2.0**-149)),
+        *(math.inf, -math.inf, math.nan),
     )
 )
 _HEX_GRID = (0, 1, 2, 3, 7, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF)
@@ -385,44 +427,68 @@ _DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] =
     True: (("Word", Word, Word, _HEX_GRID),),
 }
 
-#: A bracketed product that stands for an operand of any size, in place of one register of a
-#: pair's formula. Three registers cannot reach what a longer formula can. Its brackets
-#: settle its own order, so it adds no pair.
-_PRODUCT = "( ( ( {bank}4 * {bank}5 ) * {bank}6 ) * {bank}7 )"
+#: The values of a stand-in's registers, for each type of operand.
+_StandInValues = dict[Any, tuple[tuple[float, ...], ...]]
 
-#: The values of the product's four registers, for each type of operand. Each list reaches
-#: past 2^53. In hex, 8000h four times is 2^60, and the last product needs 55 bits.
-_PRODUCT_VALUES: dict[Any, tuple[tuple[float, ...], ...]] = {
-    Dint: (
-        (1, 1, 1, 1),
-        (-2, 3, 7, 1),
-        (164999119, 114975250, 58, 1),
-        (2147483647, 2147483647, 2147483647, -2147483648),
+#: Each stand-in that takes the place of one register of a pair's formula, with the values of
+#: its own registers. The stand-ins in brackets settle their own order, so they add no pair.
+#: The product's lists reach past 2^53. In hex, 8000h four times is 2^60, and the last product
+#: needs 55 bits.
+_STAND_INS: dict[bool, tuple[tuple[str, _StandInValues], ...]] = {
+    False: (
+        (
+            "( ( ( {bank}4 * {bank}5 ) * {bank}6 ) * {bank}7 )",
+            {
+                Dint: (
+                    (1, 1, 1, 1),
+                    (-2, 3, 7, 1),
+                    (164999119, 114975250, 58, 1),
+                    (2147483647, 2147483647, 2147483647, -2147483648),
+                ),
+                Real: tuple(
+                    tuple(float32(value) for value in values)
+                    for values in (
+                        (1, 1, 1, 1),
+                        (1.5, -2.5, 0.25, 1),
+                        (1.0e17, 1.0e17, 1, 1),
+                        (1.0e30,) * 4,
+                    )
+                ),
+            },
+        ),
+        ("( {bank}4 ^ {bank}5 )", {Dint: ((10, 300), (10, -300)), Real: ((10, 300), (10, -300))}),
+        ("0.1", {Dint: ((),), Real: ((),)}),
     ),
-    Real: tuple(
-        tuple(float32(value) for value in values)
-        for values in ((1, 1, 1, 1), (1.5, -2.5, 0.25, 1), (1.0e17, 1.0e17, 1, 1), (1.0e30,) * 4)
-    ),
-    Word: (
-        (1, 1, 1, 1),
-        (0x100, 0x101, 1, 1),
-        (0x8000, 0x8000, 0x8000, 0x8000),
-        (0x3031, 0x3AFD, 0x24FD, 0x2B86),
+    True: (
+        (
+            "( ( ( {bank}4 * {bank}5 ) * {bank}6 ) * {bank}7 )",
+            {
+                Word: (
+                    (1, 1, 1, 1),
+                    (0x100, 0x101, 1, 1),
+                    (0x8000, 0x8000, 0x8000, 0x8000),
+                    (0x3031, 0x3AFD, 0x24FD, 0x2B86),
+                )
+            },
+        ),
+        ("( {bank}4 - {bank}5 )", {Word: ((0, 1), (0, 0xFFFF))}),
+        ("FFFFh", {Word: ((),)}),
     ),
 }
 
 
-def _with_a_product(text: str, bank: str) -> list[str]:
-    """Return *text* with the product in place of each register in turn.
+def _with_a_stand_in(text: str, hex_mode: bool) -> list[tuple[str, _StandInValues]]:
+    """Return *text* with each stand-in in place of each register in turn, with its values.
 
-    A register right after the leading minus sign keeps its place, because a product there
+    A register right after the leading minus sign keeps its place, because a stand-in there
     makes another kind of minus sign. A range function takes registers only.
     """
     if ":" in text:
         return []
-    product = _PRODUCT.format(bank=bank)
+    bank = "DH" if hex_mode else "DS"
     return [
-        re.sub(rf"\b{bank}{index}\b", product, text)
+        (re.sub(rf"\b{bank}{index}\b", stand_in.format(bank=bank), text), values)
+        for stand_in, values in _STAND_INS[hex_mode]
         for index in _registers(text, bank)
         if not text.startswith(f"- {bank}{index} ")
     ]
@@ -516,15 +582,14 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
     groupings apart, so the model leaves out the store. Otherwise both stores must give the
     same value and flags, and pyrung's ``math()`` must store that value. A point where the model
     has no reading counts as a difference. pyrung's two groupings must store the same value
-    everywhere. The grid runs *text*, and *text* with the product in place of each register.
+    everywhere. The grid runs *text*, and *text* with each stand-in in place of each register.
 
     pyrung's flags are not compared, because a flag that pyrung gets wrong under both groupings
     is a flag bug, not a question of order (ruled 2026-11-26). A store that pyrung gets wrong
     under both groupings is a store bug in the same way (ruled 2026-11-26).
     """
-    bank = "DH" if hex_mode else "DS"
-    for formula in (text, *_with_a_product(text, bank)):
-        how = _how_one_formula_differs(formula, hex_mode, bank)
+    for formula, values in ((text, None), *_with_a_stand_in(text, hex_mode)):
+        how = _how_one_formula_differs(formula, hex_mode, values)
         if how is not None:
             return f"{formula}: {how}"
     return None
@@ -533,9 +598,14 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
 def _how_one_formula_differs(
     text: str,
     hex_mode: bool,
-    bank: str,
+    stand_in: _StandInValues | None = None,
     destinations: tuple[tuple[str, Any, Any, tuple[float, ...]], ...] | None = None,
 ) -> str | None:
+    """Return how the two groupings of *text* differ, or None where they agree.
+
+    *stand_in* holds the values of the stand-in's registers, DS4 to DS7 or DH4 to DH7.
+    """
+    bank = "DH" if hex_mode else "DS"
     tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
     indexes = _registers(text, bank)
@@ -545,8 +615,8 @@ def _how_one_formula_differs(
         # model reads.
         runs: list[_PyrungRun] = []
         context = ScanContext(SystemState())
-        products = _PRODUCT_VALUES[operand_type] if len(outer) < len(indexes) else [()]
-        for point in itertools.product(itertools.product(grid, repeat=len(outer)), products):
+        inner = stand_in[operand_type] if stand_in else [()]
+        for point in itertools.product(itertools.product(grid, repeat=len(outer)), inner):
             values: tuple[float, ...] = (*point[0], *point[1])
             registers = dict(zip((f"{bank}{index}" for index in indexes), values, strict=True))
             where = f"for {values} into a {dest}"
@@ -580,12 +650,17 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
 
 def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_there() -> None:
     differ: dict[tuple[str, str], list[str]] = {}
+    plain_grid = (("Word", Word, Word, _PLAIN_HEX_GRID),)
     for first, second, hex_mode, text in _unconfirmed_pairs():
-        tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
-        if not hex_mode or not formula_module.plain_operands(*next(_scope_steps(tree))):
+        if not hex_mode:
             continue
-        how = _how_one_formula_differs(text, True, "DH", (("Word", Word, Word, _PLAIN_HEX_GRID),))
-        differ.setdefault((first, second), []).extend([] if how is None else [how])
+        # A constant is a plain operand too, so its stand-in runs on the same grid.
+        for formula, values in ((text, None), *_with_a_stand_in(text, True)):
+            tree = parse_with_unconfirmed_pairs(formula, hex_mode=True)[0]
+            if not formula_module.plain_operands(*next(_scope_steps(tree))):
+                continue
+            how = _how_one_formula_differs(formula, True, values, plain_grid)
+            differ.setdefault((first, second), []).extend([] if how is None else [how])
     agree = {pair for pair, hows in differ.items() if not hows}
     assert len(set(SAME_VALUE_ON_PLAIN_OPERANDS)) == len(SAME_VALUE_ON_PLAIN_OPERANDS)
     assert set(SAME_VALUE_ON_PLAIN_OPERANDS) == agree, differ
@@ -607,8 +682,8 @@ def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_the
         ("- DH1 / DH2", True, [(NEGATE_ADDRESS, "/")]),
         ("- ( DH1 ) / DH2", True, [(NEGATE_BRACKET, "/")]),
         # A minus sign pairs with each operator to its right.
-        ("- ( DS1 ) * DS2 - DS3", False, [(NEGATE_BRACKET, "-")]),
-        ("- ( DS1 ) - DS2 * DS3", False, [(NEGATE_BRACKET, "-")]),
+        ("- ( DS1 ) * DS2 - DS3", False, [(NEGATE_BRACKET, "*"), (NEGATE_BRACKET, "-")]),
+        ("- ( DS1 ) - DS2 * DS3", False, [(NEGATE_BRACKET, "-"), (NEGATE_BRACKET, "*")]),
         ("DS1 * - ( DS2 ) - DS3", False, [(NEGATE_BRACKET, "-")]),
         ("- PI * 2", False, [("a minus sign before PI", "*")]),
         # No reading shows most functions inside a formula, so the grid settles no pair with a
@@ -646,6 +721,19 @@ def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_the
         ("DH1 OR DH2 OR LSH ( DH3 , 2h )", True, [("OR", "OR")]),
         ("- ( DH1 * DH2 ) MOD DH3", True, [(NEGATE_BRACKET, "MOD")]),
         ("- DH1 MOD ( DH2 + DH3 )", True, [(NEGATE_ADDRESS, "MOD")]),
+        # 1.5 is no hex constant, so it is not a plain operand.
+        ("DH1 + 1.5 - DH2", True, [("+", "-")]),
+        # A DF can hold Inf or NaN, and no reading shows a minus sign before either.
+        ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
+        ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
+        ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
+        ("- ( DS1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
+        # With 1.0E+30, 10 and 300, one grouping overflows a double at its last step, and the
+        # other inside the formula. No reading shows either.
+        ("- DF1 * DF2 ^ DF3", False, [(NEGATE_ADDRESS, "*")]),
+        ("- DF1 / DF2 ^ DF3", False, [(NEGATE_ADDRESS, "/")]),
+        ("- ( DF1 ) * DF2 ^ DF3", False, [(NEGATE_BRACKET, "*")]),
+        ("- ( DF1 ) / DF2 ^ DF3", False, [(NEGATE_BRACKET, "/")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
@@ -683,11 +771,6 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("DH1 - DH2 XOR 3h", True),
         ("- ( DS1 ) ^ 2", False),
         ("- SQRT ( DS1 ) + 2", False),
-        # Both groupings give the same value and flags (SAME_VALUE_PAIRS).
-        ("- DS2 * 4", False),
-        ("- DS1 / 2", False),
-        ("- DS2 MOD 3", False),
-        ("- ( DS1 ) * DS2", False),
         # Both groupings give the same value and flags on plain operands
         # (SAME_VALUE_ON_PLAIN_OPERANDS).
         ("DH1 AND DH2 AND DH3", True),
@@ -839,6 +922,7 @@ def test_imported_constants_compute_what_math_computes(
         ("DH1 XOR DH2 * 3h", "DH4,mode=hex", "'XOR' and '*'", "the two from the left"),
         ("- ( DS1 ) - 2", "DF1", f"{NEGATE_BRACKET} and '-'", "the minus sign first"),
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
+        ("- DS2 * 4", "DS3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
         ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
         ("DS1 + DS2 - DS3", "DF1", "'+' and '-'", "the two from the left"),
         ("DH1 * DH2 * DH3 * DH4 * DH5", "DH6,mode=hex", "'*' twice", "the two from the left"),

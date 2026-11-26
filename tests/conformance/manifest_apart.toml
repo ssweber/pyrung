@@ -377,3 +377,10 @@ doubles = 36
 width_int = 37
 width_word = 38
 hex_by_zero = 39
+
+[groups.math_range]
+base = 2201 # Conf_MathRange: DS2201..DS2220
+slots = 1
+
+[groups.math_range.cases]
+double_overflow = 1

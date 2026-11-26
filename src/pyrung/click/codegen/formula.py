@@ -107,7 +107,10 @@ CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = (("-", "+", "b11"),)
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
 #: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
 #: readings.
-READ_FORMULAS: tuple[tuple[str, bool], ...] = ()
+READ_FORMULAS: tuple[tuple[str, bool], ...] = (
+    ("- DS1 * 3", False),
+    ("- DS1 MOD 3", False),
+)
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
 #: CLICK, as (first operator, second operator, hex mode) in the order that the formula writes
@@ -115,24 +118,23 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = ()
 #: ``tests/click/test_click_formula.py`` computes both groupings over a grid of values, with a
 #: model of what the readings show a CLICK does. It checks that this list holds each pair whose
 #: groupings agree there, and whose value pyrung's ``math()`` stores. A pair agrees only if a
-#: reading shows each step of both groupings. An operand of the pair can be a longer formula,
-#: so the grid also puts a product of four registers in place of each register. No reading
-#: shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step, so no hex
-#: pair agrees. :data:`SAME_VALUE_ON_PLAIN_OPERANDS` holds the hex pairs that agree when each
-#: operand is a register or a constant.
-SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
-    (NEGATE_ADDRESS, "*", False),
-    (NEGATE_ADDRESS, "/", False),
-    (NEGATE_ADDRESS, "MOD", False),
-    (NEGATE_BRACKET, "*", False),
-    (NEGATE_BRACKET, "/", False),
-    (NEGATE_BRACKET, "MOD", False),
-)
+#: reading shows each step of both groupings. The grid holds a value of each class that an
+#: operand can take, and the list is empty:
+#:
+#: - A DF can hold Inf and NaN, and no reading shows a minus sign before either. So no decimal
+#:   pair with a minus sign agrees. Each other decimal pair differs on some value of the grid.
+#: - No reading shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step.
+#:   An operand can be a longer formula, so no hex pair agrees.
+#:
+#: :data:`SAME_VALUE_ON_PLAIN_OPERANDS` holds the hex pairs that agree when each operand is a
+#: register or a constant.
+SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = ()
 
 #: Hex pairs of operators whose two groupings give the same value and the same fault flags on
 #: a CLICK when each operand of the pair's two steps is a plain operand, as (first operator,
 #: second operator) in the order that the formula writes them. A plain operand is a DH
-#: register or a constant from 0h to FFFFh. The other step of the pair counts as plain.
+#: register or a whole-number constant from 0h to FFFFh. The other step of the pair counts as
+#: plain.
 #: A plain operand is never past FFFFh, so these steps stay inside the values that the readings
 #: show. ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
 SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str], ...] = (
@@ -357,7 +359,8 @@ def operator_kind(node: Formula) -> str | None:
 def plain_operands(first: Formula, second: Formula) -> bool:
     """Return whether each operand of the hex steps *first* and *second* is a plain operand.
 
-    A plain operand is a DH register, a constant from 0h to FFFFh, or the other step.
+    A plain operand is a DH register, a whole-number constant from 0h to FFFFh, or the other
+    step. A decimal constant such as 1.5 is not plain.
     """
     for step in (first, second):
         if isinstance(step, BinaryOp):
@@ -371,7 +374,8 @@ def plain_operands(first: Formula, second: Formula) -> bool:
                 continue
             if isinstance(operand, Address) and operand.bank == "DH":
                 continue
-            if isinstance(operand, Number) and 0 <= operand.value <= 0xFFFF:
+            value = operand.value if isinstance(operand, Number) else None
+            if isinstance(value, int) and 0 <= value <= 0xFFFF:
                 continue
             return False
     return True

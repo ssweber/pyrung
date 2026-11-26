@@ -25,8 +25,10 @@ CLICK, add its readings to the ``READINGS`` of ``tests/click/test_click_formula.
 pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
 No probe asks about a minus sign before ``/`` or MOD in decimal. Both orders give the same
-value in pyrung and in the model of a CLICK (``formula_values.py``), so no value tells them
-apart. ``formula.SAME_VALUE_PAIRS`` holds them.
+value in pyrung and in the model of a CLICK (``formula_values.py``) for each value the model
+reads, so no such value tells them apart. The model reads no step on Inf or NaN, and no step
+past the largest double, so the importer warns on these pairs. ``test_math_range.py`` asks
+what a CLICK does with a step past the largest double.
 
 The ``WIDTHS`` cases each bracket their formulas, so the order is fixed and only one step is
 read. They run formulas that a CLICK was read running on 2026-11-26, and expect the values read

@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import operator
 import struct
+import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import replace
 from typing import Any
@@ -102,7 +103,10 @@ def click_steps(
     - a hex AND, OR or XOR of a value above FFFFh or below -FFFFh
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
       a negative divisor
-    - an error or Inf from ``^``
+    - a decimal step on Inf or NaN, which a DF can hold
+    - a decimal step whose value passes the largest double or falls below the smallest
+      normal double
+    - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
@@ -169,12 +173,28 @@ class _Guard:
             return 0
         return math.sqrt(x)
 
-    def intermediate(self, value: float) -> None:
+    def operands(self, *values: float) -> None:
+        # A DF can hold Inf and NaN. 3.0E+38 * 10 stores Inf
+        # (``numeric/real_overflow_stays_finite``), and Inf - Inf stores NaN
+        # (``faults/inf_and_nan_arithmetic``). That reading ran only Inf * 2 and Inf - Inf, each
+        # as the last step. No reading shows a minus sign before Inf, or any step on NaN, so the
+        # model leaves each step on Inf or NaN unread.
+        if not self.hex_mode and not all(math.isfinite(value) for value in values):
+            raise Unread(f"a step on {values}")
+
+    def result(self, op: str, a: float, b: float, value: float) -> None:
         # A CLICK does not cut an intermediate value to the destination's size. It raises SC43
         # only for the value that it stores (b17 b1 to b4, b1x, b2x and a11,
-        # ``faults/real_intermediate_range``).
+        # ``faults/real_intermediate_range``). Every value read is well inside a double. No
+        # reading shows a step that overflows a double, or that falls below its smallest normal
+        # value, where a CPU may flush the value to 0.
+        if self.hex_mode:
+            return
         if not math.isfinite(value):
-            raise Unread(f"intermediate {value}")
+            raise Unread(f"{a} {op} {b} overflows a double")
+        underflow = value == 0 and op in ("*", "/", "^") and a != 0 and (op == "/" or b != 0)
+        if underflow or 0 < abs(value) < sys.float_info.min:
+            raise Unread(f"{a} {op} {b} falls below the smallest normal double")
 
 
 def _value(
@@ -182,7 +202,6 @@ def _value(
     hex_mode: bool,
     registers: dict[str, int],
     guard: _Guard | None,
-    outermost: bool = True,
 ) -> float:
     if isinstance(node, Number):
         return int(node.value) if hex_mode else float(node.value)
@@ -196,23 +215,27 @@ def _value(
             raise AssertionError(f"no model of {node.name}")
         raise Unread(f"{node.name} in a formula")
     if isinstance(node, Call):
-        args = [_value(arg, hex_mode, registers, guard, False) for arg in node.args]
-        if guard is not None:
-            result = guard.function(node.name, args)
-        else:
+        args = [_value(arg, hex_mode, registers, guard) for arg in node.args]
+        if guard is None:
             assert node.name == "SQRT", f"no model of {node.name}"
-            result = math.sqrt(args[0])
-    elif isinstance(node, Negate):
-        result = -_value(node.operand, hex_mode, registers, guard, False)
-    else:
-        assert isinstance(node, BinaryOp)
-        a = _value(node.left, hex_mode, registers, guard, False)
-        b = _value(node.right, hex_mode, registers, guard, False)
-        if guard is not None and node.op in ("/", "MOD") and b == 0:
-            return guard.by_zero(node.op)
-        result = _step(node.op, a, b, hex_mode, guard)
-    if guard is not None and not outermost:
-        guard.intermediate(result)
+            return math.sqrt(args[0])
+        guard.operands(*args)
+        return guard.function(node.name, args)
+    if isinstance(node, Negate):
+        operand = _value(node.operand, hex_mode, registers, guard)
+        if guard is not None:
+            guard.operands(operand)
+        return -operand
+    assert isinstance(node, BinaryOp)
+    a = _value(node.left, hex_mode, registers, guard)
+    b = _value(node.right, hex_mode, registers, guard)
+    if guard is None:
+        return _step(node.op, a, b, hex_mode, guard)
+    guard.operands(a, b)
+    if node.op in ("/", "MOD") and b == 0:
+        return guard.by_zero(node.op)
+    result = _step(node.op, a, b, hex_mode, guard)
+    guard.result(node.op, a, b, result)
     return result
 
 
