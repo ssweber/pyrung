@@ -30,7 +30,6 @@ from typing import Any, assert_never
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
-    UNKNOWN,
     CondAttr,
     Constraint,
     CrossingContext,
@@ -106,7 +105,7 @@ class ResetCrossing(BaseCrossing):
     """RST: the reset value is fired-or-held; any other value can only be held."""
 
     @staticmethod
-    def _reset_value(instr: ResetInstruction) -> Any:
+    def _reset_value(instr: ResetInstruction) -> bool | int | float | str:
         target: Coil = instr.target
         match target:
             case TagArg(tag=tag):
@@ -117,10 +116,7 @@ class ResetCrossing(BaseCrossing):
                 assert_never(target)
 
     def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
-        reset_value = self._reset_value(instr)
-        if reset_value is not None:
-            return Literal(reset_value)
-        return UNKNOWN
+        return Literal(self._reset_value(instr))
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
@@ -129,10 +125,7 @@ class ResetCrossing(BaseCrossing):
         if st is None:
             return REVERSE_FALLTHROUGH
         tag, value = st
-        reset_value = self._reset_value(instr)
-        if reset_value is None:
-            return REVERSE_FALLTHROUGH
-        if value == reset_value:
+        if value == self._reset_value(instr):
             return disjoint((CondAttr(expected=True),), (_held(tag),), exact=True)
         return single(
             _held(tag),

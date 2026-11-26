@@ -564,8 +564,8 @@ class CoilOperand(Operand):
     """The target of ``out()``, ``latch()`` or ``reset()``: one tag, or a range with fixed ends.
 
     The field refuses a pointer, such as ``C[Ptr]``, and a range with pointers, such as
-    ``C.select(Lo, Hi)``.  Its refusal has words of its own.  It does not use the
-    "<call> got ..." form of the other kinds.
+    ``C.select(Lo, Hi)``.  Its refusal does not start with "<call> got ...".  The
+    refusals of the other operands do.
     """
 
     def fits(self, value: Any) -> bool:

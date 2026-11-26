@@ -1,7 +1,8 @@
 """The parse that each coil runs on its target.
 
 out(), latch() and reset() take one tag or a range with fixed ends. toggle(), debounce(),
-flasher() and timed() take one Bool tag. Only out() and toggle() take immediate().
+flasher() and timed() take one Bool tag. out(), latch(), reset() and toggle() take
+immediate(). debounce(), flasher() and timed() do not.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from pyrung.click import ClickBlocks
 from pyrung.core import Int, Program, Timer, debounce, flasher, immediate, rung, timed, toggle
 from pyrung.core.instruction.operands import (
     COIL,
-    CoilBitOperand,
     RangeArg,
     TagArg,
     held,
@@ -89,13 +89,21 @@ def test_a_coil_writes_any_tag_type():
     assert kinds == [TagArg, TagArg, RangeArg]
 
 
-def test_a_timed_coil_refuses_immediate():
-    target = CoilBitOperand(immediate=False)
+@pytest.mark.parametrize(
+    ("call", "build"),
+    [
+        ("debounce()", lambda bit: debounce(bit, on=(T[1], 10), off=(T[2], 10))),
+        ("flasher()", lambda bit: flasher(bit, on=(T[1], 10), off=(T[2], 10))),
+        ("timed()", lambda bit: timed(bit, T[1], 10)),
+    ],
+)
+def test_debounce_flasher_and_timed_refuse_immediate(call, build):
     with pytest.raises(TypeError) as excinfo:
-        target.parse("debounce()", "target", immediate(y[1]))
+        with Program(strict=False):
+            with rung(x[1]):
+                build(immediate(y[1]))
     assert str(excinfo.value) == (
-        "debounce() takes no immediate(...) target; only out() and toggle() coils write "
-        "immediately."
+        f"{call} takes no immediate(...) target; only out() and toggle() coils write immediately."
     )
 
 

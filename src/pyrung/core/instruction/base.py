@@ -7,14 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pyrung.core.instruction.operands import (
-    PARSED,
-    FitsRegister,
-    NumberInto,
-    Operand,
-    check_fields,
-    inner,
-)
+from pyrung.core.instruction.operands import FitsRegister, NumberInto, Operand, check_fields
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -113,21 +106,6 @@ class Instruction(ABC):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """Execute this instruction within the given context (internal)."""
         pass
-
-    def exclusive_resources(self) -> list[tuple[str, str]]:
-        """Return (resource_type, resource_name) for each exclusively-owned resource.
-
-        A resource is exclusive when only one instruction in a program may
-        target it (e.g. a timer accumulator can have only one owner).
-        Subclasses declare exclusive fields via ``_exclusive_fields``.
-        """
-        result: list[tuple[str, str]] = []
-        for field_name in self._exclusive_fields:
-            tag = getattr(self, field_name)
-            if isinstance(tag, PARSED):
-                tag = inner(tag)
-            result.append((type(self).__name__, tag.name))
-        return result
 
     def check_operands(self, call: str | None = None) -> None:
         """Raise an error for an operand that ``_operands`` or ``_operand_rules`` refuses.
