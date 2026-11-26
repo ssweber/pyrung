@@ -34,6 +34,7 @@ from pyrung.click.codegen.formula import (
     NEGATE_PI,
     NEGATE_POINTER,
     READ_FORMULAS,
+    SAME_VALUE_ON_PLAIN_OPERANDS,
     SAME_VALUE_PAIRS,
     Address,
     BinaryOp,
@@ -43,6 +44,7 @@ from pyrung.click.codegen.formula import (
     Pi,
     Pointer,
     RangeCall,
+    _scope_steps,
     parse_click_formula,
     parse_with_unconfirmed_pairs,
 )
@@ -365,6 +367,12 @@ _REAL_GRID = tuple(
 )
 _HEX_GRID = (0, 1, 2, 3, 7, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF)
 
+#: The plain operands that a hex pair of SAME_VALUE_ON_PLAIN_OPERANDS runs over: 0, 1, the ends
+#: of each half of a DH, and mixed bits. A plain operand is never past FFFFh, and these steps
+#: compute whole numbers far below the largest value read. So the ends stand for the values
+#: between them.
+_PLAIN_HEX_GRID = (0, 1, 2, 3, 7, 0x00FF, 0x5555, 0x7FFF, 0x8000, 0xAAAA, 0xFF00, 0xFFFE, 0xFFFF)
+
 #: Each destination of a mode, with its type, the type of the operands and their values.
 _DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] = {
     False: (
@@ -522,12 +530,17 @@ def _how_the_groupings_differ(text: str, hex_mode: bool) -> str | None:
     return None
 
 
-def _how_one_formula_differs(text: str, hex_mode: bool, bank: str) -> str | None:
+def _how_one_formula_differs(
+    text: str,
+    hex_mode: bool,
+    bank: str,
+    destinations: tuple[tuple[str, Any, Any, tuple[float, ...]], ...] | None = None,
+) -> str | None:
     tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
     [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
     indexes = _registers(text, bank)
     outer = [index for index in indexes if index < 4]
-    for dest, dest_type, operand_type, grid in _DESTINATIONS[hex_mode]:
+    for dest, dest_type, operand_type, grid in destinations or _DESTINATIONS[hex_mode]:
         # pyrung_expression builds no range function, so the runs wait for a point that the
         # model reads.
         runs: list[_PyrungRun] = []
@@ -563,6 +576,19 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
     agree = {pair for pair, hows in differ.items() if not hows}
     assert len(set(SAME_VALUE_PAIRS)) == len(SAME_VALUE_PAIRS)
     assert set(SAME_VALUE_PAIRS) == agree, differ
+
+
+def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_there() -> None:
+    differ: dict[tuple[str, str], list[str]] = {}
+    for first, second, hex_mode, text in _unconfirmed_pairs():
+        tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
+        if not hex_mode or not formula_module.plain_operands(*next(_scope_steps(tree))):
+            continue
+        how = _how_one_formula_differs(text, True, "DH", (("Word", Word, Word, _PLAIN_HEX_GRID),))
+        differ.setdefault((first, second), []).extend([] if how is None else [how])
+    agree = {pair for pair, hows in differ.items() if not hows}
+    assert len(set(SAME_VALUE_ON_PLAIN_OPERANDS)) == len(SAME_VALUE_ON_PLAIN_OPERANDS)
+    assert set(SAME_VALUE_ON_PLAIN_OPERANDS) == agree, differ
 
 
 @pytest.mark.parametrize(
@@ -610,15 +636,16 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
         ("DH1 * DH2 * DH3 * DH4 + DH5 + DH6", True, [("*", "*"), ("+", "+")]),
         ("DH1 * DH2 * DH3 * DH4 + DH5 - DH6", True, [("*", "*"), ("+", "-")]),
         ("DH1 * DH2 * DH3 * DH4 * DH5", True, [("*", "*")]),
-        # A bracket can hand each of these a value that no reading shows.
-        ("DH1 AND DH2 AND DH3", True, [("AND", "AND")]),
-        ("DH1 OR DH2 OR DH3", True, [("OR", "OR")]),
-        ("DH1 XOR DH2 XOR DH3", True, [("XOR", "XOR")]),
-        ("DH1 + DH2 - DH3", True, [("+", "-")]),
+        # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("DH1 * DH2 * DH3", True, [("*", "*")]),
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
-        ("- DH1 MOD DH2", True, [(NEGATE_ADDRESS, "MOD")]),
-        ("- ( DH1 ) MOD DH2", True, [(NEGATE_BRACKET, "MOD")]),
+        ("- ( DH1 ) * DH2", True, [(NEGATE_BRACKET, "*")]),
+        # A product, a bracket or a function hands the pair a value past FFFFh.
+        ("DH1 * DH2 + DH3 + DH4", True, [("+", "+")]),
+        ("( DH1 * DH2 ) AND DH3 AND DH4", True, [("AND", "AND")]),
+        ("DH1 OR DH2 OR LSH ( DH3 , 2h )", True, [("OR", "OR")]),
+        ("- ( DH1 * DH2 ) MOD DH3", True, [(NEGATE_BRACKET, "MOD")]),
+        ("- DH1 MOD ( DH2 + DH3 )", True, [(NEGATE_ADDRESS, "MOD")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
@@ -661,6 +688,16 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- DS1 / 2", False),
         ("- DS2 MOD 3", False),
         ("- ( DS1 ) * DS2", False),
+        # Both groupings give the same value and flags on plain operands
+        # (SAME_VALUE_ON_PLAIN_OPERANDS).
+        ("DH1 AND DH2 AND DH3", True),
+        ("DH1 OR DH2 OR DH3", True),
+        ("DH1 XOR DH2 XOR 0Fh", True),
+        ("DH1 + DH2 + DH3", True),
+        ("DH1 + DH2 - DH3", True),
+        ("FFFFh + DH1 + DH2", True),
+        ("- DH1 MOD DH2", True),
+        ("- ( DH1 ) MOD 7h", True),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(

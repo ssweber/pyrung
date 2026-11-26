@@ -118,7 +118,8 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = ()
 #: reading shows each step of both groupings. An operand of the pair can be a longer formula,
 #: so the grid also puts a product of four registers in place of each register. No reading
 #: shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step, so no hex
-#: pair agrees.
+#: pair agrees. :data:`SAME_VALUE_ON_PLAIN_OPERANDS` holds the hex pairs that agree when each
+#: operand is a register or a constant.
 SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     (NEGATE_ADDRESS, "*", False),
     (NEGATE_ADDRESS, "/", False),
@@ -126,6 +127,22 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = (
     (NEGATE_BRACKET, "*", False),
     (NEGATE_BRACKET, "/", False),
     (NEGATE_BRACKET, "MOD", False),
+)
+
+#: Hex pairs of operators whose two groupings give the same value and the same fault flags on
+#: a CLICK when each operand of the pair's two steps is a plain operand, as (first operator,
+#: second operator) in the order that the formula writes them. A plain operand is a DH
+#: register or a constant from 0h to FFFFh. The other step of the pair counts as plain.
+#: A plain operand is never past FFFFh, so these steps stay inside the values that the readings
+#: show. ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
+SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str], ...] = (
+    ("+", "+"),
+    ("+", "-"),
+    ("AND", "AND"),
+    ("OR", "OR"),
+    ("XOR", "XOR"),
+    (NEGATE_ADDRESS, "MOD"),
+    (NEGATE_BRACKET, "MOD"),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
@@ -178,6 +195,7 @@ _WORD_OPS = frozenset(op for ops in BINARY_TIERS for op in ops if op.isalpha())
 _CONFIRMED = frozenset(frozenset((first, second)) for first, second, _ in CONFIRMED_PAIRS)
 _CONFIRMED_ORDERS = frozenset((first, second) for first, second, _ in CONFIRMED_ORDERS)
 _SAME_VALUE = frozenset(SAME_VALUE_PAIRS)
+_SAME_VALUE_ON_PLAIN = frozenset(SAME_VALUE_ON_PLAIN_OPERANDS)
 
 
 @dataclass(frozen=True)
@@ -268,8 +286,9 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     :data:`NEGATE_MINUS`.
 
     A minus sign applies before every operator to its left in its scope, so it pairs only with
-    the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A formula
-    with the tree of one in :data:`READ_FORMULAS` is confirmed.
+    the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A hex pair
+    in :data:`SAME_VALUE_ON_PLAIN_OPERANDS` needs none when its two steps have plain operands. A
+    formula with the tree of one in :data:`READ_FORMULAS` is confirmed.
     """
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
@@ -281,20 +300,29 @@ def parse_with_unconfirmed_pairs(
     """Return the tree of *text* in :data:`BINARY_TIERS` order, and its unconfirmed pairs.
 
     Each pair is one that :func:`parse_click_formula` needs, and that none of
-    :data:`CONFIRMED_PAIRS`, :data:`CONFIRMED_ORDERS` and :data:`SAME_VALUE_PAIRS` lists. Each
-    pair lists its operators in the order that the formula writes them. Raise ValueError for
-    text that is not a formula.
+    :data:`CONFIRMED_PAIRS`, :data:`CONFIRMED_ORDERS` and :data:`SAME_VALUE_PAIRS` lists. A hex
+    pair in :data:`SAME_VALUE_ON_PLAIN_OPERANDS` whose two steps have plain operands is left
+    out too. Each pair lists its operators in the order that the formula writes them. Raise
+    ValueError for text that is not a formula.
     """
     tree = _Parser(text, hex_mode=hex_mode).parse()
     if (tree, hex_mode) in _read_trees():
         return tree, ()
     pairs: dict[frozenset[str], tuple[str, str]] = {}
-    for operators in _scopes(tree):
-        for index, (first, _) in enumerate(operators):
-            for second, second_is_minus in operators[index + 1 :]:
-                if second_is_minus:
+    for steps in _scope_steps(tree):
+        for index, first_step in enumerate(steps):
+            for second_step in steps[index + 1 :]:
+                if isinstance(second_step, Negate):
                     continue
+                first, second = operator_kind(first_step), operator_kind(second_step)
+                assert first is not None and second is not None
                 if (first, second, hex_mode) in _SAME_VALUE:
+                    continue
+                if (
+                    hex_mode
+                    and (first, second) in _SAME_VALUE_ON_PLAIN
+                    and plain_operands(first_step, second_step)
+                ):
                     continue
                 if (first, second) in _CONFIRMED_ORDERS:
                     continue
@@ -326,11 +354,42 @@ def operator_kind(node: Formula) -> str | None:
     return NEGATE_MINUS
 
 
+def plain_operands(first: Formula, second: Formula) -> bool:
+    """Return whether each operand of the hex steps *first* and *second* is a plain operand.
+
+    A plain operand is a DH register, a constant from 0h to FFFFh, or the other step.
+    """
+    for step in (first, second):
+        if isinstance(step, BinaryOp):
+            operands: tuple[Formula, ...] = (step.left, step.right)
+        elif isinstance(step, Negate):
+            operands = (step.operand,)
+        else:
+            return False
+        for operand in operands:
+            if operand is first or operand is second:
+                continue
+            if isinstance(operand, Address) and operand.bank == "DH":
+                continue
+            if isinstance(operand, Number) and 0 <= operand.value <= 0xFFFF:
+                continue
+            return False
+    return True
+
+
 def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:
     """Yield the operators of each bracket scope of *tree*, in the order the formula writes
     them, each with whether it is a minus sign before its operand.
     """
-    operators: list[tuple[str, bool]] = []
+    for steps in _scope_steps(tree):
+        yield [(str(operator_kind(step)), isinstance(step, Negate)) for step in steps]
+
+
+def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
+    """Yield the operator nodes of each bracket scope of *tree*, in the order the formula
+    writes them.
+    """
+    steps: list[Formula] = []
     inner: list[Formula] = []
 
     def walk(node: Formula, outermost: bool = False) -> None:
@@ -338,20 +397,18 @@ def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:
             inner.append(node)
         elif isinstance(node, BinaryOp):
             walk(node.left)
-            operators.append((node.op, False))
+            steps.append(node)
             walk(node.right)
         elif isinstance(node, Negate):
-            words = operator_kind(node)
-            assert words is not None
-            operators.append((words, True))
+            steps.append(node)
             walk(node.operand)
         elif isinstance(node, Call):
             inner.extend(node.args)
 
     walk(tree, outermost=True)
-    yield operators
+    yield steps
     for node in inner:
-        yield from _scopes(node)
+        yield from _scope_steps(node)
 
 
 _READ_TREES: list[tuple[Formula, bool]] = []
