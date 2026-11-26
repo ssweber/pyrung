@@ -358,12 +358,15 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 #   Dint (_WHOLE_GRID). The model reads each.
 # - A DF at 0, at fractions and at the ends of a float32 (3.4028235E+38 and 1.4E-45), with
 #   both signs (_REAL_GRID). The model reads each as a double.
-# - A DF at -0.0 (_REAL_GRID). The model reads it as a double. No reading shows a CLICK holding
-#   -0.0.
+# - A DF at -0.0 (_REAL_GRID). The model reads it as a double. A DF holds -0.0 from
+#   0.0 * -1.0 (``real_bits/minus_zero_math``).
+# - A minus sign before 0, from any of these. No reading shows the sign of the 0 it gives, so
+#   the model leaves it unread.
 # - Reals that cancel: 1.0 with 1.0E+17 and 1.0E+30, with both signs (_REAL_GRID). The model
 #   reads them in doubles, and a double drops the 1.0 from 1.0 + 1.0E+17.
 # - A DF at Inf, -Inf or NaN (_REAL_GRID). The model leaves each step on one unread.
 # - A constant that no DF holds, 0.1 (a stand-in). The model reads it as a double.
+# - A whole-number constant, 2147483647 (a stand-in). The model reads it as a double.
 # - A longer formula past 2^53, and a longer formula of Reals up to 1.0E+120 (the product). The
 #   model reads both in doubles.
 # - A longer formula from 1.0E-300 to 1.0E+300 (the power). With the other operand of the pair,
@@ -409,11 +412,31 @@ _REAL_GRID = tuple(
 )
 _HEX_GRID = (0, 1, 2, 3, 7, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF)
 
-#: The plain operands that a hex pair of SAME_VALUE_ON_PLAIN_OPERANDS runs over: 0, 1, the ends
-#: of each half of a DH, and mixed bits. A plain operand is never past FFFFh, and these steps
-#: compute whole numbers far below the largest value read. So the ends stand for the values
-#: between them.
+#: The plain operands that a hex pair of SAME_VALUE_ON_PLAIN_OPERANDS runs over. They are 0, 1,
+#: the ends of each half of a DH, and mixed bits. A plain operand is never past FFFFh, and these
+#: steps compute whole numbers far below the largest value read. So the ends stand for the
+#: values between them.
 _PLAIN_HEX_GRID = (0, 1, 2, 3, 7, 0x00FF, 0x5555, 0x7FFF, 0x8000, 0xAAAA, 0xFF00, 0xFFFE, 0xFFFF)
+
+#: The plain operands that a decimal pair of SAME_VALUE_ON_PLAIN_OPERANDS runs over. They are 0,
+#: small values of both signs, and the ends of an Int and a Dint with their neighbours. A DS or
+#: DD holds a whole number, never Inf, NaN or -0.0. 164999119 * 114975250 * 58 passes 2^53, so
+#: a product of three can round.
+_PLAIN_WHOLE_GRID = (
+    *(0, 1, -1, 2, -2, 3, 7, 58),
+    *(32767, -32767, 32768, -32768),
+    *(2147483647, -2147483647, -2147483648, 164999119, 114975250),
+)
+
+#: The destinations that the plain operands of each mode run into.
+_PLAIN_DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] = {
+    False: (
+        ("Int", Int, Dint, _PLAIN_WHOLE_GRID),
+        ("Dint", Dint, Dint, _PLAIN_WHOLE_GRID),
+        ("Real", Real, Dint, _PLAIN_WHOLE_GRID),
+    ),
+    True: (("Word", Word, Word, _PLAIN_HEX_GRID),),
+}
 
 #: Each destination of a mode, with its type, the type of the operands and their values.
 _DESTINATIONS: dict[bool, tuple[tuple[str, Any, Any, tuple[float, ...]], ...]] = {
@@ -458,6 +481,7 @@ _STAND_INS: dict[bool, tuple[tuple[str, _StandInValues], ...]] = {
         ),
         ("( {bank}4 ^ {bank}5 )", {Dint: ((10, 300), (10, -300)), Real: ((10, 300), (10, -300))}),
         ("0.1", {Dint: ((),), Real: ((),)}),
+        ("2147483647", {Dint: ((),), Real: ((),)}),
     ),
     True: (
         (
@@ -648,19 +672,17 @@ def test_same_value_pairs_are_the_pairs_whose_groupings_agree() -> None:
     assert set(SAME_VALUE_PAIRS) == agree, differ
 
 
-def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_there() -> None:
-    differ: dict[tuple[str, str], list[str]] = {}
-    plain_grid = (("Word", Word, Word, _PLAIN_HEX_GRID),)
+def test_same_value_on_plain_operands_is_the_pairs_whose_groupings_agree_there() -> None:
+    differ: dict[tuple[str, str, bool], list[str]] = {}
     for first, second, hex_mode, text in _unconfirmed_pairs():
-        if not hex_mode:
-            continue
         # A constant is a plain operand too, so its stand-in runs on the same grid.
-        for formula, values in ((text, None), *_with_a_stand_in(text, True)):
-            tree = parse_with_unconfirmed_pairs(formula, hex_mode=True)[0]
-            if not formula_module.plain_operands(*next(_scope_steps(tree))):
+        for formula, values in ((text, None), *_with_a_stand_in(text, hex_mode)):
+            tree = parse_with_unconfirmed_pairs(formula, hex_mode=hex_mode)[0]
+            steps = next(_scope_steps(tree))
+            if not formula_module.plain_operands(*steps, hex_mode=hex_mode):
                 continue
-            how = _how_one_formula_differs(formula, True, values, plain_grid)
-            differ.setdefault((first, second), []).extend([] if how is None else [how])
+            how = _how_one_formula_differs(formula, hex_mode, values, _PLAIN_DESTINATIONS[hex_mode])
+            differ.setdefault((first, second, hex_mode), []).extend([] if how is None else [how])
     agree = {pair for pair, hows in differ.items() if not hows}
     assert len(set(SAME_VALUE_ON_PLAIN_OPERANDS)) == len(SAME_VALUE_ON_PLAIN_OPERANDS)
     assert set(SAME_VALUE_ON_PLAIN_OPERANDS) == agree, differ
@@ -701,8 +723,9 @@ def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_the
         ("- - DS1 + 2", False, [(NEGATE_MINUS, "+")]),
         # In doubles, 1.0 + 1.0E+17 - 1.0E+17 is 0.0 from the left and 1.0 with the - first.
         # 1.0 + 1.0E+17 + -1.0E+17 gives the same two values.
-        ("DS1 + DS2 - DS3", False, [("+", "-")]),
-        ("DS1 + DS2 + DS3", False, [("+", "+")]),
+        ("DF1 + DF2 - DF3", False, [("+", "-")]),
+        ("DF1 + DF2 + DF3", False, [("+", "+")]),
+        ("DS1 + DS2 + DF3", False, [("+", "+")]),
         # In doubles, 164999119 * 114975250 * 58 rounds to one value from the left, and to
         # another with the second * first.
         ("DS1 * DS2 * DS3", False, [("*", "*")]),
@@ -723,11 +746,26 @@ def test_same_value_on_plain_operands_is_the_hex_pairs_whose_groupings_agree_the
         ("- DH1 MOD ( DH2 + DH3 )", True, [(NEGATE_ADDRESS, "MOD")]),
         # 1.5 is no hex constant, so it is not a plain operand.
         ("DH1 + 1.5 - DH2", True, [("+", "-")]),
-        # A DF can hold Inf or NaN, and no reading shows a minus sign before either.
+        # No reading shows the sign of the 0 that a minus sign gives, and a DF holds either
+        # sign.
         ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
         ("- DS1 / 2", False, [(NEGATE_ADDRESS, "/")]),
         ("- DS2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
         ("- ( DS1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
+        ("- DD1 / DS2", False, [(NEGATE_ADDRESS, "/")]),
+        # A DF can hold Inf or NaN, and no reading shows a minus sign before either.
+        ("- DF2 * 4", False, [(NEGATE_ADDRESS, "*")]),
+        ("- DF1 / 2", False, [(NEGATE_ADDRESS, "/")]),
+        ("- DF2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
+        ("- ( DF1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
+        ("- DS1 * DF2", False, [(NEGATE_ADDRESS, "*")]),
+        # Only a DS, a DD or a whole number inside a Dint is a plain decimal operand.
+        ("DS1 + DS2 ^ 2 + DS3", False, [("+", "+")]),
+        ("DS1 + 1.5 + DS2", False, [("+", "+")]),
+        ("DS1 + 2147483648 - DS2", False, [("+", "-")]),
+        ("DS1 + PI + DS2", False, [("+", "+")]),
+        ("DS1 + DS[DS2] + DS3", False, [("+", "+")]),
+        ("DS1 + SQRT ( DS2 ) + DS3", False, [("+", "+")]),
         # With 1.0E+30, 10 and 300, one grouping overflows a double at its last step, and the
         # other inside the formula. No reading shows either.
         ("- DF1 * DF2 ^ DF3", False, [(NEGATE_ADDRESS, "*")]),
@@ -781,6 +819,8 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("FFFFh + DH1 + DH2", True),
         ("- DH1 MOD DH2", True),
         ("- ( DH1 ) MOD 7h", True),
+        ("DS1 + DS2 + DS3", False),
+        ("DD1 + 2147483647 - DS2", False),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
@@ -922,9 +962,9 @@ def test_imported_constants_compute_what_math_computes(
         ("DH1 XOR DH2 * 3h", "DH4,mode=hex", "'XOR' and '*'", "the two from the left"),
         ("- ( DS1 ) - 2", "DF1", f"{NEGATE_BRACKET} and '-'", "the minus sign first"),
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
-        ("- DS2 * 4", "DS3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
+        ("- DF2 * 4", "DF3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
         ("DS1 MOD DS2 MOD 3", "DS3", "'MOD' twice", "the two from the left"),
-        ("DS1 + DS2 - DS3", "DF1", "'+' and '-'", "the two from the left"),
+        ("DF1 + DF2 - DF3", "DF4", "'+' and '-'", "the two from the left"),
         ("DH1 * DH2 * DH3 * DH4 * DH5", "DH6,mode=hex", "'*' twice", "the two from the left"),
     ],
 )

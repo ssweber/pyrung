@@ -104,6 +104,7 @@ def click_steps(
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
       a negative divisor
     - a decimal step on Inf or NaN, which a DF can hold
+    - a decimal minus sign before 0
     - a decimal step whose value passes the largest double or falls below the smallest
       normal double
     - an error from ``^``
@@ -182,6 +183,12 @@ class _Guard:
         if not self.hex_mode and not all(math.isfinite(value) for value in values):
             raise Unread(f"a step on {values}")
 
+    def negate(self, value: float) -> None:
+        # A DF holds -0.0 (``real_bits/minus_zero_math``), but no reading shows the sign of the
+        # 0 that a minus sign gives. Flipping the sign bit gives -0.0, and 0 - x gives +0.0.
+        if not self.hex_mode and value == 0:
+            raise Unread("a minus sign before 0")
+
     def result(self, op: str, a: float, b: float, value: float) -> None:
         # A CLICK does not cut an intermediate value to the destination's size. It raises SC43
         # only for the value that it stores (b17 b1 to b4, b1x, b2x and a11,
@@ -225,6 +232,7 @@ def _value(
         operand = _value(node.operand, hex_mode, registers, guard)
         if guard is not None:
             guard.operands(operand)
+            guard.negate(operand)
         return -operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)

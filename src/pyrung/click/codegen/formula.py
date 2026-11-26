@@ -121,30 +121,35 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (
 #: reading shows each step of both groupings. The grid holds a value of each class that an
 #: operand can take, and the list is empty:
 #:
-#: - A DF can hold Inf and NaN, and no reading shows a minus sign before either. So no decimal
-#:   pair with a minus sign agrees. Each other decimal pair differs on some value of the grid.
+#: - A DF can hold Inf and NaN, and no reading shows a minus sign before either, or before 0.
+#:   So no decimal pair with a minus sign agrees. Each other decimal pair differs on some value
+#:   of the grid.
 #: - No reading shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step.
 #:   An operand can be a longer formula, so no hex pair agrees.
 #:
-#: :data:`SAME_VALUE_ON_PLAIN_OPERANDS` holds the hex pairs that agree when each operand is a
-#: register or a constant.
+#: :data:`SAME_VALUE_ON_PLAIN_OPERANDS` holds the pairs that agree when no operand can take
+#: one of these values.
 SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = ()
 
-#: Hex pairs of operators whose two groupings give the same value and the same fault flags on
-#: a CLICK when each operand of the pair's two steps is a plain operand, as (first operator,
-#: second operator) in the order that the formula writes them. A plain operand is a DH
-#: register or a whole-number constant from 0h to FFFFh. The other step of the pair counts as
-#: plain.
-#: A plain operand is never past FFFFh, so these steps stay inside the values that the readings
-#: show. ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
-SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str], ...] = (
-    ("+", "+"),
-    ("+", "-"),
-    ("AND", "AND"),
-    ("OR", "OR"),
-    ("XOR", "XOR"),
-    (NEGATE_ADDRESS, "MOD"),
-    (NEGATE_BRACKET, "MOD"),
+#: Pairs of operators whose two groupings give the same value and the same fault flags on a
+#: CLICK when each operand of the pair's two steps is a plain operand, as (first operator,
+#: second operator, hex mode) in the order that the formula writes them. The other step of the
+#: pair counts as plain. :func:`plain_operands` says which operands are plain.
+#: In hex mode a plain operand is never past FFFFh, so these steps stay inside the values that
+#: the readings show. In decimal mode a plain operand is a whole number inside a Dint, so a
+#: double holds the sum of three exactly. No reading shows the sign of the 0 that a minus sign
+#: gives, and a DF holds either sign. So no decimal pair with a minus sign is here.
+#: ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
+SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
+    ("+", "+", True),
+    ("+", "-", True),
+    ("AND", "AND", True),
+    ("OR", "OR", True),
+    ("XOR", "XOR", True),
+    (NEGATE_ADDRESS, "MOD", True),
+    (NEGATE_BRACKET, "MOD", True),
+    ("+", "+", False),
+    ("+", "-", False),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
@@ -288,8 +293,8 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     :data:`NEGATE_MINUS`.
 
     A minus sign applies before every operator to its left in its scope, so it pairs only with
-    the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A hex pair
-    in :data:`SAME_VALUE_ON_PLAIN_OPERANDS` needs none when its two steps have plain operands. A
+    the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A pair in
+    :data:`SAME_VALUE_ON_PLAIN_OPERANDS` needs none when its two steps have plain operands. A
     formula with the tree of one in :data:`READ_FORMULAS` is confirmed.
     """
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
@@ -302,7 +307,7 @@ def parse_with_unconfirmed_pairs(
     """Return the tree of *text* in :data:`BINARY_TIERS` order, and its unconfirmed pairs.
 
     Each pair is one that :func:`parse_click_formula` needs, and that none of
-    :data:`CONFIRMED_PAIRS`, :data:`CONFIRMED_ORDERS` and :data:`SAME_VALUE_PAIRS` lists. A hex
+    :data:`CONFIRMED_PAIRS`, :data:`CONFIRMED_ORDERS` and :data:`SAME_VALUE_PAIRS` lists. A
     pair in :data:`SAME_VALUE_ON_PLAIN_OPERANDS` whose two steps have plain operands is left
     out too. Each pair lists its operators in the order that the formula writes them. Raise
     ValueError for text that is not a formula.
@@ -320,10 +325,8 @@ def parse_with_unconfirmed_pairs(
                 assert first is not None and second is not None
                 if (first, second, hex_mode) in _SAME_VALUE:
                     continue
-                if (
-                    hex_mode
-                    and (first, second) in _SAME_VALUE_ON_PLAIN
-                    and plain_operands(first_step, second_step)
+                if (first, second, hex_mode) in _SAME_VALUE_ON_PLAIN and plain_operands(
+                    first_step, second_step, hex_mode=hex_mode
                 ):
                     continue
                 if (first, second) in _CONFIRMED_ORDERS:
@@ -356,12 +359,16 @@ def operator_kind(node: Formula) -> str | None:
     return NEGATE_MINUS
 
 
-def plain_operands(first: Formula, second: Formula) -> bool:
-    """Return whether each operand of the hex steps *first* and *second* is a plain operand.
+def plain_operands(first: Formula, second: Formula, *, hex_mode: bool) -> bool:
+    """Return whether each operand of the steps *first* and *second* is a plain operand.
 
-    A plain operand is a DH register, a whole-number constant from 0h to FFFFh, or the other
-    step. A decimal constant such as 1.5 is not plain.
+    In hex mode a plain operand is a DH register, or a whole-number constant from 0h to FFFFh.
+    In decimal mode it is a DS or DD register, or a whole-number constant inside a Dint. The
+    other step is plain too. A constant such as 1.5, a DF, PI, a pointer, a function and a
+    longer formula are not plain.
     """
+    banks = ("DH",) if hex_mode else ("DS", "DD")
+    low, high = (0, 0xFFFF) if hex_mode else (-(2**31), 2**31 - 1)
     for step in (first, second):
         if isinstance(step, BinaryOp):
             operands: tuple[Formula, ...] = (step.left, step.right)
@@ -372,10 +379,10 @@ def plain_operands(first: Formula, second: Formula) -> bool:
         for operand in operands:
             if operand is first or operand is second:
                 continue
-            if isinstance(operand, Address) and operand.bank == "DH":
+            if isinstance(operand, Address) and operand.bank in banks:
                 continue
             value = operand.value if isinstance(operand, Number) else None
-            if isinstance(value, int) and 0 <= value <= 0xFFFF:
+            if isinstance(value, int) and low <= value <= high:
                 continue
             return False
     return True
