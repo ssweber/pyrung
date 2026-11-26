@@ -362,9 +362,10 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 #   0.0 * -1.0 (``real_bits/minus_zero_math``).
 # - A minus sign before any operand that is 0. No reading shows the sign of the 0 it gives, so
 #   the model leaves it unread.
-# - -0.0 that a step makes. -1.0 * DF and DF / -1.0 keep the sign, and DF - DF gives +0.0
-#   (``real_bits/minus_zero_shapes``). No reading shows the sign that ^, MOD, SQRT or + of two
-#   -0.0 gives. The model computes each as a double does.
+# - A 0 that a step makes. -1.0 * DF and DF / -1.0 keep the sign, and DF - DF gives +0.0
+#   (``real_bits/minus_zero_shapes``). The model reads these, and 0.0 + 0.0. No reading shows
+#   the sign of the 0 of a MOD, of a ^ or SQRT of -0.0, or of another sum of two zeros. The
+#   model leaves each unread.
 # - A division or MOD by zero. The model gives 0 with SC40 or SC46. No reading shows the sign
 #   of that 0, so the model leaves a dividend with its sign bit set unread.
 # - SQRT of a negative (the stand-in SQRT ( DS4 ) at -1). The model gives 0 with SC46, and
@@ -395,7 +396,7 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 #   but three. It leaves unread a ``/`` whose quotient has a fraction, a MOD by it, and an AND,
 #   OR or XOR of one below -FFFFh.
 # - A longer formula below -FFFFh, down to -40000000h (the stand-in ( 0h - DH4 ) * DH5). The
-#   model reads it as it reads one above -FFFFh. It also leaves a value below -FDA93880h unread.
+#   model reads it, except in AND, OR or XOR. It leaves a value below -FDA93880h unread.
 # - Every hex step works in whole numbers, so no hex value is a fraction, -0, Inf or NaN.
 #
 # A function, PI or a pointer gives a value from one of these classes, or an error that raises

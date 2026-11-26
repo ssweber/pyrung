@@ -107,6 +107,8 @@ def click_steps(
     - a decimal step on Inf or NaN, which a DF can hold
     - a decimal minus sign before 0
     - a decimal division or MOD by zero of a value whose sign bit is set
+    - the sign of a decimal 0 that no reading shows, from a MOD, a ``^`` of -0.0, SQRT of
+      -0.0, or a sum of two zeros other than x - x and 0.0 + 0.0
     - a decimal step whose value passes the largest double or falls below the smallest
       normal double
     - an error from ``^``
@@ -161,8 +163,9 @@ class _Guard:
         # A division or MOD by zero is 0, and the rest of the formula runs. The division raises
         # SC40 (b17 c1, b18 d1 and d3, ``math_terms/error_terms``, ``hex_math/rotates_and_bits``).
         # The MOD raises SC46 (b17 c2 and c3, b18 d2). b18 d1 and d2 read each in hex mode
-        # inside a longer formula. No reading shows the sign of that 0. A minus sign before the
-        # dividend could flip it, so the model leaves a dividend with its sign bit set unread.
+        # inside a longer formula. No reading shows the sign of that 0. With a minus sign
+        # before the dividend, one order divides a negative value and the other flips the sign
+        # of the 0. So the model leaves a dividend with its sign bit set unread.
         if not self.hex_mode and math.copysign(1.0, dividend) < 0:
             raise Unread(f"a {op} by zero of {dividend}")
         self.flags.add("division_error" if op == "/" else "math_operation_error")
@@ -175,6 +178,8 @@ class _Guard:
         if name != "SQRT" or self.hex_mode:
             raise Unread(f"{name} in a formula")
         (x,) = args
+        if x == 0 and _sign_bit(x):
+            raise Unread("the sign of SQRT ( -0.0 )")
         if x < 0:
             self.flags.add("math_operation_error")
             return 0
@@ -209,6 +214,33 @@ class _Guard:
         underflow = value == 0 and op in ("*", "/", "^") and a != 0 and (op == "/" or b != 0)
         if underflow or 0 < abs(value) < sys.float_info.min:
             raise Unread(f"{a} {op} {b} falls below the smallest normal double")
+        if value == 0 and not _zero_sign_is_read(op, a, b, value):
+            raise Unread(f"the sign of the 0 of {a} {op} {b}")
+
+
+def _sign_bit(value: float) -> bool:
+    """Return whether *value* has its sign bit set, so that -0.0 does and 0.0 does not."""
+    return math.copysign(1.0, value) < 0
+
+
+def _zero_sign_is_read(op: str, a: float, b: float, value: float) -> bool:
+    """Return whether a reading shows the sign of the 0 that *a* *op* *b* gives.
+
+    A ``*`` or ``/`` keeps the sign of a 0 (``real_bits/minus_zero_shapes``,
+    ``real_bits/minus_zero_math``), and x - x gives +0.0 (``minus_zero_shapes``). 0.0 + 0.0
+    gives +0.0, as the sum of two whole numbers does. No reading shows the 0 of a MOD, of a
+    ``^`` of -0.0, or of any other sum of two zeros.
+    """
+    if op in ("*", "/"):
+        return True
+    if op in ("+", "-"):
+        if a != 0 or b != 0:
+            return True
+        same = _sign_bit(a) == _sign_bit(b)
+        return same and (op == "-" or not _sign_bit(a))
+    if op == "^":
+        return not _sign_bit(a) and not _sign_bit(value)
+    return False
 
 
 def _value(
