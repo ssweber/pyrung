@@ -3000,8 +3000,9 @@ class TestBoardPeripheralsAndRunStop:
         ("mod_negative_divisor", lambda n, d, z, w, r: 7 % (n + 5), Int, 1, (0, 0, 0)),
         ("mod_real", lambda n, d, z, w, r: r % 2.0 * 10, Int, -15, (0, 0, 0)),
         ("mod_word_by_minus_two", lambda n, d, z, w, r: w % -2, Dint, 1, (0, 0, 0)),
-        ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 0)),
-        ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 0)),
+        # A CLICK read SC46 after a MOD by 0 on 2026-11-26.
+        ("mod_by_zero", lambda n, d, z, w, r: n % z, Int, 0, (0, 0, 1)),
+        ("mod_by_zero_real", lambda n, d, z, w, r: r % (z + 0.0), Real, 0.0, (0, 0, 1)),
         ("zero_to_zero", lambda n, d, z, w, r: z**z, Int, 0, (0, 0, 0)),
         # A CLICK read both values on 2026-11-10.  Their SC43 is pyrung's, as for any Inf result.
         ("zero_to_minus_one", lambda n, d, z, w, r: (z + 0.0) ** -1.0, Real, pymath.inf, (0, 1, 0)),
@@ -3096,6 +3097,92 @@ class TestBoardPeripheralsAndRunStop:
         ids=[case[0] for case in _HEX_DIVISION],
     )
     def test_hex_division_agrees_on_every_backend(
+        self, monkeypatch, label, make, values, stored, flags
+    ):
+        a, b = (Word(name, default=value) for name, value in zip("AB", values, strict=True))
+        dest = Word("Dest", default=0xBEEF)
+        with Program(strict=False) as prog:
+            with rung():
+                math(make(a, b), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    #: Each row is (label, tag type, formula of the tags (a, b, c), their values, stored,
+    #: flags as (SC40, SC43, SC46)).  The rows are what a CLICK's Math did (hardware
+    #: 2026-11-26).  The result starts at 99.
+    _CLICK_MATH_FLAGS = [
+        ("a1_minus", Word, lambda a, b, c: -a, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a2_zero_less", Word, lambda a, b, c: LiteralExpr(0) - a, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a3_difference", Word, lambda a, b, c: b - a, (2, 1, 0), 0xFFFF, (0, 1, 0)),
+        ("a4_then_add", Word, lambda a, b, c: -a + 0, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a5_then_multiply", Word, lambda a, b, c: -a * 1, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a6_then_divide", Word, lambda a, b, c: -a / 1, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a7_then_mod", Word, lambda a, b, c: -a % 7, (2, 0, 0), 0xFFFE, (0, 1, 0)),
+        ("a8_then_and", Word, lambda a, b, c: -a & 0xFFFF, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        ("a9_then_or", Word, lambda a, b, c: -a | 0, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        ("a10_then_xor", Word, lambda a, b, c: -a ^ 0, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        ("a11_difference_or", Word, lambda a, b, c: (0 - a) | 0, (2, 0, 0), 0xFFFE, (0, 0, 0)),
+        # SC40 was not read for these three rows.
+        ("b14_1_minus_or", Word, lambda a, b, c: -a | 1, (2, 0, 0), 0xFFFF, (0, 0, 0)),
+        ("b14_2_minus_xor", Word, lambda a, b, c: -a ^ 1, (2, 0, 0), 0xFFFF, (0, 0, 0)),
+        ("b14_2b_minus_xor", Word, lambda a, b, c: -a ^ 1, (3, 0, 0), 0xFFFC, (0, 0, 0)),
+        ("c1_division_by_zero", Int, lambda a, b, c: (a / b) + c, (5, 0, 1), 1, (1, 0, 0)),
+        ("c2_mod_by_zero", Int, lambda a, b, c: (a % b) + c, (5, 0, 1), 1, (0, 0, 1)),
+        ("c3_hex_mod_by_zero", Word, lambda a, b, c: a % b, (5, 0, 0), 0, (0, 0, 1)),
+        ("d1_hex_division_by_zero", Word, lambda a, b, c: (a / b) + 1, (5, 0, 0), 1, (1, 0, 0)),
+        ("d2_hex_mod_by_zero", Word, lambda a, b, c: (a % b) + 1, (5, 0, 0), 1, (0, 0, 1)),
+        ("d3_division_by_zero", Int, lambda a, b, c: (a / b) + 1, (5, 0, 0), 1, (1, 0, 0)),
+        ("d5_or_then_add", Word, lambda a, b, c: ((0 - a) | 0) + 1, (2, 0, 0), 0xFFFF, (0, 0, 0)),
+        ("d5x_or_then_add_past", Word, lambda a, b, c: ((0 - a) | 0) + 1, (1, 0, 0), 0, (0, 1, 0)),
+        (
+            "d6_or_then_subtract",
+            Word,
+            lambda a, b, c: ((0 - a) | 0) - 1,
+            (2, 0, 0),
+            0xFFFD,
+            (0, 0, 0),
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "kind", "make", "values", "stored", "flags"),
+        _CLICK_MATH_FLAGS,
+        ids=[case[0] for case in _CLICK_MATH_FLAGS],
+    )
+    def test_click_math_flags_on_every_backend(
+        self, monkeypatch, label, kind, make, values, stored, flags
+    ):
+        a, b, c = (kind(name, default=value) for name, value in zip("ABC", values, strict=True))
+        dest = kind("Dest", default=99)
+        with Program(strict=False) as prog:
+            with rung():
+                math(make(a, b, c), dest)
+
+        results = _on_every_backend(prog, monkeypatch, (dest, *self._FAULTS), scans=1)
+        expected = (stored, *(bool(flag) for flag in flags))
+        assert results == {name: expected for name in results}, label
+
+    #: Rows as in :attr:`_CLICK_HEX_MATH`, with two Word tags.  In hex mode AND, OR and XOR
+    #: give 16 unsigned bits, and a later step reads those 16 bits.  A CLICK was read doing
+    #: this for an OR that feeds a + or a - (the d rows of :attr:`_CLICK_MATH_FLAGS`).
+    #: These rows apply the same rule to a /, an XOR and a wide product, which no CLICK
+    #: reading covers.
+    _HEX_BITWISE_ONWARD = [
+        ("or_then_divide", lambda a, b: (-a | 0) / 2, (2, 0), 0x7FFF, (0, 0, 0)),
+        ("xor_then_subtract", lambda a, b: (-a ^ 0) - 1, (2, 0), 0xFFFD, (0, 0, 0)),
+        ("wide_product_or", lambda a, b: a * b | 0, (0x100, 0x100), 0, (0, 0, 0)),
+        ("wide_product_and", lambda a, b: a * b & 0x1FFFF, (0x100, 0x101), 0x100, (0, 0, 0)),
+        ("lsh_then_or", lambda a, b: (a << 1) | 0, (0x8001, 0), 2, (0, 0, 0)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("label", "make", "values", "stored", "flags"),
+        _HEX_BITWISE_ONWARD,
+        ids=[case[0] for case in _HEX_BITWISE_ONWARD],
+    )
+    def test_hex_bitwise_result_agrees_on_every_backend(
         self, monkeypatch, label, make, values, stored, flags
     ):
         a, b = (Word(name, default=value) for name, value in zip("AB", values, strict=True))

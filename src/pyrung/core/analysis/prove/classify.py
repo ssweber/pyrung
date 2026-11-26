@@ -1118,7 +1118,9 @@ def _interval_bounds(
     a_lo, a_hi = left
     b_lo, b_hi = right
 
-    if node.symbol == "/" and b_lo <= 0 <= b_hi:
+    if node.symbol in ("/", "//") and b_lo <= 0 <= b_hi:
+        # When the divisor can be 0, the corners do not bound the quotient.  With D in
+        # -10..10, the corners of 10 // D are -1 and 1, but 10 // 1 is 10.
         return None
 
     if node.symbol == "%":
@@ -1131,15 +1133,104 @@ def _interval_bounds(
             return (-size if b_lo < 0 else 0, size if b_hi > 0 else 0)
         return (max(a_lo, -size) if a_lo < 0 else 0, min(a_hi, size) if a_hi > 0 else 0)
 
+    if node.symbol in ("&", "|", "^"):
+        return _bitwise_bounds(node, left, right)
+
+    if node.symbol not in _CORNER_SYMBOLS:
+        return None
+
+    # With the count held, a shift never falls as the value rises, whatever the value's
+    # sign.  With the value held, the result only rises or only falls as the count rises.
+    # So the corners bound a shift.  When the count can be negative, the corner with the
+    # lowest count raises, and the function returns None.  A count past _WIDEST_SHIFT would
+    # build a huge int.
+    if node.symbol == "<<" and b_hi > _WIDEST_SHIFT:
+        return None
+    if node.symbol == "**":
+        if max(abs(b_lo), abs(b_hi)) > _WIDEST_SHIFT:
+            # The corner would build a huge int.
+            return None
+        if a_lo < 0:
+            return _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
+
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
+        # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer
+        # stores 0 for it, and the corners do not bound 0.  An int past a double's range
+        # raises OverflowError here.
+        if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
+            return None
     except (ArithmeticError, ValueError):
         return None
-    # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer stores 0
-    # for it, and the corners do not bound 0.
-    if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
-        return None
     return (min(corners), max(corners))
+
+
+#: The operations whose extremes over two intervals lie at the four corners.  Hold one
+#: operand, and the result only rises or only falls as the other operand rises.  A power
+#: does that only for a base of 0 or more.  ``_interval_bounds`` handles a negative base,
+#: and a divisor that can be 0, before it computes the corners.
+_CORNER_SYMBOLS = frozenset({"+", "-", "*", "/", "//", "**", "<<", ">>"})
+
+#: The widest left shift, and the largest exponent, that ``_interval_bounds`` computes.
+#: 2 ** 1024 is past a double.
+_WIDEST_SHIFT = 1024
+
+
+def _negative_base_power_bounds(
+    a_lo: float, a_hi: float, b_lo: float, b_hi: float
+) -> tuple[float, float] | None:
+    """Return bounds for a power whose base can be negative, or None.
+
+    The function returns a bound only when the exponent is a single whole number of 1 or
+    more.  An odd exponent keeps the order of the bases, so the ends bound the power.  An
+    even exponent turns at 0.  With A in -2..2, both ends of ``A ** 2`` give 4, but
+    ``1 ** 2`` is 1.
+    """
+    if b_lo != b_hi or b_lo < 1 or b_lo != int(b_lo):
+        return None
+    exponent = int(b_lo)
+    try:
+        ends = (a_lo**exponent, a_hi**exponent)
+        if exponent % 2 == 0 and a_hi > 0:
+            ends = (0, max(ends))
+        if not all(math.isfinite(end) for end in ends):
+            return None
+    except (ArithmeticError, ValueError):
+        return None
+    return (min(ends), max(ends))
+
+
+def _bitwise_bounds(
+    node: Any, left: tuple[float, float], right: tuple[float, float]
+) -> tuple[int, int] | None:
+    """Return bounds for an AND, OR or XOR of two intervals, or None.
+
+    These operations are not monotone, so the corners do not bound them.  With A in
+    2..5, the corners of ``A ^ 1`` are 3 and 4, but ``4 ^ 1`` is 5.  Each operand is cut
+    to a whole number first (``bit_operand``).  ``int()`` of a smaller number is never
+    larger, so the cut ends bound the cut operand.
+    """
+    try:
+        (a_lo, a_hi), (b_lo, b_hi) = ((int(lo), int(hi)) for lo, hi in (left, right))
+    except (OverflowError, ValueError):
+        return None
+    if a_lo == a_hi and b_lo == b_hi:
+        value = node.op(a_lo, b_lo)
+        return (value, value)
+    if node.symbol == "&":
+        # A mask such as 0xFFFF keeps every bit of an operand that fits in it.
+        for (lo, hi), (m_lo, m_hi) in (((a_lo, a_hi), (b_lo, b_hi)), ((b_lo, b_hi), (a_lo, a_hi))):
+            if m_lo == m_hi >= 0 and m_lo & (m_lo + 1) == 0 and 0 <= lo and hi <= m_lo:
+                return (lo, hi)
+        # x & m keeps only bits that are set in m.  So with m of 0 or more, x & m is in 0..m.
+        tops = [hi for lo, hi in ((a_lo, a_hi), (b_lo, b_hi)) if lo >= 0]
+        return (0, min(tops)) if tops else None
+    if a_lo < 0 or b_lo < 0:
+        # A negative int has every bit above its top bit set, so an OR or XOR with one can
+        # be negative.
+        return None
+    # OR and XOR of two numbers below 2 ** n stay below 2 ** n.
+    return (0, (1 << max(a_hi, b_hi).bit_length()) - 1)
 
 
 def _domain_from_calc_expression(

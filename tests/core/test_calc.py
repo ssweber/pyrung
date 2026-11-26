@@ -122,6 +122,35 @@ class TestCalcInstruction:
         assert runner.current_state.tags["HexResult"] == 6
         assert runner.current_state.tags["DecResult"] == 7
 
+    @pytest.mark.parametrize(
+        ("make", "stored", "flagged"),
+        [
+            (lambda a: -a, 0xFFFE, True),
+            (lambda a: -a | 0, 0xFFFE, False),
+            (lambda a: -a ^ 1, 0xFFFF, False),
+            (lambda a: -a & 0xFFFF, 0xFFFE, False),
+            (lambda a: ((0 - a) | 0) + 1, 0xFFFF, False),
+        ],
+        ids=["minus", "or", "xor", "and", "or_then_add"],
+    )
+    def test_a_hex_bitwise_result_is_16_unsigned_bits(self, runner_factory, make, stored, flagged):
+        """A hex AND, OR or XOR gives 16 unsigned bits and sets no SC43.
+
+        A CLICK stored FFFEh with no SC43 for ``- DH OR 0h`` with DH = 2h (2026-11-26).  A
+        minus alone sets SC43.  A later step reads the 16 bits, so
+        ``( ( 0h - DH ) OR 0h ) + 1h`` stored FFFFh with no SC43.
+        """
+        A, Out = Word("A"), Word("Out")
+        with Program() as logic:
+            with rung():
+                math(make(A), Out)
+
+        runner = runner_factory(logic)
+        runner.patch({"A": 2})
+        runner.step()
+        assert runner.current_state.tags["Out"] == stored
+        assert runner.current_state.tags["fault.out_of_range"] is flagged
+
     def test_real_result(self, runner_factory):
         Enable = Bool("Enable")
         A = Real("A")
@@ -256,7 +285,9 @@ class TestCutIntConstants:
         assert (decimal_whole.ucut_tag.min, decimal_whole.ucut_tag.max) == (4464, 4466)
         hex_calc = CalcInstruction(decimal_whole | Word("Mask"), Word("W"))
         assert hex_calc.mode == "hex"
-        assert hex_calc.expression.left.tag.name == decimal_whole.ucut_tag.name
+        # calc_form wraps a hex OR in ``& 0xFFFF``.
+        assert hex_calc.expression.right.value == 0xFFFF
+        assert hex_calc.expression.left.left.tag.name == decimal_whole.ucut_tag.name
 
 
 class TestCalcRangeAggregates:

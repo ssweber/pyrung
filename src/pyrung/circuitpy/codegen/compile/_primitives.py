@@ -232,10 +232,15 @@ def _compile_expression_impl(
             and not (_non_negative(expr.left) and _positive_literal(expr.right))
         ):
             # A Math's MOD truncates, so the result has the sign of the dividend.
-            # A MOD by 0 is 0 with no flag.  Both follow the core's _op_mod.  Python's
-            # % floors instead.
+            # A MOD by 0 is 0 with SC46.  Both follow the core's _op_mod.  Python's
+            # % floors instead.  A nonzero constant divisor never sets SC46, so that
+            # call passes None for the flag list.  A Math with no other step that can
+            # fail then builds no flag list.
+            # Every call passes three arguments, because scan_trace matches a helper
+            # call by its argument count and does not fill in a default.
             ctx.mark_helper("_mod")
-            return f"_mod({left}, {right})"
+            mod_flags = None if _non_zero_literal(expr.right) else flags
+            return f"_mod({left}, {right}, {mod_flags})"
         if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
             # A Math's division by 0 is 0 with SC40.  If the divisor is a tag, the
             # zero test is inline.  The exception is a dividend that appends flags of

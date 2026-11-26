@@ -319,3 +319,16 @@ slots = 3
 division_truncates = 1
 mod_truncates = 2
 product_not_cut = 3
+
+[groups.math_flags]
+base = 2241 # Conf_MathFlags: DS2241..DS2320
+slots = 7
+
+[groups.math_flags.cases]
+minus_sets_sc43 = 1
+last_op_sets_sc43 = 2
+bitwise_unsigned = 3
+mod_by_zero = 4
+or_result_unsigned = 5
+hex_by_zero_goes_on = 6
+false_rung_clears_sc46 = 7

@@ -132,13 +132,17 @@ def _int32(value: int) -> int:
     return ((value + 0x8000_0000) & 0xFFFF_FFFF) - 0x8000_0000
 
 
+#: The binary ops whose result a hex Math keeps to 16 unsigned bits (:func:`calc_form`).
+_HEX_MASKED_SYMBOLS = frozenset({"<<", "&", "|", "^"})
+
+
 @dataclass(frozen=True)
 class _CalcForm:
     """How :func:`calc_form` rewrites a formula: see there."""
 
     unsigned: bool = False
     abs_ops: bool = False
-    mask_shifts: bool = False
+    mask_bits: bool = False
     calc_ops: bool = True
     whole_division: bool = False
 
@@ -188,7 +192,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             or type(value) is not cls
         ):
             node = cls(left, right, op, value.symbol)
-        if form.mask_shifts and value.symbol == "<<":
+        if form.mask_bits and value.symbol in _HEX_MASKED_SYMBOLS:
             node = cls(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, UnaryExpr):
@@ -211,7 +215,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         node = value
         if shifted is not value.value or count is not value.count:
             node = type(value)(shifted, count, value.func, value.name)
-        if form.mask_shifts and value.name == "lsh":
+        if form.mask_bits and value.name == "lsh":
             return BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, RandIntExpr):
@@ -256,9 +260,9 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
     - A hex Math truncates the result of each ``/`` toward zero
       (:func:`~pyrung.core.expression._op_hex_div`).  So ``7h / 2h * 2h`` stores 6h
       (read, 2026-11-26).  A decimal ``/`` keeps the fraction.
-    - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
-      a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
-      Outside a Math they stay Python's.
+    - ``%`` truncates.  A ``%`` by 0 is 0 and sets SC46.  ``0 ^ 0`` is 0 with no
+      flag, and 0 to a negative power is +Inf
+      (:data:`~pyrung.core.expression.CALC_OPS`).  Outside a Math they stay Python's.
     - ``abs()`` of an Int or Dint tag cannot return the bottom of its range.
       ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43.  ``abs(DD1)`` with
       DD1 = -2147483648 does the same.  The rule depends on the operand's type, so it
@@ -267,11 +271,17 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
       ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
       not yet read.
+    - In hex mode AND, OR and XOR each give 16 unsigned bits, and a later step reads
+      those 16 bits.  With DH1 = 2h, ``- DH1 OR 0h`` stores FFFEh and
+      ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
+      2026-11-26).  An operand past 16 bits gets the same cut, with no SC43.  So
+      ``DH1 * DH2 OR 0h`` with 100h and 100h stores 0000h.  That is pyrung's
+      assumption, and no reading covers it.
 
     Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
-        form = _CalcForm(unsigned=True, mask_shifts=True, whole_division=True)
+        form = _CalcForm(unsigned=True, mask_bits=True, whole_division=True)
     else:
         form = _CalcForm(abs_ops=True)
     return _rebuild(expression, form)
@@ -331,13 +341,13 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
     negative, ``asin``/``acos`` outside -1..1, a negative base to a fractional
-    power): the function is 0 and the math-operation error flag
+    power, a MOD by 0): the operation is 0 and the math-operation error flag
     (``system.fault.math_operation_error``, CLICK's SC46) is set until the next
     Math clears it, as SC40 is.  The PLC stays in RUN, as a
     CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
-    hardware does not).  ``0 ** 0`` and a MOD by 0 are 0 and set no flag (into
-    a REAL 0.0).  0 to a negative power is +Inf, so into an INT, DINT or WORD
-    the formula stores 0 and sets the out-of-range flag.  MOD truncates: the
+    hardware does not).  ``0 ** 0`` is 0 and sets no flag (into a REAL 0.0).
+    0 to a negative power is +Inf, so into an INT, DINT or WORD the formula
+    stores 0 and sets the out-of-range flag.  MOD truncates: the
     result has the dividend's sign.
 
     **Constants:** a decimal Math keeps each integer constant whole, as a CLICK

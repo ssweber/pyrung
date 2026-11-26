@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung.core import (
+    PLC,
     Bool,
     Int,
     Program,
     Real,
+    Word,
     copy,
     math,
     out,
@@ -461,3 +465,224 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
 
     assert "DS7" not in domains
     assert "DS7" not in collect_produced_value_domains(logic, graph)
+
+
+# ===================================================================
+# The values a Math formula can store
+# ===================================================================
+
+
+def _picked(go_a: Bool, go_b: Bool, tag: Int | Word, a: int, b: int, c: int) -> None:
+    """Write *a* into *tag* when *go_a* is on, *b* when only *go_b* is on, and *c* otherwise."""
+    with rung(go_a):
+        copy(a, tag)
+    with rung(~go_a, go_b):
+        copy(b, tag)
+    with rung(~go_a, ~go_b):
+        copy(c, tag)
+
+
+def _decimal_xor() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, d3 = Int("A"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, 2, 4, 5)
+        with rung():
+            math(a ^ 1, d3)
+        with rung(d3 == 5):
+            out(Bool("Seen"))
+    return logic
+
+
+def _hex_or_of_a_difference() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    d1, d2, d3 = Word("D1"), Word("D2"), Word("D3")
+    with Program(strict=False) as logic:
+        with rung(go_a):
+            copy(65000, d1)
+        with rung(~go_a):
+            copy(0, d1)
+        with rung(go_b):
+            copy(2, d2)
+        with rung(~go_b):
+            copy(0, d2)
+        with rung():
+            math((d1 - d2) | 0, d3)
+        with rung(d3 == 64998):
+            out(Bool("Seen"))
+    return logic
+
+
+def _decimal_and_of_a_negative() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, d3 = Int("A"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, -3, 1, 2)
+        with rung():
+            math(a & 6, d3)
+    return logic
+
+
+def _shift_of_a_negative() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, n, d3 = Int("A"), Int("N"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, -7, 7, 0)
+        _picked(go_b, go_a, n, 2, 0, 1)
+        with rung():
+            math((a << n) + (a >> n), d3)
+    return logic
+
+
+def _wide_shift() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    n, d3 = Int("N"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, n, 2000, 3, 0)
+        with rung():
+            math(1 << n, d3)
+    return logic
+
+
+def _wide_power() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    n, d3 = Int("N"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, n, 2000, 3, 0)
+        with rung():
+            math(2**n, d3)
+    return logic
+
+
+def _power_of_a_negative() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, d3 = Int("A"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, -2, 1, 2)
+        with rung():
+            math(a**2, d3)
+    return logic
+
+
+def _odd_power_of_a_negative() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, d3 = Int("A"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, -2, 1, 2)
+        with rung():
+            math(a**3, d3)
+    return logic
+
+
+def _floor_division_by_a_span_through_zero() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    d, d3 = Int("D"), Int("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, d, -10, 1, 10)
+        with rung():
+            math(10 // d, d3)
+    return logic
+
+
+_STORED_VALUE_PROGRAMS = {
+    "decimal_xor": _decimal_xor,
+    "hex_or_of_a_difference": _hex_or_of_a_difference,
+    "decimal_and_of_a_negative": _decimal_and_of_a_negative,
+    "shift_of_a_negative": _shift_of_a_negative,
+    "wide_shift": _wide_shift,
+    "wide_power": _wide_power,
+    "power_of_a_negative": _power_of_a_negative,
+    "odd_power_of_a_negative": _odd_power_of_a_negative,
+    "floor_division_by_a_span_through_zero": _floor_division_by_a_span_through_zero,
+}
+
+
+@pytest.mark.parametrize("build", _STORED_VALUE_PROGRAMS.values(), ids=_STORED_VALUE_PROGRAMS)
+def test_each_math_domain_holds_every_value_a_scan_stores(build):
+    """Step each pair of inputs and check that every domain of D3 holds what the scan stored.
+
+    The validators read the produced domains, and how() reads the structural ones.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import (
+        _collect_all_exprs,
+        _collect_structural_domains,
+        collect_produced_value_domains,
+    )
+
+    logic = build()
+    graph = build_program_graph(logic)
+    domains = (
+        collect_produced_value_domains(logic, graph),
+        _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph)),
+    )
+    for go_a in (False, True):
+        for go_b in (False, True):
+            plc = PLC(logic)
+            plc.patch({"GoA": go_a, "GoB": go_b})
+            plc.step()
+            stored = plc.current_state.tags["D3"]
+            for domain in domains:
+                if "D3" in domain:
+                    assert stored in domain["D3"], (go_a, go_b, stored, domain["D3"])
+
+
+def test_check_keeps_a_comparison_with_a_value_an_xor_stores():
+    """``math(A ^ 1, D3)`` with A = 4 stores 5, so ``D3 == 5`` is not always false.
+
+    The corners of A in 2..5 give 3 and 4, and 5 lies past them.
+    """
+    logic = _decimal_xor()
+    assert not logic.check(select={"CMP_ALWAYS_FALSE"})
+    plc = PLC(logic)
+    plc.patch({"GoA": False, "GoB": True})
+    plc.step()
+    assert plc.current_state.tags["D3"] == 5
+
+
+def test_check_keeps_a_comparison_with_a_value_a_hex_or_stores():
+    """A hex OR keeps 16 bits, so ``(65000 - 2) | 0`` stores 64998.
+
+    The difference also reaches -2, whose 16 bits are 65534.  A bound taken from the
+    corners was 65000..65534, and that left out 64998.
+    """
+    logic = _hex_or_of_a_difference()
+    assert not logic.check(select={"CMP_ALWAYS_FALSE"})
+    plc = PLC(logic)
+    plc.patch({"GoA": True, "GoB": True})
+    plc.step()
+    assert plc.current_state.tags["D3"] == 64998
+
+
+def test_a_hex_or_of_values_that_fit_keeps_a_small_domain():
+    """List 0..3 for a hex ``A | B`` with A and B in 0..3.
+
+    The hex Math cuts the OR to 16 bits, and that cut keeps every value that fits.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import collect_produced_value_domains
+
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    a, b, d3 = Word("A"), Word("B"), Word("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, a, 1, 3, 0)
+        _picked(go_b, go_a, b, 2, 0, 1)
+        with rung():
+            math(a | b, d3)
+
+    domains = collect_produced_value_domains(logic, build_program_graph(logic))
+    assert domains["D3"] == (0, 1, 2, 3)
+
+
+def test_a_whole_power_of_a_negative_keeps_a_domain():
+    """List -8..8 for ``A ** 3`` and 0..4 for ``A ** 2``, with A in -2..2."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import collect_produced_value_domains
+
+    for build, values in (
+        (_odd_power_of_a_negative, range(-8, 9)),
+        (_power_of_a_negative, range(5)),
+    ):
+        logic = build()
+        domains = collect_produced_value_domains(logic, build_program_graph(logic))
+        assert domains["D3"] == tuple(values)

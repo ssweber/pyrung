@@ -394,12 +394,11 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return random.randint(min(lo, hi), max(lo, hi))",
         "",
     ],
-    # A Math's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets no flag
-    # (core QuietMathError).
+    # A Math's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets SC46 in a Math.
     "_mod": [
-        "def _mod(a, b):",
+        "def _mod(a, b, flags):",
         "    if b == 0:",
-        "        return 0",
+        "        return _term_fail(flags, 46)",
         "    r = abs(a) % abs(b)",
         "    return -r if a < 0 else r",
         "",
@@ -492,7 +491,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '        if op == "**":',
         "            return _pow(a, b)",
         '        if op == "mod":',
-        "            return _mod(a, b)",
+        "            return _mod(a, b, flags)",
         '        if op == "pow0":',
         "            return _pow_calc(a, b, flags)",
         "        a = _bit_int(a)",
@@ -568,7 +567,7 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
         needed.add("_bit_int")
     if needed & {"_rand_term", "_rand_draw", "_permissive_op", "_permissive_math"}:
         needed.add("_term_fail")
-    if needed & {"_pow_calc", "_abs_int", "_calc_div", "_calc_floordiv", "_hex_div"}:
+    if needed & {"_pow_calc", "_abs_int", "_calc_div", "_calc_floordiv", "_hex_div", "_mod"}:
         needed.add("_term_fail")
     if "_pow_calc" in needed:
         needed.add("_pow")

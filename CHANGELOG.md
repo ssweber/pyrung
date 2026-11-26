@@ -50,6 +50,10 @@
 - `check()` and `how()` no longer fail with `TypeError` on a program that stores a number in a TXT tag. pyrung refuses each such write when you build the program.
 - `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT).
 - `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
+- `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
+- `math()` on `Word` tags only now treats the result of an AND, OR or XOR as 16 unsigned bits, as a CLICK does. `math(-DH[1] | 0, DH[2])` with DH1 = 2 stores FFFEh and sets no flag (it set SC43).
+- `check()` no longer reports a comparison as always false when a `math()` stores the compared value with an AND, OR or XOR, a power of a negative number, or a `//` whose divisor can be 0.
+- `check()` no longer raises `OverflowError` on a `math()` with a very large left shift or power, such as `1 << N` with N = 2000.
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.

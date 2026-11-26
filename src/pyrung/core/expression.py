@@ -42,7 +42,7 @@ Numeric = int | float
 #: In a Math the failing operation also adds its flag to this list:
 #:
 #: - A division by zero adds SC40 (``fault.division_error``).
-#: - A domain error adds SC46 (``fault.math_operation_error``).
+#: - A domain error or a MOD by zero adds SC46 (``fault.math_operation_error``).
 #: - An Inf or NaN into a bitwise operation, or ``abs()`` of a type's bottom value,
 #:   adds SC43 (``fault.out_of_range``).
 #: - A :class:`QuietMathError` adds no flag.
@@ -82,13 +82,11 @@ def _permissive(error: Exception) -> int:
 class QuietMathError(ArithmeticError):
     """A math error CLICK's Math answers with 0 and no fault flag.
 
-    A MOD by 0 and ``0 ** 0`` are such errors (a CLICK read 0 and no flag). Only the
-    ops that :func:`~pyrung.core.instruction.calc.calc_form` puts in a Math raise
-    it (:func:`_op_mod`, :func:`_op_pow_calc`). The operation is 0 and the formula
-    carries on, as for every math error (:data:`CALC_FAULTS`). So ``MOD(DS7, 0) + 5``
-    and ``0 ^ 0 + 5`` are 5 (hardware, 2026-11-10). Into a DF the 0 is 0.0
-    (``7.5 MOD 0.0`` read 0.0). Outside a Math, ``%`` floors and ``0 ** 0`` is 1,
-    as in Python.
+    ``0 ** 0`` is such an error (a CLICK read 0 and no flag). Only
+    :func:`_op_pow_calc`, which :func:`~pyrung.core.instruction.calc.calc_form` puts
+    in a Math, raises it. The operation is 0 and the formula carries on, as for every
+    math error (:data:`CALC_FAULTS`). So ``0 ^ 0 + 5`` is 5 (hardware, 2026-11-10).
+    Outside a Math, ``0 ** 0`` is 1, as in Python.
     """
 
 
@@ -146,11 +144,16 @@ def _op_mod(a: Numeric, b: Numeric) -> Numeric:
     """Return ``a MOD b`` as CLICK's Math computes it, truncated with the sign of *a*.
 
     ``-7 MOD 2`` is -1 and ``7 MOD -2`` is 1, for Int and Real alike. That matches C's
-    ``fmod``. Python's ``%`` floors instead. A MOD by 0 raises :class:`QuietMathError`.
-    ``math()`` runs ``%`` as this function. Anywhere else ``%`` is Python's.
+    ``fmod``. Python's ``%`` floors instead. ``math()`` runs ``%`` as this function.
+    Anywhere else ``%`` is Python's.
+
+    A MOD by 0 raises :class:`MathDomainError`. In a Math the MOD is then 0 and sets
+    SC46, and the rest of the formula runs. A CLICK stored 1 for ``( DS1 MOD DS2 ) + DS3``
+    with 5, 0 and 1, and 0 for a hex ``DH1 MOD DH2`` with 5h and 0h. Both set SC46
+    (hardware, 2026-11-26). Into a DF the MOD is 0.0 (``7.5 MOD 0.0`` read 0.0).
     """
     if b == 0:
-        raise QuietMathError("MOD by zero")
+        raise MathDomainError("MOD by zero")
     remainder = abs(a) % abs(b)
     return -remainder if a < 0 else remainder
 
@@ -649,12 +652,13 @@ class ExprCompare(Condition):
 
 
 class MathDomainError(ValueError):
-    """Raised when a math function gets an operand outside its domain.
+    """Raised when a math function or a MOD gets an operand outside its domain.
 
-    Examples are ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, and
-    ``asin``/``acos`` outside -1..1. ``math()`` turns it into CLICK's math-operation
-    error (SC46). The function is 0 and the formula carries on (``SQRT(-4.0) + 5``
-    is 5). The flag stays on until the next Math clears it, and the PLC stays in RUN.
+    Examples are ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative,
+    ``asin``/``acos`` outside -1..1, and a MOD by 0. ``math()`` turns it into CLICK's
+    math-operation error (SC46). The operation is 0 and the formula carries on
+    (``SQRT(-4.0) + 5`` is 5). The flag stays on until the next Math clears it, and
+    the PLC stays in RUN.
     """
 
 

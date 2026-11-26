@@ -33,8 +33,8 @@ so a flag is read on the rung right after its op.
   off (``GuardedProbes``), the destination staged at 99: 0 ^ -1 into a DF (Result1, by 1: 0 or
   99 kept); -8.0 ^ 0.5 (Result2); 7 MOD 0 (Result3); 7.5 MOD 0.0 (Result4).  ErrorCode bits: 1
   and 2 SC46 after the first two, 4 and 8 SC40 after the last two, 16 SC40 after the first,
-  which would be a division by 0.  A CLICK writes 0 for all four,
-  and only -8.0 ^ 0.5 raises a flag, SC46 (ErrorCode = 2).
+  which would be a division by 0.  A CLICK writes 0 for all four.
+  Of the flags read here, only -8.0 ^ 0.5 raises one, SC46 (ErrorCode = 2).
 - ``functions``: radians or degrees, and which log.  SIN(1), COS(1), TAN(1), ATAN(1) and LN(10),
   each * 1000: 841, 540, 1557, 785, 2302 in radians.  In degrees 17, 999, 17, 785 and the rest
   tells.  ``log`` is LN (2302) and not LOG (1000).
