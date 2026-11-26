@@ -362,14 +362,13 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 #   0.0 * -1.0 (``real_bits/minus_zero_math``).
 # - A minus sign before any operand that is 0. No reading shows the sign of the 0 it gives, so
 #   the model leaves it unread.
-# - A 0 that a step makes. -1.0 * DF and DF / -1.0 keep the sign, and DF - DF gives +0.0
-#   (``real_bits/minus_zero_shapes``). The model reads these, and 0.0 + 0.0. No reading shows
-#   the sign of the 0 of a MOD, of a ^ or SQRT of -0.0, or of another sum of two zeros. The
-#   model leaves each unread.
-# - A division or MOD by zero. The model gives 0 with SC40 or SC46. No reading shows the sign
-#   of that 0, so the model leaves a dividend with its sign bit set unread.
-# - SQRT of a negative (the stand-in SQRT ( DS4 ) at -1). The model gives 0 with SC46, and
-#   the rest of the formula runs (``math_terms/error_terms``). Both groupings raise the flag.
+# - A 0 that a step makes. A * or / of +0.0 by a negative value gives -0.0, and -0.0 - -0.0
+#   gives +0.0 (``real_bits/minus_zero_shapes``). The model reads these. No reading shows the
+#   sign of the 0 of a sum, of any other * or /, of a MOD, or of a ^ or SQRT of 0. The model
+#   leaves each unread.
+# - A division or MOD by zero, and SQRT of a negative (the stand-in SQRT ( DS4 ) at -1). Each
+#   gives 0 with SC40 or SC46, and the rest of the formula runs (``math_terms/error_terms``).
+#   No reading shows the sign of that 0, so the model leaves each unread in decimal mode.
 # - A pointer. A Copy through one past its bank raises SC44 (``faults/pointer_past_bank``), and
 #   no reading shows one in a Math. The model leaves each pointer unread.
 # - Reals that cancel: 1.0 with 1.0E+17 and 1.0E+30, with both signs (_REAL_GRID). The model
@@ -778,7 +777,10 @@ def test_same_value_on_plain_operands_is_the_pairs_whose_groupings_agree_there()
         ("- DF2 MOD 3", False, [(NEGATE_ADDRESS, "MOD")]),
         ("- ( DF1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
         ("- DS1 * DF2", False, [(NEGATE_ADDRESS, "*")]),
-        # Only a DS, a DD or a whole number inside a Dint is a plain decimal operand.
+        # No reading shows the sign of the 0 of a decimal sum, so a sum of plain operands
+        # warns too.
+        ("DS1 + DS2 + DS3", False, [("+", "+")]),
+        ("DD1 + 2147483647 - DS2", False, [("+", "-")]),
         ("DS1 + DS2 ^ 2 + DS3", False, [("+", "+")]),
         ("DS1 + 1.5 + DS2", False, [("+", "+")]),
         ("DS1 + 2147483648 - DS2", False, [("+", "-")]),
@@ -838,8 +840,6 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("FFFFh + DH1 + DH2", True),
         ("- DH1 MOD DH2", True),
         ("- ( DH1 ) MOD 7h", True),
-        ("DS1 + DS2 + DS3", False),
-        ("DD1 + 2147483647 - DS2", False),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(

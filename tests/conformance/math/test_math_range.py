@@ -24,8 +24,8 @@ preset to 99.0, so a skipped write reads 99.0. pyrung carries Inf.
   is 1 for 0.99 to 1.01, which a CPU gives when it keeps such a value. It is 2 for 0.0, which
   a CPU gives when it sets such a value to 0.
 
-``minus_sign`` and ``by_zero`` ask about the sign of a zero, and about Inf and NaN. Each
-types its formulas without brackets (``formulas=``). Copy Binary moves the bits of each zero
+``minus_sign``, ``by_zero`` and ``zero_sum`` ask about the sign of a zero, and
+``minus_sign`` also asks about Inf and NaN. Each types its formulas without brackets (``formulas=``). Copy Binary moves the bits of each zero
 into a DD, and a DD below 0 shows the sign bit. Each field adds 1 for its first zero with the
 sign bit set, 2 for the second and 4 for the third.
 
@@ -33,9 +33,9 @@ sign bit set, 2 for the second and 4 for the third.
 ``faults/inf_and_nan_arithmetic`` does. A minus sign might flip the sign bit, which gives
 -0.0 before 0.0. It might compute 0 - x instead, which gives +0.0.
 
-- Result1 adds 1 when ``- DF Inf * DF 2`` and ``- DF Inf / DF 2`` are both -Inf. It adds 2
-  when ``- DF NaN * DF 2``, ``- DF NaN / DF 2``, ``- DF Inf * DF 0.0`` and
-  ``- DF Inf / DF Inf`` are all NaN.
+- Result1 is 1 when ``- DF Inf * DF 2`` and ``- DF Inf / DF 2`` are both -Inf, and
+  ``- DF NaN * DF 2``, ``- DF NaN / DF 2``, ``- DF Inf * DF 0.0`` and ``- DF Inf / DF Inf``
+  are all NaN.
 - Result2 holds the signs of ``- DF 0.0``, ``- DF 0.0 * DF -5.0`` and ``- DF 0.0 / DF -5.0``.
 - Result3 holds the signs of ``- DF 5.0 MOD DF 5.0``, ``DF -5.0 MOD DF 5.0`` and
   ``DF 5.0 MOD DF 5.0``.
@@ -44,8 +44,8 @@ sign bit set, 2 for the second and 4 for the third.
   stored in a DF.
 
 pyrung flips the sign of a Real. A minus sign before a DS of 0 gives the whole number 0,
-which stores +0.0. The 0 of pyrung's MOD takes the dividend's sign. pyrung reads Result1 = 3,
-Result2 = 1, Result3 = 3, Result4 = 2 and ErrorCode = 0.
+which stores +0.0. For a dividend other than 0, the 0 of pyrung's MOD takes the dividend's
+sign. pyrung reads Result1 = 1, Result2 = 1, Result3 = 3, Result4 = 2 and ErrorCode = 0.
 
 ``by_zero`` asks which sign the 0 of a division or MOD by zero takes. It stages -0.0 as
 0.0 * -1.0 (``real_bits/minus_zero_math``).
@@ -59,20 +59,44 @@ Result2 = 1, Result3 = 3, Result4 = 2 and ErrorCode = 0.
 pyrung gives +0.0 for each division and MOD by zero. It reads 0 in Result1 to Result4, and
 Scratch = 1.
 
+``zero_sum`` asks which sign the 0 of a sum takes, and the 0 of a MOD, ``*`` and ``/`` of 0.
+It stages -0.0 the same way. Each 0 is stored in a DF.
+
+- Result1 holds the sign of ``DS 0 + DS 0``.
+- Result2 holds the signs of ``DS 5 + DS -5`` and ``DS 5 - DS 5``.
+- Result3 holds the signs of ``DF 5.0 - DF 5.0`` and ``DF -5.0 + DF 5.0``.
+- Result4 holds the signs of ``DF 0.0 + DF 0.0`` and ``DF -0.0 + DF 0.0``.
+- Scratch holds the signs of ``DF -0.0 MOD DF 5.0`` and ``DF 0.0 MOD DF 5.0``.
+- ErrorCode holds the signs of ``DF -0.0 * DF -5.0`` and ``DF -0.0 / DF -5.0``.
+
+pyrung gives +0.0 for each of these, and reads 0 in each field. The part has no rung to spare,
+so this case does not check the staged -0.0. ``by_zero`` checks it.
+
+What the readings settle for ``DS1 + DS2 + DS3`` and ``DS1 + DS2 - DS3``:
+
+- A plain decimal operand is a whole number inside a Dint, so a double holds each sum of
+  three exactly. The two orders differ only in the sign of a 0.
+- If ``zero_sum`` Result1 and Result2 read 0, a sum of whole numbers to 0 gives +0.0. The
+  model can then read that 0, and ``("+", "+", False)`` and ``("+", "-", False)`` can join
+  ``formula.SAME_VALUE_ON_PLAIN_OPERANDS`` again.
+
 What the readings settle for the pairs of a minus sign with ``*``, ``/`` and MOD:
 
 - No value of Inf or NaN tells the two orders apart. A CLICK's Math stores one NaN, whatever
   its sign (``real_bits/non_finite_raw_bits``), and a minus sign before Inf gives -Inf in
-  either order. If Result1 of ``minus_sign`` reads 3, the model of a CLICK
+  either order. If Result1 of ``minus_sign`` reads 1, the model of a CLICK
   (``formula_values.py``) can read a step on Inf or NaN.
 - If a minus sign computes 0 - x, the orders differ. A CLICK that applies the minus sign
   first sets ``minus_sign`` Result2 bits 2 and 4 and ErrorCode bit 2. Applied last, it sets
   none of them. That reading settles the pairs in ``formula.CONFIRMED_PAIRS``.
 - If a minus sign flips the sign bit, ``minus_sign`` Result2 bit 1 and ErrorCode bit 1 are
-  set. Then both orders give the same bits for ``*``, and for ``/`` by a value other than 0.
+  set. Then both orders give the same bits for ``*``, and for ``/`` by a value other than 0,
+  if a ``*`` or ``/`` of -0.0 by a negative value gives +0.0. That needs ``zero_sum``
+  ErrorCode to read 0.
 - With a flip, MOD by a value other than 0 gives the same bits in both orders only when the 0
   of each exact multiple takes the dividend's sign. That needs ``minus_sign`` Result3 to read
-  3 and Result4 to read 2.
+  3 and Result4 to read 2. A dividend of 0 needs ``zero_sum`` Scratch to read 1, so that
+  -0.0 MOD 5.0 gives -0.0 and 0.0 MOD 5.0 gives +0.0.
 - With a flip, a ``/`` by zero gives the same bits in both orders only when its 0 has the
   dividend's sign. That needs ``by_zero`` Result1 to read 6 and Result2 to read 2. MOD by
   zero needs Result3 to read 6 and Result4 to read 2. The model can then read the 0 of a
@@ -89,7 +113,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import And, Or, copy, fill, math, rung, system, to_binary
+from pyrung.core import copy, fill, math, rung, system, to_binary
 from tests.conformance.memory import dd, df, ds
 from tests.conformance.probe_kit import finish, flag_bit, once
 
@@ -220,12 +244,8 @@ def prove_minus_sign(slot: Any) -> None:
         math(five % minus_five, zeros[9])
         math(minus_five % minus_five, zeros[10])
     signs = _signs(slot, zeros[:8], 461) + _signs(slot, zeros[8:], 480)
-    _bits(
-        slot,
-        slot.Result1,
-        (And(*(x <= -3.0e38 for x in infs)), Or(*(x > -3.0e38 for x in infs))),
-        (And(*(x != x for x in nans)), Or(*(x == x for x in nans))),
-    )
+    # One rung for both checks keeps the part under its rung limit.
+    _reading(slot, slot.Result1, (1, *(x <= -3.0e38 for x in infs), *(x != x for x in nans)))
     _bits(slot, slot.Result2, *signs[0:3])
     _bits(slot, slot.Result3, *signs[3:5], signs[8])
     _bits(slot, slot.Result4, *signs[9:11])
@@ -300,6 +320,63 @@ def init_by_zero(slot: Any) -> None:
     fill(0, dd.select(469, 479))
 
 
+#: The formulas of ``zero_sum``, one for each ``math()`` in rung order, typed without brackets.
+ZERO_SUM_FORMULAS = (
+    "DF230 * DF231",
+    "DS4473 + DS4473",
+    "DS4474 + DS4475",
+    "DS4474 - DS4474",
+    "DF228 - DF228",
+    "DF229 + DF228",
+    "DF230 + DF230",
+    "DF232 + DF230",
+    "DF232 MOD DF228",
+    "DF230 MOD DF228",
+    "DF232 * DF229",
+    "DF232 / DF229",
+)
+
+
+def prove_zero_sum(slot: Any) -> None:
+    five, minus_five, zero, minus_one, minus_zero = (df[n] for n in range(228, 233))
+    zero_ds, five_ds, minus_five_ds = ds[4473], ds[4474], ds[4475]
+    zeros = [df[n] for n in range(233, 244)]
+    with rung(*once(slot)):
+        # 0.0 * -1.0 stores -0.0 (``real_bits/minus_zero_math``).
+        math(zero * minus_one, minus_zero)
+        math(zero_ds + zero_ds, zeros[0])
+        math(five_ds + minus_five_ds, zeros[1])
+        math(five_ds - five_ds, zeros[2])
+        math(five - five, zeros[3])
+        math(minus_five + five, zeros[4])
+        math(zero + zero, zeros[5])
+        math(minus_zero + zero, zeros[6])
+        math(minus_zero % five, zeros[7])
+        math(zero % five, zeros[8])
+        math(minus_zero * minus_five, zeros[9])
+        math(minus_zero / minus_five, zeros[10])
+    signs = _signs(slot, zeros, 483)
+    _bits(slot, slot.Result1, signs[0])
+    _bits(slot, slot.Result2, *signs[1:3])
+    _bits(slot, slot.Result3, *signs[3:5])
+    _bits(slot, slot.Result4, *signs[5:7])
+    _bits(slot, slot.Scratch, *signs[7:9])
+    _bits(slot, slot.ErrorCode, *signs[9:11])
+    finish(slot)
+
+
+def init_zero_sum(slot: Any) -> None:
+    copy(5.0, df[228])
+    copy(-5.0, df[229])
+    copy(0.0, df[230])
+    copy(-1.0, df[231])
+    fill(99.0, df.select(232, 243))
+    fill(0, dd.select(483, 493))
+    copy(0, ds[4473])
+    copy(5, ds[4474])
+    copy(-5, ds[4475])
+
+
 group = Group(
     "math_range",
     [
@@ -326,15 +403,16 @@ group = Group(
         ),
         case(
             "pyrung expects a minus sign before Inf to give -Inf, and a step on NaN to give NaN "
-            "(Result1 = 3). The other fields hold the sign bits of zeros. pyrung gives -0.0 for "
-            "- DF 0.0 (Result2 = 1), and for - DF 5.0 MOD DF 5.0 and DF -5.0 MOD DF 5.0 "
-            "(Result3 = 3). DF 5.0 MOD DF 5.0 gives +0.0. DF 5.0 MOD DF -5.0 gives +0.0, and "
-            "DF -5.0 MOD DF -5.0 gives -0.0 (Result4 = 2). It computes a DS in whole numbers, so "
-            "a DS of 0 gives +0.0 with a minus sign and in a product (ErrorCode = 0)",
+            "(Result1 = 1). The other fields hold the sign bits of zeros. pyrung gives -0.0 for "
+            "- DF 0.0 (Result2 = 1). It gives -0.0 for - DF 5.0 MOD DF 5.0 and "
+            "DF -5.0 MOD DF 5.0, and +0.0 for DF 5.0 MOD DF 5.0 (Result3 = 3). It gives +0.0 for "
+            "DF 5.0 MOD DF -5.0 and -0.0 for DF -5.0 MOD DF -5.0 (Result4 = 2). It computes a DS "
+            "in whole numbers, so a DS of 0 gives +0.0 with a minus sign and in a product "
+            "(ErrorCode = 0)",
             ladder=prove_minus_sign,
             init=init_minus_sign,
             id="minus_sign",
-            expect={"Result1": 3, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 0},
+            expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 0},
             formulas=MINUS_FORMULAS,
             probe="what a minus sign gives before 0, Inf and NaN, and which order a CLICK "
             "applies to it with * and /",
@@ -349,6 +427,27 @@ group = Group(
             expect={"Result1": 0, "Result2": 0, "Result3": 0, "Result4": 0, "Scratch": 1},
             formulas=BY_ZERO_FORMULAS,
             probe="which sign the 0 of a division or MOD by zero takes",
+        ),
+        case(
+            "pyrung expects a sum to 0 to give +0.0. Each field holds the sign bits of the "
+            "zeros. DS 0 + DS 0 (Result1), DS 5 + DS -5 and DS 5 - DS 5 (Result2), "
+            "DF 5.0 - DF 5.0 and DF -5.0 + DF 5.0 (Result3), and DF 0.0 + DF 0.0 and "
+            "DF -0.0 + DF 0.0 (Result4) each give +0.0. DF -0.0 MOD DF 5.0 and DF 0.0 MOD DF 5.0 "
+            "give +0.0 (Scratch = 0). DF -0.0 * DF -5.0 and DF -0.0 / DF -5.0 give +0.0 "
+            "(ErrorCode = 0)",
+            ladder=prove_zero_sum,
+            init=init_zero_sum,
+            id="zero_sum",
+            expect={
+                "Result1": 0,
+                "Result2": 0,
+                "Result3": 0,
+                "Result4": 0,
+                "Scratch": 0,
+                "ErrorCode": 0,
+            },
+            formulas=ZERO_SUM_FORMULAS,
+            probe="which sign the 0 of a sum takes, and the 0 of a MOD, * and / of 0",
         ),
     ],
 )

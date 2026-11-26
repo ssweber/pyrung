@@ -379,10 +379,11 @@ width_word = 38
 hex_by_zero = 39
 
 [groups.math_range]
-base = 2321 # Conf_MathRange: DS2321..DS2360
-slots = 3
+base = 2321 # Conf_MathRange: DS2321..DS2370
+slots = 4
 
 [groups.math_range.cases]
 double_overflow = 1
 minus_sign = 2
 by_zero = 3
+zero_sum = 4

@@ -137,8 +137,8 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = ()
 #: pair counts as plain. :func:`plain_operands` says which operands are plain.
 #: In hex mode a plain operand is never past FFFFh, so these steps stay inside the values that
 #: the readings show. In decimal mode a plain operand is a whole number inside a Dint, so a
-#: double holds the sum of three exactly. No reading shows the sign of the 0 that a minus sign
-#: gives, and a DF holds either sign. So no decimal pair with a minus sign is here.
+#: double holds the value of a sum of three exactly. No reading shows the sign of the 0 that a
+#: sum or a minus sign gives, and a DF holds either sign. So no decimal pair is here.
 #: ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
 SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
     ("+", "+", True),
@@ -148,8 +148,6 @@ SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
     ("XOR", "XOR", True),
     (NEGATE_ADDRESS, "MOD", True),
     (NEGATE_BRACKET, "MOD", True),
-    ("+", "+", False),
-    ("+", "-", False),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
