@@ -155,6 +155,9 @@
 "faults/rand_unequal_bounds" = { hash = "64c6772f8257", on = "2026-11-13" }
 "faults/rand_wide_bounds_flags" = { hash = "b6d7b184a0bc", on = "2026-11-13" }
 "faults/real_intermediate_range" = { hash = "571af57a341f", on = "2026-11-13" }
+"fill_binary/copy_binary_constants" = { hash = "6ae93144209e", on = "2026-11-26" }
+"fill_binary/copy_binary_df_dd" = { hash = "96f6ea141556", on = "2026-11-26" }
+"fill_binary/fill_number_into_txt" = { hash = "4dc647de61c5", on = "2026-11-26" }
 "flag_boxes/boxes_by_pointer" = { hash = "7a1272f9278c", on = "2026-11-12" }
 "flag_boxes/ton_ctu_by_pointer" = { hash = "cd28e7f79d80", on = "2026-11-12" }
 "flag_carry/math_flags_carry" = { hash = "f578d14515c3", on = "2026-11-12" }
