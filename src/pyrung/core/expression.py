@@ -1370,7 +1370,10 @@ def format_expr(expr: Expression) -> str:
     if isinstance(expr, BinaryExpr):
         left_str = format_expr(expr.left)
         right_str = format_expr(expr.right)
-        if isinstance(expr.left, BinaryExpr):
+        if isinstance(expr.left, BinaryExpr) or (
+            expr.symbol == "**" and left_str.startswith(("-", "+", "~"))
+        ):
+            # Python applies ** before a sign on its left, so -A ** 2 reads as -(A ** 2).
             left_str = f"({left_str})"
         if isinstance(expr.right, BinaryExpr):
             right_str = f"({right_str})"

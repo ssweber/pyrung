@@ -141,6 +141,43 @@ class TestUnary:
         assert format_expr(expr) == "abs(X)"
 
 
+class TestSignBeforePower:
+    """A sign on the left of ``**`` keeps its brackets, because Python reads -A ** 2 as -(A ** 2)."""
+
+    def test_negated_tag_to_a_power(self):
+        a = _tag("A")
+        assert format_expr((-a) ** 2) == "(-A) ** 2"
+
+    def test_negative_constant_to_a_power(self):
+        assert format_expr(LiteralExpr(-2) ** 2) == "(-2) ** 2"
+        assert format_expr(LiteralExpr(-2.5) ** 2) == "(-2.5) ** 2"
+
+    def test_plus_and_invert_to_a_power(self):
+        a = _tag("A")
+        assert format_expr((+a) ** 2) == "(+A) ** 2"
+        assert format_expr((~a) ** 2) == "(~A) ** 2"
+
+    def test_negated_power_keeps_its_own_brackets(self):
+        a = _tag("A")
+        assert format_expr(-(a**2)) == "-(A ** 2)"
+
+    def test_sign_on_the_right_or_before_another_operator(self):
+        a = _tag("A")
+        assert format_expr(a ** LiteralExpr(-2)) == "A ** -2"
+        assert format_expr(a ** (-a)) == "A ** -A"
+        assert format_expr((-a) * 2) == "-A * 2"
+
+    def test_text_reads_back_to_the_same_value(self):
+        """Python computes each text to the value that the expression stores."""
+        for expr, text in [
+            (LiteralExpr(-2) ** 2, "(-2) ** 2"),
+            (LiteralExpr(-2) ** LiteralExpr(3), "(-2) ** 3"),
+            (-(LiteralExpr(2) ** 2), "-(2 ** 2)"),
+        ]:
+            assert format_expr(expr) == text
+            assert eval(text) == expr.evaluate(None)
+
+
 class TestMathFunctions:
     def test_sqrt(self):
         expr = sqrt(_tag("X"))
