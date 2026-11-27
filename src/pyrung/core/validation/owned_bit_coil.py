@@ -5,8 +5,6 @@ rewritten by that instruction on every execution.  An ``out``, ``latch``,
 ``reset`` or ``toggle`` on it is a silent trap.  CLICK has no coil on a
 timer or counter bit at all.  To clear the bit, use the instruction's own
 ``.reset()`` pin.  This check runs when a ``Program`` scope closes.
-
-The check skips ranges that are resolved only at runtime (pointer-indexed block ranges).
 """
 
 from __future__ import annotations
