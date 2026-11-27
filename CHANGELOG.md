@@ -16,6 +16,7 @@
 ### Fixes
 
 - A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on `CompiledPLC` and in the generated CircuitPython code. 0.19.0 raised an error there.
+- `math()` into a Real stores +Inf for a power past the float range, such as `5 ** DD1` with a large DD1 (it hung).
 
 ## v0.19.0 (2026-11-26)
 
