@@ -60,7 +60,7 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
 
 ### Fixes
 
-- `math()` on `Word` tags only (CLICK's hex mode) now truncates each division, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
+- `math()` on `Word` tags only (CLICK's hex mode) now drops the fraction of each division of positive values, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
 - `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT).
 - `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
