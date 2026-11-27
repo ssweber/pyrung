@@ -45,6 +45,23 @@ brackets in an exported `math()` stay low priority, outside this order.
     parse checks the shape of each operand: its kind, its type, a range against a tag, and a count. laddercodec keeps
     every CLICK rule (which banks, which addresses, which constants), and the export passes it the checked objects.
   - The operand declarations become pyrung's one grammar.
+- **`end_early()`, a conditional END in the main program.** It is the main-program counterpart of `return_early()`,
+  and comes after the rest of parse-once (Sam, 2026-11-26). Sam chose the name because it pairs with `return_early()`.
+  pyrung can't import a conditional END today. The import will turn a conditional `end()` into `end_early()`, and the
+  export will write it back as `end()`. [nothing]
+  - clicknick's round b19 ran a main program with conditional ENDs and a closing END, and the Syntax Check found no
+    error (`plc-questions/b19/RESULTS.md`, CLICK Programming Software 4.00). Sam accepted its readings as they are.
+  - A main program still needs its unconditional END. Without one, CLICK reports C0201 (laddercodec's end-return
+    round, cases f1 and f6). pyrung's export adds that END already.
+  - A true conditional END stops the scan there, on the first scan too.
+  - The PLC leaves each skipped rung's state alone. An Out keeps its last value. TMR and TMRA keep their Acc, then
+    go on timing from it when the END goes false. Their done bits don't change during the skip.
+  - A counter compares its input with what it saw the last time its rung ran. Pulses during the skip don't count.
+    An input that was off when the skip began and is on when it ends counts once.
+  - No SC flag changes.
+  - `return_early()` already skips rungs this way in a subroutine, so `end_early()` can likely reuse that path.
+  - Add conformance cases for the forms b19 didn't read: a down counter, an off-delay timer, and timer units other
+    than ms.
 
 ## 0. Gate fixes, and the range bound
 
@@ -469,6 +486,23 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **The sign of an integer 0 stored into a Real.** In four formulas, pyrung stores +0.0 when it applies the minus
+  sign first and -0.0 when it applies it last. Two are `- DS1 / DS2` with (0, 1) and `- DS1 MOD DS2` with (0.0, 1.0).
+  Fix it once round b16 reads `math_range/minus_sign`. Then the 27 zero-sign rows that `PENDING_ZERO_SIGNS` marks
+  "no probe yet" need conformance cases in a part of their own.
+- **A Math step past 2\*\*53 is rounded to a double.** The rounded value can land just past an exact corner, as in
+  `13 ** (A + 15)`. No false domain was found (math-flags review, 2026-11-26).
+- **The jit declines a scan that calls a helper with a default argument.** Four CircuitPython helpers take
+  `flags=None`: `_abs_int`, `_permissive_math`, `_pow_calc` and `_permissive_op` (circuitpy/codegen/_helpers.py). The
+  tracer in core/scan_trace.py declines any function with defaults, so such a scan runs on the compiled kernel
+  instead.
+- **A four-operand hex chain warns on import**, even where its groupings agree. The import could accept it with no
+  warning. No value is wrong.
+- **A comment in hex Math.** The comment above the `_hex_div` branch in `circuitpy/codegen/compile/_primitives.py`
+  leaves out two conditions of the code below it. The dividend must be 0 or more, and the divisor a positive whole
+  constant.
+- **`send()` drops the Send function code on import.** A one-register run sends FC06, and a 2-Char TXT send exports
+  as FC16 with count 2. The bytes on the wire are the same. A user who needs FC06 from pyrung has no way to ask for it yet.
 - **A scan that raises during a free run leaves the client showing "running".** The continue worker's thread dies
   with no last frame and no `stopped` event, so ClickNick's Simulator keeps showing RUN. Base 0.18.0 does the same.
   The fix is for the worker's `finally` to queue a frame with `running` false, a `stopped` event and the exception.
