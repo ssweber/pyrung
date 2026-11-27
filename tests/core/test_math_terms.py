@@ -33,6 +33,7 @@ from pyrung.core import (
     Program,
     Real,
     TagType,
+    Word,
     copy,
     latch,
     lro,
@@ -44,7 +45,7 @@ from pyrung.core import (
     rung,
     system,
 )
-from pyrung.core.expression import sqrt
+from pyrung.core.expression import LiteralExpr, sqrt
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.core.kernel_step import step_compiled_kernel
 
@@ -69,6 +70,7 @@ INT_BOTTOM, DINT_BOTTOM = Int("IntBottom"), Dint("DintBottom")
 BIG, MINUS_EIGHT = Real("Big"), Real("MinusEight")
 ONE, FAR, THOUSAND = Int("One"), Int("Far"), Int("Thousand")
 DINT_TOP = Dint("DintTop")
+WORD_FIVE, WORD_TOP = Word("WordFive"), Word("WordTop")
 
 
 def _past_doubles() -> Any:
@@ -161,6 +163,8 @@ STAGED = {
     FAR: 2000,
     THOUSAND: 1000,
     DINT_TOP: 2147483647,
+    WORD_FIVE: 5,
+    WORD_TOP: 0xFFFF,
 }
 
 
@@ -238,30 +242,47 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
     assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags
 
 
-#: A power with a large integer exponent, into a Real. The Math computes it in doubles,
-#: so it overflows to Inf and sets SC43. As a Python int, 5 ** (2 ** 31 - 1) takes hours.
+#: Powers with a large result. A decimal Math computes a power in doubles, so a power past
+#: the double range is Inf, and SC43 goes on when it is stored. An Int or a Dint stores the
+#: double's low bits, or 0 for Inf (read on a CLICK in rounds b26 and b27, 2026-11-27).
+#: code.py and a hex Math compute an integer power exactly, but take one past the double
+#: range as Inf without computing it. As a Python int, 5 ** (2 ** 31 - 1) takes hours.
 LARGE_POWERS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "five_to_dint_top": (lambda: 5**DINT_TOP, Real, float("inf"), {43}),
     "minus_five_to_dint_top": (lambda: -5 * 5**DINT_TOP, Real, float("-inf"), {43}),
+    "five_to_dint_top_into_dint": (lambda: 5**DINT_TOP, Dint, 0, {43}),
+    "five_to_dint_top_into_int": (lambda: 5**DINT_TOP, Int, 0, {43}),
+    "minus_five_to_dint_top_into_dint": (lambda: LiteralExpr(-5) ** DINT_TOP, Dint, 0, {43}),
+    "five_to_dint_top_plus_one": (lambda: 5**DINT_TOP + 1, Dint, 0, {43}),
+    "dint_top_to_a_large_constant": (lambda: DINT_TOP**2147483647, Dint, 0, {43}),
+    "dint_top_to_dint_top": (lambda: DINT_TOP**DINT_TOP, Real, float("inf"), {43}),
+    "hex_power_past_doubles": (lambda: WORD_FIVE ** (WORD_TOP * WORD_TOP), Word, 0, {43}),
+    # 3 ^ 21 fits in a double. 3 ^ 35 does not, and its double ends in 2 where the exact
+    # power ends in 7, so the low bits differ. A CLICK stores the double's.
+    "three_to_21_into_dint": (lambda: LiteralExpr(3) ** 21, Dint, 1870418611, {43}),
+    "three_to_21_into_int": (lambda: LiteralExpr(3) ** 21, Int, 21171, {43}),
+    "three_to_35_into_dint": (lambda: LiteralExpr(3) ** 35, Dint, -651126888, {43}),
+    "three_to_35_into_int": (lambda: LiteralExpr(3) ** 35, Int, -26728, {43}),
 }
 
 
 def _check_large_powers() -> None:
-    """Check each of :data:`LARGE_POWERS` on the desktop engines. A child process runs this.
+    """Check each of :data:`LARGE_POWERS` on every engine. A child process runs this.
 
-    Known difference on CircuitPython: the board has no doubles, so code.py keeps integer
-    steps exact. It computes this power as a Python int, as for an Int destination.
+    The host runs code.py with doubles. The P1AM-200's float has about 22 bits, so on the
+    board ``3 ** 35`` into a Dint stores 0 (docs/dialects/circuitpy.md).
     """
     with pytest.MonkeyPatch.context() as monkeypatch:
         for name, (_build, _dest_type, stored, flags) in LARGE_POWERS.items():
-            for engine in (engine for engine in ENGINES if not engine.startswith("circuitpy")):
+            for engine in ENGINES:
                 prog, tags = _program(name, LARGE_POWERS)
                 actual = _first_scan(prog, engine, tags, monkeypatch)
-                assert actual["Dest"] == stored, (name, engine)
+                assert actual["Dest"] == stored, (name, engine, actual["Dest"])
+                assert type(actual["Dest"]) is type(stored), (name, engine)
                 assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags, (name, engine)
 
 
-def test_a_large_power_into_a_real_finishes_on_the_desktop_engines() -> None:
+def test_a_large_power_finishes_on_every_engine() -> None:
     # A hang would hold the GIL, so the check runs in a child process that a timeout can kill.
     code = "from tests.core.test_math_terms import _check_large_powers; _check_large_powers()"
     root = Path(__file__).resolve().parents[2]

@@ -16,6 +16,7 @@ from pyrung.circuitpy.codegen._constants import (
     _INT_MAX,
     _INT_MIN,
 )
+from pyrung.core.expression import POW_LOG_LIMIT
 from pyrung.core.storage import CHAR_CODE_MAX, NOT_A_CHAR, REAL_MAX, WORD_STORE_FLOOR
 
 
@@ -464,11 +465,21 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # ** in a Math (core _op_pow_calc): 0 ^ 0 is 0 with no flag.  0 to a negative power
-    # is +Inf.  A complex result is 0, and it sets SC46 in a Math.
+    # is +Inf.  A complex result is 0, and it sets SC46 in a Math.  An integer power
+    # past the double range is +/-Inf, and the log test spares computing it
+    # (core int_power_past_doubles).
     "_pow_calc": [
         "def _pow_calc(base, exp, flags=None):",
         "    if base == 0 and exp <= 0:",
         '        return 0 if exp == 0 else float("inf")',
+        "    if (",
+        "        type(base) is int",
+        "        and type(exp) is int",
+        "        and exp > 0",
+        "        and abs(base) > 1",
+        f"        and math.log(abs(base)) * exp > {POW_LOG_LIMIT!r}",
+        "    ):",
+        '        return float("-inf") if base < 0 and exp % 2 else float("inf")',
         "    try:",
         "        return _pow(base, exp)",
         "    except _MathDomainError:",

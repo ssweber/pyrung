@@ -210,9 +210,11 @@ def _compile_expression_impl(
             if expr.symbol in ("<<", ">>"):
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
-        if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
+        if calc_op and expr.symbol == "**" and not _small_count_literal(expr.right, low=1):
             # A Math's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
-            # a negative power is +Inf.  A complex result is 0 with SC46.
+            # a negative power is +Inf.  A complex result is 0 with SC46.  An integer
+            # power past the double range is Inf without being computed.  An exponent
+            # from 1 to 64 is cheap to compute, so that power stays inline.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")
@@ -641,8 +643,9 @@ def _reads_int_of_float(expr: Any) -> bool:
     return False
 
 
-def _small_count_literal(expr: Any) -> bool:
-    return _non_negative_int_literal(expr) and expr.value <= 64
+def _small_count_literal(expr: Any, *, low: int = 0) -> bool:
+    """Return whether *expr* is an int constant from *low* to 64."""
+    return _non_negative_int_literal(expr) and low <= expr.value <= 64
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
