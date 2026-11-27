@@ -19,9 +19,11 @@ import itertools
 import logging
 from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.analysis.pilot.program_facts import copy_dest_name
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
+from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -472,27 +474,24 @@ def table_operand_from_copy(
     """Find and model the indirect-copy source in one exact writer."""
 
     from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     for instruction in rung._instructions:
         if not isinstance(instruction, CopyInstruction):
             continue
-        if getattr(as_authored(instruction.dest), "name", None) != tag:
+        if copy_dest_name(instruction.dest) != tag:
             continue
-        if isinstance(as_authored(instruction.source), (IndirectRef, IndirectExprRef)):
-            return table_from_indirect_src(
-                as_authored(instruction.source),
-                snapshot,
-                pdg,
-                program,
-                **model_options,
-            )
-        return None
+        match instruction.source:
+            case PointerArg(ref=ref):
+                return table_from_indirect_src(ref, snapshot, pdg, program, **model_options)
+            case TagArg() | ConstArg() | ExprArg():
+                return None
+            case _:
+                assert_never(instruction.source)
     return None
 
 
 def table_from_indirect_src(
-    src: Any,
+    src: IndirectRef | IndirectExprRef,
     snapshot: dict[str, Any],
     pdg: ProgramGraph,
     program: Any,
@@ -512,31 +511,34 @@ def table_from_indirect_src(
     """
     from pyrung.core.analysis.pilot.static_expressions import single_calc_source
     from pyrung.core.analysis.sp_values import _expr_tag_names, _SnapshotView
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    if isinstance(src, IndirectRef):
-        idx_tag = src.pointer.name
-        eval_addr: Any = lambda v: int(v)  # noqa: E731
-    elif isinstance(src, IndirectExprRef):
-        names = _expr_tag_names(src.expr)
-        if not names:
-            return None
-        candidates = (
-            {name for name in names if pdg.writers_of.get(name) or pdg.written_from_outside(name)}
-            if single_mutable_index
-            else names
-        )
-        if len(candidates) != 1:
-            return None
-        idx_tag = next(iter(candidates))
-        iexpr = src.expr
-        itag = idx_tag
-        address_snapshot = snapshot if live_snapshot else {}
-        eval_addr = lambda v: int(  # noqa: E731
-            iexpr.evaluate(_SnapshotView(address_snapshot, {itag: v}))
-        )
-    else:
-        return None
+    match src:
+        case IndirectRef(pointer=pointer):
+            idx_tag = pointer.name
+            eval_addr: Any = lambda v: int(v)  # noqa: E731
+        case IndirectExprRef(expr=iexpr):
+            names = _expr_tag_names(iexpr)
+            if not names:
+                return None
+            candidates = (
+                {
+                    name
+                    for name in names
+                    if pdg.writers_of.get(name) or pdg.written_from_outside(name)
+                }
+                if single_mutable_index
+                else names
+            )
+            if len(candidates) != 1:
+                return None
+            idx_tag = next(iter(candidates))
+            itag = idx_tag
+            address_snapshot = snapshot if live_snapshot else {}
+            eval_addr = lambda v: int(  # noqa: E731
+                iexpr.evaluate(_SnapshotView(address_snapshot, {itag: v}))
+            )
+        case _:
+            assert_never(src)
 
     for _ in range(3):
         canonical = evidence.canonicalize(idx_tag) if evidence is not None else None

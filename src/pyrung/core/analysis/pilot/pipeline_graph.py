@@ -21,12 +21,13 @@ import logging
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute, expand_routes
 from pyrung.core.analysis.pilot.navigation_contracts import _context_value_key
+from pyrung.core.analysis.pilot.program_facts import copy_dest_name
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -675,19 +676,23 @@ def _find_convergent_steers(
 def _scan_indirect_copy_targets(program: Any) -> set[str]:
     """Destination tag names of ``copy(block[ptr], tag)`` indirect copies."""
     from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     targets: set[str] = set()
 
     def _scan(rungs: Any) -> None:
         for r in rungs:
             for instr in getattr(r, "_instructions", ()):
-                if isinstance(instr, CopyInstruction) and isinstance(
-                    as_authored(instr.source), (IndirectRef, IndirectExprRef)
-                ):
-                    dest_name = getattr(as_authored(instr.dest), "name", None)
-                    if dest_name:
-                        targets.add(dest_name)
+                if not isinstance(instr, CopyInstruction):
+                    continue
+                match instr.source:
+                    case PointerArg():
+                        dest_name = copy_dest_name(instr.dest)
+                        if dest_name:
+                            targets.add(dest_name)
+                    case TagArg() | ConstArg() | ExprArg():
+                        pass
+                    case _:
+                        assert_never(instr.source)
             _scan(getattr(r, "_branches", ()))
 
     _scan(program.rungs)
