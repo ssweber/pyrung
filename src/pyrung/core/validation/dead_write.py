@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.instruction.calc import CalcInstruction
@@ -15,7 +15,7 @@ from pyrung.core.instruction.control import (
     FunctionCallInstruction,
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.operands import PointerArg
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation._common import WriteSite, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
@@ -123,7 +123,15 @@ def _guaranteed_write(site: _SimpleSite, rung: Rung) -> bool:
     if rung._conditions:
         return False
     if isinstance(instr, CopyInstruction):
-        return instr.convert is None and not isinstance(instr.source, PointerArg)
+        if instr.convert is not None:
+            return False
+        match instr.source:
+            case PointerArg():
+                return False
+            case TagArg() | ConstArg() | ExprArg():
+                return True
+            case _:
+                assert_never(instr.source)
     return isinstance(instr, (CalcInstruction, LatchInstruction, ResetInstruction))
 
 

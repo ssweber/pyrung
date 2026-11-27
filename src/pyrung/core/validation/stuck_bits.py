@@ -351,11 +351,14 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
     for site in _collect_write_sites(program, target_extractor=_loop_only):
         loop = site.instruction
         # A constant count always runs the body, because forloop() refuses one below 1.
-        match loop.count:
-            case ConstArg(value=int() as count) if not isinstance(count, bool):
+        count: Value = loop.count
+        match count:
+            case ConstArg(value=int() as constant) if not isinstance(constant, bool):
                 runs = not loop._oneshot
-            case _:
+            case ConstArg() | TagArg() | PointerArg() | ExprArg():
                 runs = False
+            case _:
+                assert_never(count)
         for instr in _flat(loop):
             outer = run.get(id(loop), ())
             run[id(instr)] = None if outer is None or not runs else site.conditions

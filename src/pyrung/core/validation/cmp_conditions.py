@@ -83,7 +83,7 @@ from pyrung.core.expression import (
     LiteralExpr,
     TagExpr,
 )
-from pyrung.core.instruction.operands import ConstArg, ExprArg, TagArg
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
     RungLoc,
@@ -495,10 +495,16 @@ def _computed_real_names(program: Program) -> set[str]:
                     names.add(dest.name)
             case CopyInstruction(dest=TagArg(tag=dest)) if dest.type is TagType.REAL:
                 match instr.source:
-                    case TagArg(tag=source) if source.type is TagType.REAL:
-                        copies.append((source.name, dest.name))
-                    case ExprArg(expr=expr) if may_be_float(expr):
-                        names.add(dest.name)
+                    case TagArg(tag=source):
+                        if source.type is TagType.REAL:
+                            copies.append((source.name, dest.name))
+                    case ExprArg(expr=expr):
+                        if may_be_float(expr):
+                            names.add(dest.name)
+                    case PointerArg() | ConstArg():
+                        pass
+                    case _:
+                        assert_never(instr.source)
     changed = True
     while changed:
         changed = False
