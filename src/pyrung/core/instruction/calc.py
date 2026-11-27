@@ -27,7 +27,7 @@ from pyrung.core.expression import (
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import check_real_value, computed_real
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import Tag, TagType
 
 from .base import Instruction, OneShotMixin
 from .conversions import (
@@ -54,6 +54,7 @@ from .resolvers import (
     _raise_fault,
     _set_fault_address_error,
     _set_fault_out_of_range,
+    operand_object,
 )
 from .utils import guard_oneshot_execution
 
@@ -89,10 +90,6 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
     if value_id in seen:
         return
     seen.add(value_id)
-
-    if isinstance(value, ImmediateRef):
-        _collect_calc_tag_types(value.value, found, seen)
-        return
 
     if isinstance(value, Tag):
         found.add(value.type)
@@ -275,8 +272,6 @@ def may_be_text(value: Any) -> bool:
 
     Text that an expression builds, such as ``TXT1 + TXT2``, is text too.
     """
-    if isinstance(value, ImmediateRef):
-        value = value.value
     if isinstance(value, (IndirectRef, IndirectExprRef)):
         return value.block.type.name == "CHAR"
     if isinstance(value, Tag):
@@ -473,10 +468,12 @@ class CalcInstruction(OneShotMixin, Instruction):
             {"source_expression": expression, "dest": dest},
         )
         check_float_literals(expression)
-        self.mode_inference = infer_calc_mode(expression, self.dest.tag)
+        # The mode and the text check read the tag or range without its immediate().
+        source = operand_object(self.source_expression)
+        self.mode_inference = infer_calc_mode(source, self.dest.tag)
         self.mode = self.mode_inference.mode
         # Only a Real shows the sign of a 0.  Text keeps Python's ops, so "5" * 2 is "55".
-        into_real = self.dest.tag.type is TagType.REAL and not may_be_text(expression)
+        into_real = self.dest.tag.type is TagType.REAL and not may_be_text(source)
         # The analyses and the code generator read this formula.  calc_form() rewrites
         # it for the mode.  It is not a parse result.
         self.expression = calc_form(expression, self.mode, into_real=into_real)
