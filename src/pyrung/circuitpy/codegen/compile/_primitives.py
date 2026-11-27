@@ -120,8 +120,6 @@ def _range_item_read_expr(
     key_expr: str,
     ctx: CodegenContext,
 ) -> str:
-    if isinstance(range_value, ImmediateRef):
-        range_value = range_value.value
     if isinstance(range_value, BlockRange):
         layout = ctx.static_range_layout(range_value)
         if not layout.uses_backing_storage:
@@ -1172,7 +1170,7 @@ def _compile_guarded_instruction(
 
 
 def _compile_assignment_lines(
-    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef,
+    target: Tag | IndirectRef | IndirectExprRef,
     value_expr: str,
     ctx: CodegenContext,
     *,
@@ -1182,11 +1180,7 @@ def _compile_assignment_lines(
     return [f"{' ' * indent}{lvalue} = {value_expr}"]
 
 
-def _compile_lvalue(
-    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef, ctx: CodegenContext
-) -> str:
-    if isinstance(target, ImmediateRef):
-        target = target.tag
+def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
     if isinstance(target, Tag):
         if ctx.blockless and (
             target.name in ctx.tag_block_addresses or target.name in ctx.dict_backed_tag_names
@@ -1229,8 +1223,6 @@ def _compile_range_setup(
     stem: str,
     include_addresses: bool,
 ) -> tuple[list[str], str, str, str]:
-    if isinstance(range_value, ImmediateRef):
-        range_value = range_value.value
     if not isinstance(range_value, (BlockRange, IndirectBlockRange)):
         raise TypeError(
             f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}"
@@ -1313,8 +1305,6 @@ def _compile_range_flush(
 ) -> list[str]:
     """Flush a specialized static range's value list to its semantic tags."""
 
-    if isinstance(range_value, ImmediateRef):
-        range_value = range_value.value
     if not isinstance(range_value, BlockRange):
         return []
     layout = ctx.static_range_layout(range_value)
@@ -1563,8 +1553,6 @@ def _pointer_check_lines(ref: Any, ctx: CodegenContext, *, past_end_drops: bool)
 
     Return no lines for anything but a pointer.
     """
-    if isinstance(ref, ImmediateRef):
-        ref = ref.value
     if not isinstance(ref, (IndirectRef, IndirectExprRef)):
         return []
     binding = ctx.block_bindings.get(id(ref.block))

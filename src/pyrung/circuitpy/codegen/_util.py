@@ -14,7 +14,7 @@ from pyrung.core.instruction.coils import reset_value_for_type
 from pyrung.core.instruction.conversions import copy_source_kind, copy_store_transform
 from pyrung.core.instruction.operands import Coil, RangeArg, TagArg
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-from pyrung.core.tag import ImmediateRef, TagType
+from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
     from pyrung.circuitpy.codegen.context import CodegenContext
@@ -83,16 +83,12 @@ def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: Codegen
 
 
 def _range_type_name(range_value: Any) -> str:
-    if isinstance(range_value, ImmediateRef):
-        return _range_type_name(range_value.value)
     if isinstance(range_value, (BlockRange, IndirectBlockRange)):
         return range_value.block.type.name
     raise TypeError(f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}")
 
 
 def _static_range_length(range_value: Any) -> int | None:
-    if isinstance(range_value, ImmediateRef):
-        return _static_range_length(range_value.value)
     if isinstance(range_value, BlockRange):
         return len(range_value)
     return None
