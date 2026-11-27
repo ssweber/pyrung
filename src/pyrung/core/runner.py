@@ -687,8 +687,9 @@ def _hands_over_nothing_it_could_keep(value: Value | Span) -> bool:
         case TagArg() | PointerArg() | ExprArg():
             return True
         case RangeArg(immediate=True):
-            # A range in immediate() passes, and a plain range does not.  The function gets
-            # the same range object from both, so this case may be too lenient.
+            # A range in immediate() passes and a plain range does not.  The function gets
+            # the same range object from both, so the two cases should agree.  Nobody has
+            # decided which answer is right.
             return True
         case RangeArg() | PointerRangeArg():
             # The function gets the range object, and it can keep that.

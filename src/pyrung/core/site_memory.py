@@ -259,8 +259,9 @@ def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
 def _operand_text(value: Any) -> str:
     from pyrung.core.validation.render import operand_name
 
-    # A drum's outputs and the ins of a function hold parsed values.  operand_name() prints
-    # a tag in immediate() as the plain tag, so the object inside each one names it.
+    # Many fields hold parsed values, such as a Copy's source, a drum's outputs and the
+    # ins of a function.  The text names the tag or range inside each one.  operand_name()
+    # prints a tag in immediate() as the plain tag, so the text does not change.
     value = operand_object(value)
     if isinstance(value, (list, tuple)):
         return "(" + ", ".join(_operand_text(v) for v in value) + ")"

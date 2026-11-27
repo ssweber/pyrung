@@ -118,10 +118,10 @@ def _collect_hw_blocks(hw: P1AM) -> set[int]:
 
 
 def _operand_object(value: Any) -> Any:
-    """Return the object inside a parsed operand, and any other value unchanged.
+    """Return the object inside a parsed operand, or None for a tag or range in ``immediate()``.
 
-    The check skips an operand in ``immediate()``, as it skips a contact in
-    ``immediate()``.  So the function returns None for one.
+    Any other value comes back unchanged.  The P1AM I/O check skips an operand in
+    ``immediate()``.  It skips a contact in ``immediate()`` too.
     """
     match value:
         case TagArg(immediate=True) | RangeArg(immediate=True):
