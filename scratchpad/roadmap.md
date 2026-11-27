@@ -487,18 +487,23 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 All [nothing] unless marked.
 
 - **The sign of a zero in a product after a minus sign.** `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on import.
-  The readings show the sign of the 0 of a product of a zero and a number only at 5.0, -5.0 and -1.0. Each gave the
-  sign that a double gives.
+  The readings show the sign of 0 * x only for x = 5.0, -5.0 and -1.0. Each gave the sign that a double gives.
   The 9 rows that `PENDING_ZERO_SIGNS` lists need every value of their class. Sam decides whether one value stands for
   its class. If it does, both decimal pairs join `SAME_VALUE_ON_PLAIN_OPERANDS`. No conformance case reads these rows.
 - **A hex minus sign before `*` or `/`.** `- 5h * DH1`, `- DH1 * DH2`, `- ( DH1 ) * DH2` and `- 5h / DH1` warn on
-  import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. No reading shows a hex `/` of a
-  negative value whose quotient has a fraction, such as -5h / 2h.
-- **A hex `/` of a negative value stores what a CLICK does not.** With 1h in DH1, `( 0h - DH1 ) / 2h` stored FFFFh
-  with SC43 on a CLICK (round b21, n4). pyrung stores 0h with no SC43 on every backend. Two readings fit. The
-  quotient rounds down, or the division works on 32 unsigned bits. `( 0h - DH1 ) / 3h` tells them apart: FFFFh or
-  5555h, each with SC43.
-- **A decimal plus before an address or a bracket.** No reading shows one. The import keeps the plus, and warns
+  import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. For a hex `/` of a negative value,
+  see the next item.
+- **pyrung's hex `/` of a negative value differs from a CLICK's.** It affects each hex `/` whose dividend is below 0
+  and whose quotient has a fraction.
+  - With 1h in DH1, `( 0h - DH1 ) / 2h` stored FFFFh with SC43 on a CLICK (round b21, n4 and p4).
+  - `- DH1 / 2h`, `- ( DH1 ) / 2h` and `( 0h - DH1 ) / 2h` import with no warning. pyrung stores 0h with no SC43 for
+    each, on every backend.
+  - Two readings fit. The quotient rounds down, or the division works on 32 unsigned bits. Round b22 Part C reads
+    `( 0h - DH1 ) / 3h` and the same with MOD 3h. `/ 3h` stores FFFFh or 5555h, each with SC43.
+  - `test_imported_formula_stores_what_round_b21_read` holds b21-p4 and b21-n4 as strict xfails.
+  - CHANGELOG.md says hex `math()` truncates each division, as a CLICK does. That holds for positive values only.
+    Rewrite the line when the fix lands.
+- **A decimal plus before anything but a constant.** No reading shows one. The import keeps the plus, and warns
   when the plus meets another operator. Round b22 Part B reads `+ DS1 * 2` and `+ ( DS1 - 3 ) * 2`.
   - pyrung's export writes the plus with no space, such as `+DS1 * 2`. pyrung imports that text again. Round b22
     Part B asks whether CLICK takes it.

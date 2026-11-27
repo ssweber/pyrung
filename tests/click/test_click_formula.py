@@ -999,8 +999,8 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DH1 * DH2 ) MOD DH3", True),
         ("DH1 MOD DH2 MOD DH3", True),
         ("- ( DF1 ) / DF2 ^ DF3", False),
-        # A decimal CLICK stores a plus before a constant in the constant. A hex plus changes no
-        # value (round b21).
+        # A decimal CLICK stores a plus before a constant in the constant. A hex plus does not
+        # cut its operand (round b21). It changes nothing.
         ("+ 5 * DS1", False),
         ("+ 5h * DH1", True),
         # A bracket gives the order. In decimal mode the minus sign is part of the constant.
@@ -1063,7 +1063,7 @@ def test_click_formula_parse_keeps_a_decimal_plus_sign_before_an_address_or_a_br
     # Round b20 read + 5 * DS401 with 3 in DS401. CLICK stored the plus in the constant
     # (H+5#*#DS401), and stored 15.
     assert parse_click_formula("+ 5 * DS1") == parse_click_formula("5 * DS1")
-    # No reading shows a decimal plus before an address or a bracket.
+    # No reading shows a decimal plus before anything but a constant.
     assert parse_with_unconfirmed_pairs("+ DS1 * 2")[0] == BinaryOp(
         "*", formula_module.Plus(Address("DS", 1)), Number(2)
     )
@@ -1155,7 +1155,7 @@ def test_imported_formula_names_a_minus_sign_before_a_plus_sign() -> None:
     [
         # A decimal CLICK stores + 5 as the constant H+5.
         ("math(+ 5 * DS1,DS2)", "math(5 * DS1, DS2)"),
-        # A hex plus changes no value (rounds b20 and b21).
+        # A hex plus does not cut its operand (round b21). It changes nothing.
         ("math(+ 5h * DH1,DH2,mode=hex)", "math(0x5 * DH1, DH2)"),
         ("math(+ ( 0h - DH1 ) + 1h,DH2,mode=hex)", "math((0x0 - DH1) + 0x1, DH2)"),
     ],
@@ -1467,9 +1467,11 @@ ROUND_B21_READINGS: list[tuple[str, str, dict[str, int], str, int, bool]] = [
     ("b21-n4", "( 0h - DH421 ) / 2h", {"DH421": 1}, "DH12", 0xFFFF, True),
 ]
 
-#: pyrung's hex ``/`` rounds -1 / 2h toward 0, so it stores 0h with no SC43.
+#: pyrung's hex ``/`` rounds -1 / 2h toward 0. It stores 0h with no SC43.
 _B21_DIVISION = pytest.mark.xfail(
-    strict=True, reason="pyrung stores 0h for a hex -1 / 2h, and a CLICK stored FFFFh with SC43"
+    strict=True,
+    raises=AssertionError,
+    reason="pyrung stores 0h for a hex -1 / 2h, and a CLICK stored FFFFh with SC43",
 )
 
 

@@ -117,7 +117,7 @@ def click_steps(
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
     - a pointer
-    - a decimal plus before an address or a bracket
+    - a decimal plus before anything but a constant
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -408,9 +408,9 @@ def _value(
     if isinstance(node, Plus):
         operand = _value(node.operand, hex_mode, registers, guard)
         if guard is not None:
-            # The parse keeps a plus only in decimal mode, before an address or a bracket. No
+            # The parse keeps a plus only in decimal mode, before anything but a constant. No
             # reading shows one.
-            raise Unread("a decimal plus before an address or a bracket")
+            raise Unread("a decimal plus before anything but a constant")
         return operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)

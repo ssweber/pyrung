@@ -37,10 +37,10 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 #: is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
 
-#: A minus sign before a constant that it is not part of, as an operator in
+#: A minus sign that is an operator of its own before a constant, as an operator in
 #: :data:`CONFIRMED_PAIRS`. In hex mode CLICK stores it as a token of its own, such as
-#: ``-#UH2#AND#UH3`` (round b20). In decimal mode a minus sign after another sign is one too,
-#: as in ``- - 5``.
+#: ``-#UH2#AND#UH3`` (round b20). In decimal mode a minus sign after another sign is such an
+#: operator, as in ``- - 5``.
 NEGATE_CONSTANT = "a minus sign before a constant"
 
 #: A minus sign before a bracket, and before a function, as operators in
@@ -56,10 +56,15 @@ NEGATE_PI = "a minus sign before PI"
 NEGATE_MINUS = "a minus sign before another minus sign"
 NEGATE_PLUS = "a minus sign before a plus sign"
 
-#: A plus sign, as the pair lists name it. In hex mode a plus changes no value or flag (rounds
-#: b20 and b21). The parse drops it. In decimal mode CLICK stores a plus before a constant in the
-#: constant (H+5). The parse drops that plus. No reading shows a decimal plus before an address
-#: or a bracket. The parse keeps that plus as an operator.
+#: A plus sign, as the pair lists name it. In hex mode a plus changes no value or flag. Round
+#: b20 read it before 5h, and round b21 read it before a bracket and before 0h. b21 also shows
+#: that the plus never cuts its operand to 16 bits. A plus that does not cut changes nothing in
+#: any grouping. So the parse drops every hex plus. No round read one before an address or in
+#: a function. The drop there rests on b21's evidence that the plus never cuts.
+#:
+#: In decimal mode CLICK stores a plus before a constant in the constant (H+5). The parse
+#: drops that plus. No reading shows a decimal plus before anything else. The parse keeps that
+#: plus as an operator.
 PLUS_SIGN = "a plus sign"
 
 #: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
@@ -304,7 +309,7 @@ class Negate(_Node):
 
 @dataclass(frozen=True)
 class Plus(_Node):
-    """A plus sign before an address or a bracket in decimal mode."""
+    """A plus sign in decimal mode, before anything but a constant."""
 
     operand: Formula
 
@@ -557,8 +562,9 @@ class _Parser:
             self.pos += 1
             after = self._peek()
             if self.hex_mode:
-                # A hex plus changes no value or flag. With 1h in DH1, + ( 0h - DH1 ) + 1h
-                # stores 0h with no SC43, as ( 0h - DH1 ) + 1h does (round b21).
+                # A hex plus does not cut its operand, so it changes nothing (see PLUS_SIGN).
+                # With 1h in DH1, + ( 0h - DH1 ) + 1h stores 0h with no SC43, as
+                # ( 0h - DH1 ) + 1h does (round b21).
                 return self._unary()
             if after is not None and after[0] in ("number", "hex"):
                 # A decimal CLICK stores a plus before a constant in the constant (+5 is H+5).
