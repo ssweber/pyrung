@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, assert_never
 
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
@@ -16,7 +16,7 @@ from pyrung.core.instruction.advanced import SearchInstruction
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.instruction.operands import PARSED, as_authored, inner
+from pyrung.core.instruction.operands import RangeArg, TagArg
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -35,6 +35,7 @@ from .write_sites import (
     instruction_fault_writes,
     instruction_partial_write_targets,
     instruction_write_targets,
+    operand_leaf,
 )
 
 if TYPE_CHECKING:
@@ -1120,9 +1121,7 @@ def _extract_tag_names(
     seen: set[int] = set()
 
     def walk(current: Any) -> None:
-        if isinstance(current, PARSED):
-            walk(inner(current))
-            return
+        current = operand_leaf(current)
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -1227,9 +1226,7 @@ def _extract_write_targets(
     seen: set[int] = set()
 
     def walk_target(current: Any) -> None:
-        if isinstance(current, PARSED):
-            walk_target(inner(current))
-            return
+        current = operand_leaf(current)
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -1679,7 +1676,7 @@ def continuous_search_results(program: Program) -> frozenset[str]:
     ``ProgramGraph.unconditional_write_before_read`` excludes these tags itself.
     """
     return frozenset(
-        as_authored(instr.result).name
+        instr.result.tag.name
         for instr in walk_instructions(program)
         if isinstance(instr, SearchInstruction) and instr.continuous
     )
@@ -2115,6 +2112,7 @@ def _visit_indirect_refs(
 
     *visit_range*, when given, is also called on every ``IndirectBlockRange``.
     """
+    obj = operand_leaf(obj)
     if obj is None or isinstance(
         obj,
         (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType, Tag, Block),
@@ -2387,11 +2385,13 @@ class _UnlistedReach:
         received: set[str] = set()
         for instr in instructions:
             if isinstance(instr, ModbusReceiveInstruction):
-                dest = as_authored(instr.dest)
-                if isinstance(dest, Tag):
-                    received.add(dest.name)
-                elif hasattr(dest, "tags"):
-                    received.update(tag.name for tag in dest.tags())
+                match instr.dest:
+                    case TagArg(tag=tag):
+                        received.add(tag.name)
+                    case RangeArg(span=span):
+                        received.update(tag.name for tag in span.tags())
+                    case _:
+                        assert_never(instr.dest)
         graph = self._graph
         self._outside = frozenset(
             received | {name for name, tag in graph.tags.items() if tag_written_from_outside(tag)}

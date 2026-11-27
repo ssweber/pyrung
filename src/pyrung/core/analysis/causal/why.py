@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pdg import continuous_search_results, resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import TagArg
 from pyrung.core.state import value_changed
 
 from .models import CausalChain, ChainStep, Transition
@@ -645,17 +645,13 @@ def _instruction_label(
 def _is_reset_for_tag(rung: Rung, tag_name: str) -> bool:
     """True if *rung* contains a ``ResetInstruction`` targeting *tag_name*."""
     from pyrung.core.instruction.coils import ResetInstruction
-    from pyrung.core.tag import ImmediateRef
-    from pyrung.core.tag import Tag as TagClass
 
     for instr in rung._instructions:
         if not isinstance(instr, ResetInstruction):
             continue
-        target = as_authored(instr.target)
-        if isinstance(target, ImmediateRef):
-            target = object.__getattribute__(target, "value")
-        if isinstance(target, TagClass) and target.name == tag_name:
-            return True
+        match instr.target:
+            case TagArg(tag=target) if target.name == tag_name:
+                return True
     return False
 
 

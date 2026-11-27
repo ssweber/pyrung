@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, RangeArg, TagArg
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -46,40 +46,38 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
     for instr in ro._instructions:
-        target = as_authored(getattr(instr, "target", None))
+        target = getattr(instr, "target", None)
         if target is None:
-            target = as_authored(getattr(instr, "dest", None))
-        if target is None:
-            continue
-        name = getattr(target, "name", None)
-        if name is not None:
-            names = {name}
-        elif hasattr(target, "tags"):
-            names = {getattr(t, "name", None) for t in target.tags()}
-        else:
-            continue
-        if tag not in names:
+            target = getattr(instr, "dest", None)
+        # This reader skips a pointer and an operand in immediate().
+        match target:
+            case TagArg(tag=one, immediate=False):
+                members = [one]
+            case RangeArg(span=span, immediate=False):
+                members = span.tags()
+            case _:
+                continue
+        written = next((member for member in members if member.name == tag), None)
+        if written is None:
             continue
         if isinstance(instr, ResetInstruction):
-            if getattr(target, "type", None) is not None:
-                return reset_value_for_type(target.type)
-            if hasattr(target, "tags"):
-                for member in target.tags():
-                    if getattr(member, "name", None) == tag:
-                        return reset_value_for_type(member.type)
-            return None
+            return reset_value_for_type(written.type)
         if isinstance(instr, LatchInstruction):
             return True
         if isinstance(instr, CopyInstruction):
-            src = as_authored(instr.source)
-            if hasattr(src, "name"):
-                return getattr(src, "default", None) if getattr(src, "readonly", False) else None
-            return src if isinstance(src, (bool, int, float, str)) else None
+            match instr.source:
+                case TagArg(tag=read, immediate=False):
+                    return read.default if read.readonly else None
+                case ConstArg(value=value) if isinstance(value, (bool, int, float, str)):
+                    return value
+                case _:
+                    return None
         if isinstance(instr, FillInstruction):
-            val = as_authored(instr.value)
-            if hasattr(val, "name"):
-                return None
-            return val if isinstance(val, (bool, int, float, str)) else None
+            match instr.value:
+                case ConstArg(value=value) if isinstance(value, (bool, int, float, str)):
+                    return value
+                case _:
+                    return None
         return None
     return None
 
@@ -112,13 +110,14 @@ def _is_bulk_fill_reset(ro: Any, tag: str) -> bool:
     for instr in ro._instructions:
         if not isinstance(instr, FillInstruction):
             continue
-        dest = as_authored(getattr(instr, "dest", None))
-        if dest is None or not hasattr(dest, "tags"):
-            continue
-        try:
-            names = {getattr(dt, "name", None) for dt in dest.tags()}
-        except Exception:
-            continue
+        match instr.dest:
+            case RangeArg(span=span, immediate=False):
+                try:
+                    names = {dt.name for dt in span.tags()}
+                except Exception:
+                    continue
+            case _:
+                continue
         if tag in names and len(names) > 1:
             return True
     return False

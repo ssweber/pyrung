@@ -34,11 +34,12 @@ concrete destination store, so they describe the clamped value actually written.
 from __future__ import annotations
 
 import math
-from typing import Any, TypeGuard
+from typing import Any, TypeGuard, assert_never
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.analysis.crossings._ranges import (
     clamps_on_store,
+    fixed_tags,
     range_subset,
     range_tags,
     stored_value_possible,
@@ -70,22 +71,39 @@ from pyrung.core.instruction.data_transfer import (
     CopyInstruction,
     FillInstruction,
 )
-from pyrung.core.instruction.operands import as_authored
-from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-from pyrung.core.tag import TagType
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    TagArg,
+    Value,
+)
+from pyrung.core.tag import Tag, TagType
 
 _ASCII_MAX = 255  # a TXT is one whole byte (CLICK), so to_ascii/to_binary span 0..255
 _INEQ_OPS = frozenset({"<", "<=", ">", ">="})  # ordering ops a copy passes through
 _NO_STORED_VALUE = object()
 
 
-def _named_source(src: Any) -> Any | None:
-    """The source tag when *src* is a plain named tag (not indirect / literal)."""
-    if isinstance(src, (IndirectRef, IndirectExprRef)):
-        return None
-    if hasattr(src, "name"):
-        return src
-    return None
+def _source(instr: CopyInstruction | FillInstruction) -> Value:
+    """Return the value that a copy or a fill stores."""
+    return instr.source if isinstance(instr, CopyInstruction) else instr.value
+
+
+def _named_source(src: Value) -> Tag | None:
+    """Return the tag that *src* reads, or ``None`` for any other source.
+
+    A pointer, a constant, an expression and a tag in ``immediate()`` return ``None``.
+    """
+    match src:
+        case TagArg(tag=tag, immediate=False):
+            return tag
+        case TagArg() | PointerArg() | ConstArg() | ExprArg():
+            return None
+        case _:
+            assert_never(src)
 
 
 def _is_int(value: Any) -> TypeGuard[int]:
@@ -137,16 +155,16 @@ def _affine_of(src: Any) -> tuple[Any, int | float, int | float] | None:
 def _dest_type(instr: Any, dest_name: str, ctx: CrossingContext) -> TagType | None:
     """The destination element's type — from the instruction, else the context.
 
-    A ``Tag`` dest exposes ``.type`` directly; a fill/block-copy range exposes it
-    on its ``.block``; otherwise fall back to the context's tag table.
+    A tag dest has its own type.  A pointer or a fill range has the type of its
+    block.  A dest in ``immediate()`` takes the type from the context's tag table.
     """
-    dest = as_authored(getattr(instr, "dest", None))
-    t = getattr(dest, "type", None)
-    if isinstance(t, TagType):
-        return t
-    t = getattr(getattr(dest, "block", None), "type", None)  # BlockRange element type
-    if isinstance(t, TagType):
-        return t
+    match getattr(instr, "dest", None):
+        case TagArg(tag=tag, immediate=False):
+            return tag.type
+        case PointerArg(ref=ref):
+            return ref.block.type
+        case RangeArg(span=span, immediate=False) | PointerRangeArg(span=span):
+            return span.block.type
     tag = ctx.tags_by_name.get(dest_name)
     t = getattr(tag, "type", None)
     return t if isinstance(t, TagType) else None
@@ -154,14 +172,13 @@ def _dest_type(instr: Any, dest_name: str, ctx: CrossingContext) -> TagType | No
 
 def _dest_tag(instr: Any, dest_name: str, ctx: CrossingContext) -> Any | None:
     """Resolve the concrete destination element named by *dest_name*."""
-    dest = as_authored(getattr(instr, "dest", None))
-    if getattr(dest, "name", None) == dest_name:
-        return dest
-    tags = range_tags(dest)
-    if tags is not None:
-        for tag in tags:
-            if getattr(tag, "name", None) == dest_name:
-                return tag
+    match getattr(instr, "dest", None):
+        case TagArg(tag=tag, immediate=False) if tag.name == dest_name:
+            return tag
+        case RangeArg(span=span, immediate=False):
+            for tag in range_tags(span) or ():
+                if tag.name == dest_name:
+                    return tag
     return ctx.tags_by_name.get(dest_name)
 
 
@@ -242,29 +259,31 @@ class CopyCrossing(BaseCrossing):
     def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         if getattr(instr, "convert", None) is not None:
             return UNKNOWN
-        src = as_authored(instr.source if isinstance(instr, CopyInstruction) else instr.value)
+        src = _source(instr)
         storage = copy_store_transform(_dest_type(instr, target_tag, ctx), copy_source_kind(src))
         if storage is None:
             return UNKNOWN
         named = _named_source(src)
         if named is not None:
-            if getattr(named, "readonly", False):
+            if named.readonly:
                 stored = _stored_literal(instr, target_tag, named.default, ctx, named.type)
                 return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
             return Affine(source=named.name, scale=1, offset=0, storage=storage)
-        if isinstance(src, (bool, int, float, str)):
-            stored = _stored_literal(instr, target_tag, src, ctx)
-            return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
-        affine = _affine_of(src)  # copy(scale*S + off, D) -> the affine relation
-        if affine is not None:
-            src_tag, scale, offset = affine
-            if not getattr(src_tag, "readonly", False):
-                return Affine(
-                    source=src_tag.name,
-                    scale=scale,
-                    offset=offset,
-                    storage=storage,
-                )
+        match src:
+            case ConstArg(value=bool() | int() | float() | str() as constant):
+                stored = _stored_literal(instr, target_tag, constant, ctx)
+                return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
+            case ExprArg(expr=expr):
+                affine = _affine_of(expr)  # copy(scale*S + off, D) -> the affine relation
+                if affine is not None:
+                    src_tag, scale, offset = affine
+                    if not getattr(src_tag, "readonly", False):
+                        return Affine(
+                            source=src_tag.name,
+                            scale=scale,
+                            offset=offset,
+                            storage=storage,
+                        )
         return UNKNOWN
 
     def reverse(
@@ -281,23 +300,26 @@ class CopyCrossing(BaseCrossing):
         if conv is not None:
             return self._reverse_convert(instr, conv, dest_name, value, ctx)
 
-        src = as_authored(instr.source if isinstance(instr, CopyInstruction) else instr.value)
+        src = _source(instr)
         named = _named_source(src)
         if named is not None:
-            if getattr(named, "readonly", False):  # constant ref: dest is fixed
+            if named.readonly:  # constant ref: dest is fixed
                 stored = _stored_literal(instr, dest_name, named.default, ctx, named.type)
                 if stored is _NO_STORED_VALUE:
                     return REVERSE_FALLTHROUGH
                 return satisfied() if stored == value else unsatisfiable(dest_name)
             return self._reverse_named(named, dest_name, value, instr, ctx)
-        affine = self._reverse_affine_expr(src, dest_name, value, instr, ctx)
-        if affine is not None:  # copy(scale*S + off, D): invert through the clamp
-            return affine
-        if isinstance(src, (bool, int, float, str)):  # literal copy: dest forced to src
-            stored = _stored_literal(instr, dest_name, src, ctx)
-            if stored is _NO_STORED_VALUE:
-                return REVERSE_FALLTHROUGH
-            return satisfied() if stored == value else unsatisfiable(dest_name)
+        match src:
+            case ExprArg(expr=expr):
+                affine = self._reverse_affine_expr(expr, dest_name, value, instr, ctx)
+                if affine is not None:  # copy(scale*S + off, D): invert through the clamp
+                    return affine
+            case ConstArg(value=bool() | int() | float() | str() as constant):
+                # A literal copy forces the dest to the constant.
+                stored = _stored_literal(instr, dest_name, constant, ctx)
+                if stored is _NO_STORED_VALUE:
+                    return REVERSE_FALLTHROUGH
+                return satisfied() if stored == value else unsatisfiable(dest_name)
         return REVERSE_FALLTHROUGH  # indirect source -> idx-chase stays in the walker
 
     def _reverse_affine_expr(
@@ -380,9 +402,8 @@ class CopyCrossing(BaseCrossing):
         retain this candidate reverse."""
         if target.op not in _INEQ_OPS or getattr(instr, "convert", None) is not None:
             return REVERSE_FALLTHROUGH
-        src = as_authored(instr.source if isinstance(instr, CopyInstruction) else instr.value)
-        named = _named_source(src)
-        if named is None or getattr(named, "readonly", False):
+        named = _named_source(_source(instr))
+        if named is None or named.readonly:
             return REVERSE_FALLTHROUGH  # literal / constant / indirect source -> defer
         if not range_subset(
             getattr(named, "type", None),
@@ -400,7 +421,8 @@ class CopyCrossing(BaseCrossing):
     def _reverse_convert(
         self, instr: Any, conv: Any, dest_name: str, value: Any, ctx: CrossingContext
     ) -> ReverseResult:
-        named = _named_source(as_authored(getattr(instr, "source", None)))
+        # A fill has no source, so it falls through like a literal.
+        named = _named_source(instr.source) if isinstance(instr, CopyInstruction) else None
         if named is None:  # literal / indirect convert source
             return REVERSE_FALLTHROUGH
         if conv.mode == "ascii":  # Char -> Int: dest == ord(src_char)
@@ -450,8 +472,8 @@ class BlockCopyCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH  # multi-valued / non-Eq / converting -> defer
         dest_name, value = single_target
 
-        dst_tags = range_tags(as_authored(getattr(instr, "dest", None)))
-        src_tags = range_tags(as_authored(getattr(instr, "source", None)))
+        dst_tags = fixed_tags(instr.dest)
+        src_tags = fixed_tags(instr.source)
         if dst_tags is None or src_tags is None or len(dst_tags) != len(src_tags):
             return REVERSE_FALLTHROUGH
         for i, dst in enumerate(dst_tags):

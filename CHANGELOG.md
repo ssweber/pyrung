@@ -11,6 +11,12 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Fixes
+
+- `how()` now finds a plan through an `IntEnum` command register that the ladder clears with `copy(Cmd.NONE, Request)` (it found none). `how()` reads a `copy()` or `fill()` of an `IntEnum` member as the member's number (it read `Cmd.NONE` as a tag named `NONE`). A plan no longer waits for a tag named after a member.
+
 ## v0.19.0 (2026-11-27)
 
 Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT tag now holds only text. When you build the program, pyrung refuses each write that would store a number or a bit in a TXT tag. `ladder_to_pyrung()` now groups a Math formula in CLICK's order. `math()` now matches a CLICK on hex division, fault flags and the sign of a zero that it stores in a Real. Read Behaviour changes and Fixes first.
