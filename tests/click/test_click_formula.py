@@ -215,6 +215,21 @@ READINGS: list[tuple[str, str, bool, dict[str, float], float]] = [
     # math_range/by_zero. Each stores +0.0 into a DF, so the minus sign applies first.
     ("b16-by_zero1", "- DF210 / DF212", False, {"DF210": 5.0, "DF212": 0.0}, 0.0),
     ("b16-by_zero2", "- DF210 MOD DF212", False, {"DF210": 5.0, "DF212": 0.0}, 0.0),
+    # Round b20 typed each constant into the formula. CLICK stored the minus signs of Part A as
+    # tokens of their own, such as -#UH2#AND#UH3.
+    ("b20-a_and", "- 2h AND 3h", True, {}, 0x0002),
+    ("b20-a_or", "- 2h OR 1h", True, {}, 0xFFFF),
+    ("b20-a_xor", "- 3h XOR 1h", True, {}, 0xFFFC),
+    ("b20-a_add", "- 5h + 1h", True, {}, 0xFFFC),
+    ("b20-a_sub", "- 5h - 1h", True, {}, 0xFFFA),
+    # Each stores +0.0 into a DF, so the minus sign applies first.
+    ("b20-b_div", "- ( DF121 ) / DF122", False, {"DF121": 5.0, "DF122": 0.0}, 0.0),
+    ("b20-b_mod", "- ( DF121 ) MOD DF122", False, {"DF121": 5.0, "DF122": 0.0}, 0.0),
+    # CLICK stored the decimal plus in the constant, H+5, and the hex plus as a token of its own.
+    ("b20-d_dec", "+ 5 * DS401", False, {"DS401": 3}, 15),
+    ("b20-d_hex", "+ 5h * DH401", True, {"DH401": 3}, 0x000F),
+    ("b20-e_hex", "DH411 MOD DH412 MOD DH413", True, {"DH411": 7, "DH412": 5, "DH413": 3}, 2),
+    ("b20-e_dec", "DS411 / DS412 MOD 3", False, {"DS411": 7, "DS412": 2}, 0.5),
 ]
 
 
@@ -817,51 +832,11 @@ def _unread_zero_signs_on_grid(text: str, *, plain: bool) -> set[str]:
     return rows
 
 
-#: The pairs that another difference keeps out of a list whatever their zero signs read. Each
-#: comes with a formula and a point where the model of a CLICK computes a different value in
-#: each order. A division or MOD by zero gives +0.0, and a minus sign after it gives -0.0.
-_KEPT_OUT_BY_ZERO = {
-    (NEGATE_BRACKET, "/"): ("- ( DS1 ) / DS2", (5.0, 0.0)),
-    (NEGATE_BRACKET, "MOD"): ("- ( DS1 ) MOD DS2", (5.0, 0.0)),
-}
-_KEPT_OUT_WHATEVER_THE_ZERO_SIGNS: dict[
-    str, dict[tuple[str, str], tuple[str, tuple[float, ...]]]
-] = {
-    "SAME_VALUE_ON_PLAIN_OPERANDS": _KEPT_OUT_BY_ZERO,
-    "SAME_VALUE_PAIRS": _KEPT_OUT_BY_ZERO,
-}
-
-
-@pytest.mark.parametrize(
-    ("pair", "text", "values"),
-    [
-        (pair, text, values)
-        for pair, (text, values) in {
-            pair: entry
-            for kept_out in _KEPT_OUT_WHATEVER_THE_ZERO_SIGNS.values()
-            for pair, entry in kept_out.items()
-        }.items()
-    ],
-)
-def test_each_pair_kept_out_whatever_the_zero_signs_has_orders_that_differ(
-    pair: tuple[str, str], text: str, values: tuple[float, ...]
-) -> None:
-    tree = parse_with_unconfirmed_pairs(text, hex_mode=False)[0]
-    [(first, _), (second, _)] = next(formula_module._scopes(tree))
-    assert (first, second) == pair
-    [regrouped] = [regrouped for *_, regrouped in regroupings(tree)]
-    registers = {f"DS{index}": float32(value) for index, value in enumerate(values, start=1)}
-    first_order, second_order = (click_steps(t, False, registers)[0] for t in (tree, regrouped))
-    assert not _same_value(first_order, second_order)
-
-
 @pytest.mark.parametrize("listed", list(PENDING_ZERO_SIGNS))
 def test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets(listed: str) -> None:
     # Each list takes the pairs that only zero signs keep out on plain operands. The next test
-    # checks those. A pair that another difference keeps out of the list has no entry, because
-    # no reading of its zero signs brings it back.
+    # checks those.
     pairs = set(PENDING_ZERO_SIGNS["SAME_VALUE_ON_PLAIN_OPERANDS"])
-    pairs -= set(_KEPT_OUT_WHATEVER_THE_ZERO_SIGNS[listed])
     met: dict[tuple[str, str], set[str]] = {pair: set() for pair in pairs}
     for first, second, hex_mode, text in _unconfirmed_pairs():
         if not hex_mode and (first, second) in pairs:
@@ -886,16 +861,14 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
 @pytest.mark.parametrize(
     ("text", "hex_mode", "pairs"),
     [
-        ("- ( DS1 ) / DS2", False, [(NEGATE_BRACKET, "/")]),
-        ("- ( DS1 ) MOD 3", False, [(NEGATE_BRACKET, "MOD")]),
-        ("SQRT ( - ( DS1 ) / DS2 )", False, [(NEGATE_BRACKET, "/")]),
+        ("SQRT ( - ( DS1 ) * DS2 )", False, [(NEGATE_BRACKET, "*")]),
         # Two operators that do not meet still count.
-        ("- ( DS1 ) + DS2 / DS3", False, [(NEGATE_BRACKET, "/")]),
-        ("- ( DH1 ) / DH2", True, [(NEGATE_BRACKET, "/")]),
+        ("- ( DS1 ) + DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
         # A minus sign pairs with each operator to its right.
         ("- ( DS1 ) * DS2 - DS3", False, [(NEGATE_BRACKET, "*")]),
         ("- ( DS1 ) - DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
-        ("- ( DS1 ) * DS2 / DS3", False, [(NEGATE_BRACKET, "*"), (NEGATE_BRACKET, "/")]),
+        ("- ( DS1 ) / DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
+        ("- PI * 2 / 3", False, [("a minus sign before PI", "*"), ("a minus sign before PI", "/")]),
         ("- PI * 2", False, [("a minus sign before PI", "*")]),
         # No reading shows most functions inside a formula, so the grid settles no pair with a
         # minus sign before a function.
@@ -910,16 +883,10 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         ("- DS[DS1] ^ 2", False, [(NEGATE_POINTER, "^")]),
         ("- - DS1 ^ 2", False, [(NEGATE_MINUS, "^")]),
         ("- - DS1 + 2", False, [(NEGATE_MINUS, "+")]),
-        # In hex mode a minus sign before a constant is an operator, and no reading orders it.
-        # math_order/hex_minus_and and hex_minus_or move each constant into a register, so they
-        # read a minus sign before an address.
+        # In hex mode a minus sign before a constant is an operator. Round b20 read its order
+        # with AND, OR, XOR, + and - only.
         ("- 5h / DH1", True, [(NEGATE_CONSTANT, "/")]),
         ("- 5h * DH1", True, [(NEGATE_CONSTANT, "*")]),
-        ("- 2h AND 3h", True, [(NEGATE_CONSTANT, "AND")]),
-        ("- 2h OR 1h", True, [(NEGATE_CONSTANT, "OR")]),
-        ("- 3h XOR 1h", True, [(NEGATE_CONSTANT, "XOR")]),
-        ("- 5h + DH1", True, [(NEGATE_CONSTANT, "+")]),
-        ("- 5h - DH1", True, [(NEGATE_CONSTANT, "-")]),
         ("- 5 / DH1", True, [(NEGATE_CONSTANT, "/")]),
         # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
@@ -927,9 +894,8 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         # A product, a bracket or a function hands the pair a value past FFFFh.
         ("( DH1 * DH2 ) AND DH3 AND DH4", True, [("AND", "AND")]),
         ("DH1 OR DH2 OR LSH ( DH3 , 2h )", True, [("OR", "OR")]),
-        ("- ( DH1 * DH2 ) MOD DH3", True, [(NEGATE_BRACKET, "MOD")]),
-        # No reading shows the sign of the 0 that a minus sign before a product gives, and a
-        # DF holds either sign.
+        # Round b20 read the sign of the 0 of a product at 5.0 and -5.0 only. These pairs meet
+        # that 0 at other values.
         ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
         ("- ( DS1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
         # A DF can hold Inf or NaN, and the model reads no step on either.
@@ -940,7 +906,6 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         # other inside the formula. No reading shows either.
         ("- DF1 * DF2 ^ DF3", False, [(NEGATE_ADDRESS, "*")]),
         ("- ( DF1 ) * DF2 ^ DF3", False, [(NEGATE_BRACKET, "*")]),
-        ("- ( DF1 ) / DF2 ^ DF3", False, [(NEGATE_BRACKET, "/")]),
     ],
 )
 def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
@@ -983,11 +948,10 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("DH1 AND DH2 AND DH3", True),
         ("DH1 OR DH2 OR DH3", True),
         ("DH1 XOR DH2 XOR 0Fh", True),
-        ("- ( DH1 ) MOD 7h", True),
         # Round b16 read each of these pairs in one mode, and the lists apply each pair to both.
         # It read / MOD, / AND, / XOR, MOD OR, MOD XOR, * OR and * XOR in hex. It read * *, + +,
         # + -, MOD MOD, a minus sign before a bracket with -, and a minus sign before an address
-        # with / and MOD in decimal.
+        # with / and MOD in decimal. Round b20 read MOD MOD in hex and / MOD in decimal.
         ("SD20 * 10000 + SD21 * 100 + SD22", False),
         ("DS1 * DS2 * DS3", False),
         ("DH1 * DH2 * DH3 * DH4 * DH5", True),
@@ -1004,6 +968,20 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DS1 ) - DS2", False),
         ("- DS1 / DS2", False),
         ("- DH1 MOD DH2", True),
+        # Round b20 read these pairs.
+        ("- 2h AND 3h", True),
+        ("- 2h OR DH1", True),
+        ("- 3h XOR 1h", True),
+        ("- 5h + DH1", True),
+        ("- 5h - DH1", True),
+        ("- ( DS1 ) / DS2", False),
+        ("- ( DF1 ) MOD DF2", False),
+        ("- ( DH1 ) MOD 7h", True),
+        ("- ( DH1 * DH2 ) MOD DH3", True),
+        ("DH1 MOD DH2 MOD DH3", True),
+        # A unary plus changes nothing in either mode.
+        ("+ 5 * DS1", False),
+        ("+ 5h * DH1", True),
         # A bracket gives the order. In decimal mode the minus sign is part of the constant.
         ("( - 5h ) / DH1", True),
         ("- 5 / DS1", False),
@@ -1032,6 +1010,16 @@ def test_click_formula_parse_keeps_a_hex_minus_sign_before_a_constant_as_an_oper
     assert negate == formula_module.Negate(Number(5))
     folded = parse_with_unconfirmed_pairs("- 5 / DS1")[0].left
     assert folded == Number(-5)
+
+
+def test_click_formula_parse_drops_a_unary_plus() -> None:
+    # Round b20 read + 5 * DS401 and + 5h * DH401 with 3 in the register. CLICK stored the
+    # decimal plus in the constant (H+5#*#DS401) and the hex plus as a token of its own
+    # (+#UH5#*#DH401). Each stored 15.
+    assert parse_click_formula("+ 5 * DS1") == parse_click_formula("5 * DS1")
+    assert parse_click_formula("+ 5h * DH1", hex_mode=True) == parse_click_formula(
+        "5h * DH1", hex_mode=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1165,10 +1153,10 @@ def test_imported_constants_compute_what_math_computes(
     [
         ("( DH1 * DH2 ) AND DH3 AND DH4", "DH5,mode=hex", "'AND' twice", "the two from the left"),
         ("- ( DH1 ) * DH2", "DH3,mode=hex", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
-        ("- ( DS1 ) / 2", "DF1", f"{NEGATE_BRACKET} and '/'", "the minus sign first"),
+        ("- ( DS1 ) * 2", "DF1", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("- DF2 * 4", "DF3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
-        ("- ( DF1 ) MOD DF2", "DF3", f"{NEGATE_BRACKET} and 'MOD'", "the minus sign first"),
+        ("- ( DF1 ) * DF2", "DF3", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
         ("- 5h / DH1", "DH2,mode=hex", f"{NEGATE_CONSTANT} and '/'", "the minus sign first"),
     ],
 )
@@ -1257,8 +1245,9 @@ def test_imported_formula_stores_what_round_b16_part_b_read(
 @pytest.mark.parametrize(
     ("formula", "stored"),
     [
-        # math_flags read - DH with DH = 2h, which stores FFFEh and sets SC43. A typed constant is
-        # assumed to run the same.
+        # math_flags read - DH with DH = 2h, which stores FFFEh and sets SC43. Round b20 read
+        # - 5h + 1h, which stores FFFCh and sets SC43. So a minus sign before a typed constant
+        # gives a value below 0, as one before a DH does.
         ("- 2h", 0xFFFE),
         # The same value as - DH3 MOD DH1 with DH3 = 5h. A constant of FFFBh would give 2h.
         ("- 5h MOD DH1", 0xFFFE),

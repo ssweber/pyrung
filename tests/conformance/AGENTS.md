@@ -434,8 +434,8 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] a minus sign before a DF that holds Inf, NaN or 0, and before a DS that holds 0 (`math_range/minus_sign`, probe)
 - [x] the sign of the 0 that a division or MOD by zero gives, with each sign of dividend (`math_range/by_zero`, probe)
 - [x] the sign of the 0 of a sum, of a MOD of 0, and of -0.0 times or divided by a negative value (`math_range/zero_sum`, probe)
-- [ ] the zero signs in `PENDING_ZERO_SIGNS` (`tests/conformance/math/formula_values.py`) that no case reads yet. They need a part of their own, because follow5_reads is full
-- [ ] the order of a minus sign before a bracket with `/` and with MOD: `- ( DF 5.0 ) / DF 0.0` and `- ( DF 5.0 ) MOD DF 0.0` into a DF. +0.0 means that the minus sign applies first
+- [ ] the zero signs in `PENDING_ZERO_SIGNS` (`tests/conformance/math/formula_values.py`). Reading round b20 read each row at one value, 5.0 or -5.0, and no case reads them. They need a part of their own, because follow5_reads is full
+- [ ] the order of a minus sign before a bracket with `/` and with MOD: `- ( DF 5.0 ) / DF 0.0` and `- ( DF 5.0 ) MOD DF 0.0` into a DF. Reading round b20 read +0.0 for each, so the minus sign applies first (`READINGS` in `tests/click/test_click_formula.py`). No case reads them
 - [ ] a Modbus Send/Receive Slave ID out of range (SC43): needs a second Modbus device; a DF holding Inf or NaN read over Modbus or on the display: the harness reads slot DS only
 - [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`); SD9's wrap (`system/scan_counter_wraps_to_zero`)
 - [x] edge and counter memory at STOP->RUN (`coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)

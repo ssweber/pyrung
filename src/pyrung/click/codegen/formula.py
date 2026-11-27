@@ -21,10 +21,11 @@ from pyrung.click.codegen.constants import _OPERAND_PREFIXES
 #: CLICK's binary operators by tier, tightest first. A CLICK applies the operators of one
 #: tier from the left, so ``2 ^ 3 ^ 2`` is 64 and ``6 OR 3 AND 8`` is 0. A minus sign
 #: before an address binds tighter than every tier, so ``- DS1 ^ 2`` is 4 with DS1 = 2. A
-#: minus sign before a bracket binds tighter than ``^``, ``+``, ``-``, AND, OR and XOR. A
-#: minus sign before a function binds tighter than ``^`` and ``+``. The parse reads a minus
-#: sign tightest against the other operators too. CLICK 4.00 on a C2-03CPU was read for this
-#: order.
+#: minus sign before a bracket binds tighter than ``^``, ``/``, MOD, ``+``, ``-``, AND, OR and
+#: XOR. In hex mode a minus sign before a constant binds tighter than AND, OR, XOR, ``+`` and
+#: ``-``. A minus sign before a function binds tighter than ``^`` and ``+``. The parse reads a
+#: minus sign tightest against the other operators too. CLICK 4.00 on a C2-03CPU was read for
+#: this order.
 BINARY_TIERS: tuple[tuple[str, ...], ...] = (
     ("^",),
     ("*", "/", "MOD", "AND", "OR", "XOR"),
@@ -37,8 +38,7 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 NEGATE_ADDRESS = "a minus sign before an address"
 
 #: A minus sign before a constant in hex mode, as an operator in :data:`CONFIRMED_PAIRS`.
-#: laddercodec encodes it as an operator of its own, ``-#UH5#/#DH1``, the same form as
-#: ``- DH1 / DH2``. No CLICK reading has confirmed that form yet (round b20 Part A).
+#: CLICK stores it as a token of its own, such as ``-#UH2#AND#UH3`` (round b20).
 NEGATE_CONSTANT = "a minus sign before a hex constant"
 
 #: A minus sign before a bracket, and before a function, as operators in
@@ -62,8 +62,10 @@ NEGATE_MINUS = "a minus sign before another minus sign"
 #: ``tests/click/test_click_formula.py`` checks this list against its readings.
 #:
 #: A pair has no mode. pyrung assumes that CLICK's one formula parser sets the order in both
-#: modes, so a reading in either mode settles the pair in both. No one has checked this across
-#: modes, and most pairs were read in one mode only.
+#: modes, so a reading in either mode settles the pair in both. Round b20 checked this for two
+#: pairs. Round b16 read MOD MOD in decimal and ``/`` MOD in hex. Round b20 read MOD MOD in hex
+#: and ``/`` MOD in decimal. Both pairs have the same order in both modes. Most other pairs
+#: were read in one mode only.
 CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "^", "b10"),
     ("^", "*", "b11"),
@@ -80,13 +82,13 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("*", "+", "b10"),
     ("*", "-", "b15"),
     ("/", "/", "b10"),
-    ("/", "MOD", "b16"),
+    ("/", "MOD", "b16, b20"),
     ("/", "AND", "b16"),
     ("/", "OR", "b14"),
     ("/", "XOR", "b16"),
     ("/", "+", "b12"),
     ("/", "-", "b12"),
-    ("MOD", "MOD", "b16"),
+    ("MOD", "MOD", "b16, b20"),
     ("MOD", "AND", "b14"),
     ("MOD", "OR", "b16"),
     ("MOD", "XOR", "b16"),
@@ -112,7 +114,14 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_ADDRESS, "XOR", "b14"),
     (NEGATE_ADDRESS, "+", "b12"),
     (NEGATE_ADDRESS, "-", "b12"),
+    (NEGATE_CONSTANT, "AND", "b20"),
+    (NEGATE_CONSTANT, "OR", "b20"),
+    (NEGATE_CONSTANT, "XOR", "b20"),
+    (NEGATE_CONSTANT, "+", "b20"),
+    (NEGATE_CONSTANT, "-", "b20"),
     (NEGATE_BRACKET, "^", "b15"),
+    (NEGATE_BRACKET, "/", "b20"),
+    (NEGATE_BRACKET, "MOD", "b20"),
     (NEGATE_BRACKET, "AND", "b15"),
     (NEGATE_BRACKET, "OR", "b16"),
     (NEGATE_BRACKET, "XOR", "b16"),
@@ -144,9 +153,10 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (("- DS1 * 3", False),)
 #: reading shows each step of both groupings. The grid holds a value of each class that an
 #: operand can take, and the list is empty:
 #:
-#: - A DF can hold Inf and NaN, and the model counts no step on either as read. No reading
-#:   shows every sign of the 0 that a product gives. So no decimal pair with a minus sign
-#:   agrees. Each other decimal pair differs on some value of the grid.
+#: - A DF can hold Inf and NaN, and the model counts no step on either as read. The readings
+#:   show the sign of the 0 of a product of a zero and a number at 5.0, -5.0 and -1.0 only.
+#:   So no decimal pair with a minus sign agrees. Each other decimal pair differs on some
+#:   value of the grid.
 #: - No reading shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step.
 #:   An operand can be a longer formula, so no hex pair agrees.
 #:
@@ -159,16 +169,14 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = ()
 #: second operator, hex mode) in the order that the formula writes them. The other step of the
 #: pair counts as plain. :func:`plain_operands` says which operands are plain.
 #: In hex mode a plain operand is never past FFFFh, so these steps stay inside the values that
-#: the readings show. No decimal pair is here. No reading shows every sign of the 0 that a
-#: product gives after a minus sign, and a DF holds either sign. A minus sign before a bracket
-#: gives ``- ( 5 ) / 0`` and ``- ( 5 ) MOD 0`` the value +0.0 in one order and -0.0 in the
-#: other.
+#: the readings show. No decimal pair is here. A minus sign before a product meets the 0 of a
+#: product of a zero and a number. The readings show the sign of that 0 at 5.0, -5.0 and -1.0
+#: only.
 #: ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
 SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
     ("AND", "AND", True),
     ("OR", "OR", True),
     ("XOR", "XOR", True),
-    (NEGATE_BRACKET, "MOD", True),
     (NEGATE_CONSTANT, "MOD", True),
 )
 
@@ -526,6 +534,8 @@ class _Parser:
     def _unary(self) -> Formula:
         token = self._peek()
         if token == ("punct", "+"):
+            # A unary plus changes no value in any grouping. CLICK 4.00 stores it in the
+            # constant in decimal mode (H+5) and as a token of its own in hex mode (round b20).
             self.pos += 1
             return self._unary()
         if token == ("punct", "-"):
