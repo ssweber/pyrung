@@ -185,8 +185,9 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
     return result
 
 
-#: ln(2 ** 1024) is about 709.8.  An integer power whose natural log passes this limit is
-#: past the double range.  The limit is 10 higher, so a rounded log cannot cross it.
+#: ln(2 ** 1024) is about 709.8.  A power whose natural log is above 709.8 is past the
+#: double range.  ``POW_LOG_LIMIT`` is 10 higher, so a rounding error in the log never
+#: marks a finite power as Inf.
 POW_LOG_LIMIT = 720.0
 
 
@@ -213,10 +214,9 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
     ``0 ^ -1 + 5`` into a DS, because the whole formula is +Inf (hardware, 2026-11-10).
     Python raises ``ZeroDivisionError`` for both.
 
-    A decimal Math converts the operands to doubles first (``DoubleBinaryExpr``).  A hex
-    Math keeps an integer power exact, and so does a formula that reads text.  Such a
-    power past the double range is +/-Inf (:func:`int_power_past_doubles`).  The exact
-    power would round to the same Inf as a Math step (:func:`to_double`).
+    A power of two ints is exact.  When it is past the double range, this function
+    returns +/-Inf without computing it (:func:`int_power_past_doubles`).  Rounding the
+    exact power to a double (:func:`to_double`) gives the same Inf.
     """
     if a == 0 and b <= 0:
         if b == 0:
@@ -673,12 +673,21 @@ class DoubleBinaryExpr(CalcBinaryExpr):
     Into any other type it builds this class for ``**`` only. A DS or a DD then stores
     the low bits of the double: ``3 ^ 35`` into a DD stores -651126888 (hardware,
     2026-11-27).
+
+    A power of two ints is computed exactly and then rounded to the nearest double.  The
+    C library's ``pow()`` does not always return the nearest double.  On Windows,
+    ``10.0 ** 23.0`` returns the double just above it.  A DD would then store -150994944
+    for ``10 ^ 23``, in place of -167772160.  The generated code computes the same exact
+    power.
     """
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         left = self.left.evaluate(ctx)
         right = self.right.evaluate(ctx)
         try:
+            if self.op is _op_pow_calc and type(left) is int and type(right) is int:
+                result = self.op(left, right)
+                return to_double(result) if type(result) is int else result
             return self.op(float(left), float(right))
         except (ArithmeticError, ValueError) as error:
             return _permissive(error)

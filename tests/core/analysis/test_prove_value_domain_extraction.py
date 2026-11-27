@@ -7,6 +7,7 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Dint,
     Int,
     Program,
     Real,
@@ -19,6 +20,7 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
+from pyrung.core.expression import LiteralExpr
 
 # ===================================================================
 # Group 2: Value domain extraction
@@ -574,6 +576,16 @@ def _odd_power_of_a_negative() -> Program:
     return logic
 
 
+def _power_past_2_53() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    n, d3 = Int("N"), Dint("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, n, 1, 2, 3)
+        with rung():
+            math(LiteralExpr(10) ** LiteralExpr(23), d3)
+    return logic
+
+
 def _floor_division_by_a_span_through_zero() -> Program:
     go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
     d, d3 = Int("D"), Int("D3")
@@ -593,6 +605,7 @@ _STORED_VALUE_PROGRAMS = {
     "wide_power": _wide_power,
     "power_of_a_negative": _power_of_a_negative,
     "odd_power_of_a_negative": _odd_power_of_a_negative,
+    "power_past_2_53": _power_past_2_53,
     "floor_division_by_a_span_through_zero": _floor_division_by_a_span_through_zero,
 }
 
@@ -625,6 +638,24 @@ def test_each_math_domain_holds_every_value_a_scan_stores(build):
             for domain in domains:
                 if "D3" in domain:
                     assert stored in domain["D3"], (go_a, go_b, stored, domain["D3"])
+
+
+def test_a_power_past_2_53_has_the_low_bits_of_the_nearest_double():
+    """List -167772160 for ``10 ^ 23`` into a Dint, and check that a scan stores it.
+
+    The nearest double to 10 ** 23 has those low 32 bits.  On Windows the C library's
+    ``pow()`` returns the next double up, whose low 32 bits are -150994944.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import collect_produced_value_domains
+
+    logic = _power_past_2_53()
+    domains = collect_produced_value_domains(logic, build_program_graph(logic))
+    assert -167772160 in domains["D3"]
+    assert -150994944 not in domains["D3"]
+    plc = PLC(logic)
+    plc.step()
+    assert plc.current_state.tags["D3"] == -167772160
 
 
 def test_check_keeps_a_comparison_with_a_value_an_xor_stores():

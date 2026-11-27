@@ -1099,7 +1099,12 @@ def _interval_bounds(
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[float, float] | None:
     """Resolve min/max interval for an expression node, or None if unbounded."""
-    from pyrung.core.expression import BinaryExpr, DoubleBinaryExpr, RangeAggregateExpr
+    from pyrung.core.expression import (
+        BinaryExpr,
+        DoubleBinaryExpr,
+        RangeAggregateExpr,
+        to_double,
+    )
 
     if isinstance(node, RangeAggregateExpr):
         # max/min/median/mean all lie in the hull of the member intervals.
@@ -1141,11 +1146,20 @@ def _interval_bounds(
 
     a_lo, a_hi = left
     b_lo, b_hi = right
-    if isinstance(node, DoubleBinaryExpr):
-        # The step computes in doubles, so its corners must too.  Past 2 ** 53 a double
-        # power differs from the exact one, and a Dint stores the double's low bits.
+    ends = (a_lo, a_hi, b_lo, b_hi)
+    # At run time a double power of two ints is the exact power rounded to a double
+    # (DoubleBinaryExpr).  Rounding never reverses the order of two values, so the
+    # rounded corners bound the rounded power.
+    round_power = (
+        isinstance(node, DoubleBinaryExpr)
+        and node.symbol == "**"
+        and all(type(end) is int for end in ends)
+    )
+    if isinstance(node, DoubleBinaryExpr) and not round_power:
+        # The step computes in doubles, so its corners must too.  A Dint stores the low
+        # bits of the double.
         try:
-            a_lo, a_hi, b_lo, b_hi = (float(end) for end in (a_lo, a_hi, b_lo, b_hi))
+            a_lo, a_hi, b_lo, b_hi = (float(end) for end in ends)
         except OverflowError:
             return None
 
@@ -1182,10 +1196,16 @@ def _interval_bounds(
             # The corner would build a huge int.
             return None
         if a_lo < 0:
-            return _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
+            bounds = _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
+            if bounds is None or not round_power:
+                return bounds
+            lo, hi = (to_double(int(end)) for end in bounds)
+            return (lo, hi) if math.isfinite(lo) and math.isfinite(hi) else None
 
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
+        if round_power:
+            corners = [to_double(c) if type(c) is int else c for c in corners]
         # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer
         # stores 0 for it, and the corners do not bound 0.  An int past a double's range
         # raises OverflowError here.

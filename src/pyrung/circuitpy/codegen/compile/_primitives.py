@@ -176,10 +176,20 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-        if isinstance(expr, DoubleBinaryExpr):
-            left, right = _double_operands(expr, left, right)
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         flags = CALC_FLAGS if strict else None
+        if isinstance(expr, DoubleBinaryExpr):
+            if calc_op and expr.symbol == "**":
+                # The core computes a power of two ints exactly and rounds it to a double
+                # (DoubleBinaryExpr).  _pow_calc computes the same power, and float(_dbl())
+                # rounds it.  A double step always returns a float (_int_bound).
+                ctx.mark_helper("_math_func")
+                ctx.mark_helper("_pow")
+                ctx.mark_helper("_pow_calc")
+                ctx.mark_helper("_term_fail")
+                ctx.mark_helper("_dbl")
+                return f"float(_dbl(_pow_calc({left}, {right}, {flags})))"
+            left, right = _double_operands(expr, left, right)
         if expr.op is _op_hex_div:
             # A hex Math's / rounds the quotient down (core _op_hex_div).  // gives the same
             # quotient for whole operands.  The fast path takes a Word tag or a whole constant

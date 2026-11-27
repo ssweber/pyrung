@@ -71,6 +71,8 @@ BIG, MINUS_EIGHT = Real("Big"), Real("MinusEight")
 ONE, FAR, THOUSAND = Int("One"), Int("Far"), Int("Thousand")
 DINT_TOP = Dint("DintTop")
 WORD_FIVE, WORD_TOP = Word("WordFive"), Word("WordTop")
+TEN, TWENTY_THREE = Dint("Ten"), Dint("TwentyThree")
+BASE_1779, FIVE = Dint("Base1779"), Dint("Five")
 
 
 def _past_doubles() -> Any:
@@ -165,6 +167,10 @@ STAGED = {
     DINT_TOP: 2147483647,
     WORD_FIVE: 5,
     WORD_TOP: 0xFFFF,
+    TEN: 10,
+    TWENTY_THREE: 23,
+    BASE_1779: -1779,
+    FIVE: 5,
 }
 
 
@@ -257,20 +263,32 @@ LARGE_POWERS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "dint_top_to_a_large_constant": (lambda: DINT_TOP**2147483647, Dint, 0, {43}),
     "dint_top_to_dint_top": (lambda: DINT_TOP**DINT_TOP, Real, float("inf"), {43}),
     "hex_power_past_doubles": (lambda: WORD_FIVE ** (WORD_TOP * WORD_TOP), Word, 0, {43}),
-    # 3 ^ 21 fits in a double. 3 ^ 35 does not, and its double ends in 2 where the exact
-    # power ends in 7, so the low bits differ. A CLICK stores the double's.
+    # 3 ^ 21 is below 2 ** 53, so its double is exact. 3 ^ 35 is above 2 ** 53. Its
+    # nearest double ends in 4 and the exact power ends in 7, so their low bits differ.
+    # A CLICK stores the double's low bits.
     "three_to_21_into_dint": (lambda: LiteralExpr(3) ** 21, Dint, 1870418611, {43}),
     "three_to_21_into_int": (lambda: LiteralExpr(3) ** 21, Int, 21171, {43}),
     "three_to_35_into_dint": (lambda: LiteralExpr(3) ** 35, Dint, -651126888, {43}),
     "three_to_35_into_int": (lambda: LiteralExpr(3) ** 35, Int, -26728, {43}),
+    # Each power below is the exact power rounded to the nearest double. On Windows the C
+    # library's pow() returns the next double up for each of them.
+    "ten_to_23_into_dint": (lambda: TEN**TWENTY_THREE, Dint, -167772160, {43}),
+    "ten_to_23_into_real": (lambda: TEN**TWENTY_THREE, Real, 1e23, set()),
+    "ten_to_23_literal_into_dint": (
+        lambda: LiteralExpr(10) ** LiteralExpr(23),
+        Dint,
+        -167772160,
+        {43},
+    ),
+    "minus_1779_to_5_into_dint": (lambda: BASE_1779**FIVE, Dint, 133617500, {43}),
 }
 
 
 def _check_large_powers() -> None:
     """Check each of :data:`LARGE_POWERS` on every engine. A child process runs this.
 
-    The host runs code.py with doubles. The P1AM-200's float has about 22 bits, so on the
-    board ``3 ** 35`` into a Dint stores 0 (docs/dialects/circuitpy.md).
+    The host runs code.py with doubles. The P1AM-200's float has about 22 bits. On the
+    board, ``3 ** 35`` into a Dint stores 0 (``tests/circuitpy/test_board_math.py``).
     """
     with pytest.MonkeyPatch.context() as monkeypatch:
         for name, (_build, _dest_type, stored, flags) in LARGE_POWERS.items():
