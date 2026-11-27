@@ -52,7 +52,7 @@ from pyrung.click.codegen.formula import (
 )
 from pyrung.click.ladder.types import LadderBundle
 from pyrung.conformance._formula import _as_subtraction
-from pyrung.core import PLC, Dint, Int, Program, Real, Word, copy, rung
+from pyrung.core import PLC, Dint, Int, Program, Real, Word, copy, rung, system
 from pyrung.core import math as math_instruction
 from pyrung.core.context import ScanContext
 from pyrung.core.instruction.calc import CalcInstruction
@@ -1166,6 +1166,74 @@ def test_imported_formula_with_an_unconfirmed_pair_warns(
         "the formula in CLICK to set the order."
     ]
     assert all(m.isascii() for m in messages)
+
+
+#: Part B of reading round b16: (case, formula as CLICK displays it, hex mode, register values,
+#: destination, value the PLC stored, whether SC43 was on after the Math). The model of a CLICK
+#: computes no function but SQRT, so these are not in READINGS, and they settle no pair.
+#:
+#: - b1a and b1b: a minus sign before ABS and SUM binds to the function's result first.
+#: - b2 and b2x: a minus sign before RSH applies to the shift's result. A minus sign on the
+#:   register, then a division by 2 that truncates toward 0, stores the same value for every
+#:   register value, so these two cases do not tell those two apart.
+#: - b3a to b3c: the step after AND, XOR and OR reads the result as 16 unsigned bits. b3ax ends
+#:   at 65536, so it stores 0000h and sets SC43.
+#: - b3d: the OR cuts the product 10000h to 16 bits, with no flag. ``hex_divmod/product_not_cut``
+#:   shows that a hex Math does not cut a product before a MOD, so the cut comes from the OR.
+#:   b3d alone cannot tell an OR that cuts from a product cut before the OR.
+PART_B_READINGS: list[tuple[str, str, bool, dict[str, int], str, int, bool]] = [
+    ("b16-b1a", "- ABS ( DS101 ) + 2", False, {"DS101": 4}, "DS1", -2, False),
+    ("b16-b1b", "- SUM ( DS111 : DS112 ) ^ 2", False, {"DS111": 4, "DS112": 5}, "DS2", 81, False),
+    ("b16-b2", "- RSH ( DH100 , 1h ) AND FFFFh", True, {"DH100": 8}, "DH3", 0xFFFC, False),
+    ("b16-b2x", "- RSH ( DH131 , 1h ) AND FFFFh", True, {"DH131": 9}, "DH4", 0xFFFC, False),
+    ("b16-b3a", "( ( 0h - DH141 ) AND FFFFh ) + 1h", True, {"DH141": 2}, "DH5", 0xFFFF, False),
+    ("b16-b3ax", "( ( 0h - DH151 ) AND FFFFh ) + 1h", True, {"DH151": 1}, "DH6", 0x0000, True),
+    ("b16-b3b", "( ( 0h - DH161 ) XOR 0h ) - 1h", True, {"DH161": 2}, "DH7", 0xFFFD, False),
+    (
+        "b16-b3c",
+        "( ( 0h - DH171 ) OR 0h ) / DH172",
+        True,
+        {"DH171": 2, "DH172": 3},
+        "DH8",
+        0x5554,
+        False,
+    ),
+    (
+        "b16-b3d",
+        "( ( DH181 * DH182 ) OR 0h ) / 2h",
+        True,
+        {"DH181": 0x100, "DH182": 0x100},
+        "DH9",
+        0x0000,
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "hex_mode", "registers", "dest", "stored", "out_of_range"),
+    [reading[1:] for reading in PART_B_READINGS],
+    ids=[reading[0] for reading in PART_B_READINGS],
+)
+def test_imported_formula_stores_what_round_b16_part_b_read(
+    text: str,
+    hex_mode: bool,
+    registers: dict[str, int],
+    dest: str,
+    stored: int,
+    out_of_range: bool,
+    monkeypatch,
+) -> None:
+    copies = [f"copy({v:X}h,{k})" if hex_mode else f"copy({v},{k})" for k, v in registers.items()]
+    mode = ",mode=hex" if hex_mode else ""
+    with warnings.catch_warnings():
+        # b2 pairs a minus sign before a function with AND, which no reading in the model
+        # settles, so its import warns.
+        warnings.simplefilter("ignore")
+        ns = exec_with_source(ladder_to_pyrung(_bundle(*copies, f"math({text},{dest}{mode})")))
+    fault = system.fault.out_of_range
+    results = _on_every_backend(ns["logic"], monkeypatch, [ns[dest], fault], scans=1)
+    assert set(results.values()) == {(stored, out_of_range)}, results
 
 
 @pytest.mark.parametrize(

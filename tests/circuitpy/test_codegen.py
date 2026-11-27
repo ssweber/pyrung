@@ -216,7 +216,9 @@ def _on_every_backend(program: Program, monkeypatch, watch, *, scans: int) -> di
         result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime, scans=scans
     )
     ctx = _context_for_program(program, hw)
-    results["circuitpy"] = tuple(namespace[ctx.symbol_for_tag(tag)] for tag in watch)
+    # A tag of a block reads through its array, such as _b_DS[1].
+    symbols = [ctx.symbol_for_tag(tag) for tag in watch]
+    results["circuitpy"] = tuple(eval(symbol, namespace) for symbol in symbols)
     return results
 
 
