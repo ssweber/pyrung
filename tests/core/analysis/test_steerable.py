@@ -7,9 +7,12 @@ without reading pilot.
 
 from __future__ import annotations
 
+from enum import IntEnum
+
+from pyrung import Block, TagType, sqrt
 from pyrung.core import PLC, Bool, Int, Program, Real, copy, fill, latch, out, reset, rung
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
+from pyrung.core.analysis.steerable import _literal_write, compute_clear_only, compute_steerable
 
 
 def _steerable(program: Program) -> frozenset[str]:
@@ -146,3 +149,32 @@ class TestSteerable:
                 out(Err)
 
         assert "EnableLimit" in _steerable(prog)
+
+
+class _Mode(IntEnum):
+    STOP = 0
+    RUN = 3
+
+
+class TestLiteralWrite:
+    """An IntEnum member and sqrt() have a .name, but neither one is a tag."""
+
+    def test_copy_and_fill_of_an_intenum_member_write_its_value(self) -> None:
+        state, slots = Int("State"), Block("Slots", TagType.INT, 1, 2)
+        prog = Program(strict=False)
+        with prog:
+            with rung(Bool("Go")):
+                copy(_Mode.RUN, state)
+            with rung(Bool("Load")):
+                fill(_Mode.RUN, slots.select(1, 2))
+
+        assert _literal_write(prog.rungs[0], "State") == 3
+        assert _literal_write(prog.rungs[1], "Slots2") == 3
+
+    def test_copy_of_sqrt_writes_no_literal(self) -> None:
+        prog = Program(strict=False)
+        with prog:
+            with rung(Bool("Go")):
+                copy(sqrt(Int("Level")), Int("Root"))
+
+        assert _literal_write(prog.rungs[0], "Root") is None

@@ -60,7 +60,10 @@ def literal_value_from_value(value: Any) -> Any | None:
 
 
 def value_tag_name(value: Value) -> str | None:
-    """Return the name of the one tag that a copy or fill source reads as it is, or None."""
+    """Return the name of the tag that a copy or fill source stores unchanged, or None.
+
+    A pointer, a constant or any other expression returns None.
+    """
     match value:
         case TagArg(tag=tag):
             return tag.name

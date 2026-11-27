@@ -39,6 +39,8 @@ Groups (this is the brief for the tool, written after two branches regressed how
                input compared with a set point plus 2
     relations  facts read from the generated code: an off delay asked for Acc from power-up,
                before its enable was ever on, and a counter whose reset is latched on
+    enums      a copy and a fill of an IntEnum member, and a copy of sqrt() of a tag: the
+               value each one stores, and a value that no copy stores
 
 Cases marked fast=False only run with --full.  The case name is its key.  The tool compares
 two runs by name, so give a new case a name that no case has used, and never rename a case.
@@ -51,6 +53,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from enum import IntEnum
 from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +83,7 @@ from pyrung import (  # noqa: E402
     out,
     reset,
     rung,
+    sqrt,
     subroutine,
     system,
     time_drum,
@@ -1938,3 +1942,57 @@ def _counter_held_in_reset():
 
 _add("relations", "relations/off delay Acc from power-up, never enabled", _off_delay_never_armed)
 _add("relations", "relations/counter Done with its reset latched on", _counter_held_in_reset)
+
+
+# --------------------------------------------------------------------------- enums
+
+
+class _Mode(IntEnum):
+    STOP = 0
+    IDLE = 1
+    RUN = 3
+
+
+def _enum_copy(target_value):
+    """Start copies Mode.RUN (3) into State, and Stop copies Mode.STOP (0).
+
+    Motor follows State == 3.  The case asks for State == *target_value*.
+    """
+    state, motor = Int("State"), Bool("Motor")
+    with Program(strict=False) as prog:
+        with rung(Bool("Start", external=True)):
+            copy(_Mode.RUN, state)
+        with rung(Bool("Stop", external=True)):
+            copy(_Mode.STOP, state)
+        with rung(state == _Mode.RUN):
+            out(motor)
+    target = state == target_value
+    return dict(plc=PLC(prog, dt=0.01), targets=(target,), goal=_auto_goal(target))
+
+
+def _enum_fill():
+    """Start fills Slots 1..2 with Mode.RUN (3).  Running follows Slots1 == 3."""
+    slots, running = Block("Slots", TagType.INT, 1, 2), Bool("Running")
+    with Program(strict=False) as prog:
+        with rung(Bool("Start", external=True)):
+            fill(_Mode.RUN, slots.select(1, 2))
+        with rung(slots[1] == _Mode.RUN):
+            out(running)
+    return dict(plc=PLC(prog, dt=0.01), targets=(running,), goal=_tag_goal(running))
+
+
+def _sqrt_copy():
+    """Root stores sqrt(Level), with Level 0..100.  Hit needs Root at 7 or more."""
+    level, root, hit = Int("Level", external=True, min=0, max=100), Int("Root"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with rung():
+            copy(sqrt(level), root)
+        with rung(root >= 7):
+            latch(hit)
+    return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+
+_add("enums", "enums/State set to an IntEnum member", lambda: _enum_copy(3))
+_add("enums", "enums/State at a value no copy stores", lambda: _enum_copy(5))
+_add("enums", "enums/a fill of an IntEnum member", _enum_fill)
+_add("enums", "enums/a copy of sqrt() of an input", _sqrt_copy)

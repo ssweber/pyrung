@@ -60,7 +60,8 @@ def operand_leaf(value: Any) -> Any:
 
     Return any other value unchanged.  The analyses that walk every field of an
     instruction call this on each value, so they reach the tags inside a parsed
-    operand.  The result drops ``immediate()``, which no analysis reads.
+    operand.  The result drops ``immediate()``.  A reader that must tell an immediate
+    operand from a plain one matches on the parsed operand instead.
     """
     match value:
         case TagArg(tag=tag):
