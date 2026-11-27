@@ -18,7 +18,6 @@ from pyrung.click.validation.findings import (
 from pyrung.click.validation.hardware import constant_text_past_txt
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.operands import Coil, ConstArg, RangeArg, TagArg, Value, held
@@ -476,19 +475,18 @@ class _InstructionMixin:
                 )
             return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
-            expression = instruction.source_expression
-            mode = infer_calc_mode(expression, instruction.dest).mode
+            mode = instruction.mode
             # Hex-mode Math reads every constant as hex (shift counts too).
             with self._hex_constants("math" if str(mode) == "hex" else None):
                 formula = self._render_operand(
-                    expression,
+                    held(instruction.source_expression),
                     path=f"{path}.expression",
                     source=instruction,
                 )
             return self._fn(
                 "math",
                 formula,
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                self._render_operand(instruction.dest.tag, path=f"{path}.dest", source=instruction),
                 mode=str(mode),
                 **oneshot_kw,
             )
@@ -498,23 +496,23 @@ class _InstructionMixin:
                 kw["continuous"] = "1"
             kw.update(oneshot_kw)
             range_str = self._render_run(
-                instruction.search_range,
+                held(instruction.search_range),
                 path=f"{path}.search_range",
                 instruction=instruction,
             )
             with self._hex_constants("exact" if self._is_hex_bank_operand(range_str) else None):
                 value_str = self._render_operand(
-                    instruction.value, path=f"{path}.value", source=instruction
+                    held(instruction.value), path=f"{path}.value", source=instruction
                 )
             comparison = f"{range_str} {instruction.condition} {value_str}"
             return self._fn(
                 "search",
                 comparison,
                 result=self._render_operand(
-                    instruction.result, path=f"{path}.result", source=instruction
+                    instruction.result.tag, path=f"{path}.result", source=instruction
                 ),
                 found=self._render_operand(
-                    instruction.found, path=f"{path}.found", source=instruction
+                    instruction.found.tag, path=f"{path}.found", source=instruction
                 ),
                 **kw,
             )
@@ -665,7 +663,7 @@ class _InstructionMixin:
             return self._fn(
                 "shift",
                 self._render_shift_range(
-                    instruction.bit_range,
+                    held(instruction.bit_range),
                     path=f"{path}.bit_range",
                     source=instruction,
                 ),

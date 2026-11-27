@@ -1679,7 +1679,7 @@ def continuous_search_results(program: Program) -> frozenset[str]:
     ``ProgramGraph.unconditional_write_before_read`` excludes these tags itself.
     """
     return frozenset(
-        instr.result.name
+        as_authored(instr.result).name
         for instr in walk_instructions(program)
         if isinstance(instr, SearchInstruction) and instr.continuous
     )

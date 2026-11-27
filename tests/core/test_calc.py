@@ -237,12 +237,14 @@ class TestCutIntConstants:
     def test_returns_the_expression_itself_when_no_constant_changes(self):
         from pyrung.core.expression import BinaryExpr, CalcBinaryExpr
         from pyrung.core.instruction.calc import CalcInstruction, cut_int_constants
+        from pyrung.core.instruction.operands import ExprArg
 
         A = Int("A")
         expr = (A + 65536) * -40000
         assert cut_int_constants(expr) is expr
         instr = CalcInstruction(expr, Int("Dest"))
-        assert instr.source_expression is expr
+        assert isinstance(instr.source_expression, ExprArg)
+        assert instr.source_expression.expr is expr
         # The Math runs the same formula, its steps doubles; the written one is untouched.
         assert repr(instr.expression) == repr(expr)
         assert isinstance(instr.expression, CalcBinaryExpr)
@@ -256,7 +258,7 @@ class TestCutIntConstants:
         expr = A / 65536
         for dest in (Int("I"), Dint("D"), Real("R")):
             instr = CalcInstruction(expr, dest)
-            assert instr.source_expression is expr
+            assert instr.source_expression.expr is expr
             assert repr(instr.expression) == "(TagExpr(A) / LiteralExpr(65536))"
 
     def test_no_decimal_destination_cuts_randint_bounds_inside_a_dint(self):

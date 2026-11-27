@@ -415,7 +415,7 @@ def _special_arguments(instr: Any) -> tuple[str, list[tuple[str, ArgumentText, s
     if itype in ("OutInstruction", "LatchInstruction", "ResetInstruction"):
         return verb, [("target", operand_name(instr.target), "positional")]
     if itype == "CalcInstruction":
-        written = getattr(instr, "source_expression", instr.expression)
+        written = held(instr.source_expression)
         return verb, [
             ("expression", render_expr(written), "positional"),
             ("dest", operand_name(instr.dest), "positional"),

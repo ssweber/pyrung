@@ -31,15 +31,22 @@ A kind also refuses these operands, which can write a result:
 A kind does not check the length of a range with pointers, because the pointers are
 read at scan time.  The scan checks it.
 
-``copy()``, ``fill()``, ``blockcopy()``, ``pack_bits()``, ``pack_words()``,
-``pack_text()``, ``unpack_to_bits()``, ``unpack_to_words()`` and the coils parse their
-operands instead.  The coils are ``out()``, ``latch()``, ``reset()``, ``toggle()``,
-``debounce()``, ``flasher()`` and ``timed()``, and each one parses only its target.
+These instructions parse their operands instead:
+
+- ``copy()``, ``fill()`` and ``blockcopy()``;
+- ``pack_bits()``, ``pack_words()``, ``pack_text()``, ``unpack_to_bits()`` and
+  ``unpack_to_words()``;
+- ``math()``, ``search()`` and ``shift()``;
+- the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
+  ``flasher()`` and ``timed()``.  Each coil parses only its target.
+
 Their builder calls ``parse()`` on each declaration, which returns one of the results
-below or raises the refusal.  The instruction then holds only results.  ``execute()``,
-the code generator and the CLICK export match on them and never test the raw value
-again.  A reader that takes the operands of every instruction calls :func:`as_authored`
-on each.
+below or raises the refusal.  ``search()`` passes the value of its comparison to
+:func:`parse_value`.  That function refuses nothing.  The instruction then holds only
+results.
+``execute()``, the code generator and the CLICK export match on them and never test the
+raw value again.  A reader that takes the operands of every instruction calls
+:func:`as_authored` on each.
 """
 
 from __future__ import annotations
@@ -364,6 +371,17 @@ class TagOperand(Operand):
         if isinstance(bare, Tag):
             return TagArg(bare, wrapper is not None, wrapper)
         return PointerArg(bare)
+
+    def parse_tag(self, call: str, arg: str, value: Any) -> TagArg:
+        """Return *value* as one tag, or raise the error that refuses it.
+
+        Call it for a field that refuses a pointer.  The result is then always a tag.
+        """
+        if self.pointers:
+            raise TypeError("parse_tag() needs an operand that refuses a pointer.")
+        self._refuse(call, arg, value)
+        bare, wrapper = _split(value)
+        return TagArg(bare, wrapper is not None, wrapper)
 
 
 @dataclass(frozen=True)

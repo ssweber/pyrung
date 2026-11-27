@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from keyword import iskeyword
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.circuitpy.codegen._constants import (
     _FAULT_DIVISION_ERROR_TAG,
@@ -85,6 +85,14 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.instruction.calc import may_be_text
 from pyrung.core.instruction.control import not_a_char_error
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    TagArg,
+)
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
@@ -106,7 +114,6 @@ from ._primitives import (
     _compile_assignment_lines,
     _compile_expression_impl,
     _compile_guarded_instruction,
-    _compile_set_address_error_fault_body,
     _compile_set_out_of_range_fault_body,
     _compile_value,
     _snapshot_tag_symbol,
@@ -598,21 +605,38 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
     return None
 
 
+def _formula_may_be_text(instr: CalcInstruction) -> bool:
+    """Return True if the formula of *instr* may read text.
+
+    For a formula or a constant, the walk reads ``expression``, the form that the mode runs.
+    """
+    source = instr.source_expression
+    match source:
+        case TagArg(tag=tag):
+            return tag.type.name == "CHAR"
+        case PointerArg(ref=ref):
+            return ref.block.type.name == "CHAR"
+        case ExprArg() | ConstArg():
+            return may_be_text(instr.expression)
+        case RangeArg() | PointerRangeArg():
+            return False
+        case _:
+            assert_never(source)
+
+
 def _compile_calc_instruction(
     instr: CalcInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if instr.expression is None:
-        # Stepping writes nothing for a math() of None and sets the address-error flag.
-        body = _compile_set_address_error_fault_body(ctx)
-        return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
     ctx.mark_helper("_calc_math_isfinite")
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
+    dest = instr.dest.tag
+    dest_type = dest.type.name
     value_expr = _compile_value(instr.expression, ctx, strict=True)
-    store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
-    zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
+    store_expr = _calc_store_expr("_calc_value", dest_type, instr.mode, ctx)
+    zero_store_expr = _calc_store_expr("0", dest_type, instr.mode, ctx)
     out_of_range_body = _compile_set_out_of_range_fault_body(ctx)
     math_err = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
     # A failing operation evaluates to 0 and appends its flag's code to _calc_flags.
@@ -632,7 +656,7 @@ def _compile_calc_instruction(
             # All the flag checks go under one test, so the path with no error runs only
             # that test.
             set_flags.insert(0, f"if {CALC_FLAGS}:")
-    if set_flags and isinstance(instr.expression, (IndirectRef, IndirectExprRef)):
+    if set_flags and isinstance(instr.source_expression, PointerArg):
         # An address below its block raises IndexError. Nothing is written, and the
         # guard sets the address-error flag. The flags of the failing operations are set first.
         enabled_body += ["try:", f"    _calc_value = {value_expr}", "finally:"]
@@ -640,13 +664,12 @@ def _compile_calc_instruction(
     else:
         enabled_body.append(f"_calc_value = {value_expr}")
         enabled_body.extend(set_flags)
-    dest_type = instr.dest.type.name
     range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
     if dest_type == "REAL" and instr.mode != "hex":
         # Past CLICK's REAL range, the result is +/-Inf with the out-of-range flag, as a
         # float32 Math stores it. A NaN sets no flag.
         branch = "if"
-        if may_be_text(instr.expression):
+        if _formula_may_be_text(instr):
             # Stepping converts text with float() and sets no out-of-range flag for it.
             # Past the REAL range the text stores +/-Inf (core store_real).
             enabled_body += [
@@ -691,10 +714,10 @@ def _compile_calc_instruction(
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body)
     enabled_body.append("try:")
-    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=4))
+    enabled_body.extend(_compile_assignment_lines(dest, store_expr, ctx, indent=4))
     enabled_body.append("except OverflowError:")
     enabled_body.extend(_indent_body(out_of_range_body, 4))
-    enabled_body.extend(_compile_assignment_lines(instr.dest, zero_store_expr, ctx, indent=4))
+    enabled_body.extend(_compile_assignment_lines(dest, zero_store_expr, ctx, indent=4))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 

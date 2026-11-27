@@ -394,7 +394,7 @@ class TestBoundsAsCLICKReadsThem:
             with rung():
                 math(roll / 2, Word("Die"))
         instr = logic.rungs[0]._instructions[0]
-        assert format_expr(instr.source_expression.left) == "randint(70000, 70002)"
+        assert format_expr(instr.source_expression.expr.left) == "randint(70000, 70002)"
         assert format_expr(instr.expression.left) == "randint(4464, 4466)"
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
@@ -468,7 +468,7 @@ class TestBoundsAsCLICKReadsThem:
                 math(roll, Word("Narrow"))
                 math(roll, Dint("Wide"))
         narrow, wide = logic.rungs[0]._instructions
-        assert format_expr(narrow.source_expression) == "randint(70000, 70002)"
+        assert format_expr(narrow.source_expression.expr) == "randint(70000, 70002)"
         assert format_expr(narrow.expression) == "randint(4464, 4466)"
         assert format_expr(wide.expression) == "randint(70000, 70002)"
 

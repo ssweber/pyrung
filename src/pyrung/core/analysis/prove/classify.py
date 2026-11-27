@@ -1381,13 +1381,14 @@ def _domain_from_search_instruction(
     target_name: str,
 ) -> tuple[Any, ...] | None:
     """Infer target domain for search instruction outputs."""
-    if target_name == instr.found.name:
+    if target_name == as_authored(instr.found).name:
         return (False, True)
-    if target_name == instr.result.name:
+    if target_name == as_authored(instr.result).name:
         from pyrung.core.memory_block import BlockRange
 
-        if isinstance(instr.search_range, BlockRange):
-            return (-1, *range(instr.search_range.start, instr.search_range.end + 1))
+        search_range = as_authored(instr.search_range)
+        if isinstance(search_range, BlockRange):
+            return (-1, *range(search_range.start, search_range.end + 1))
     return None
 
 

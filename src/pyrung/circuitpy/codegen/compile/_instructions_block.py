@@ -258,19 +258,36 @@ def _compile_search_instruction(
     indent: int,
 ) -> list[str]:
     stem = ctx.next_name("search")
+    search_range = _copy_range(instr.search_range)
     range_setup, range_symbol, range_indices, range_addrs = _compile_range_setup(
-        instr.search_range,
+        search_range,
         ctx,
         stem=f"{stem}_rng",
         include_addresses=True,
     )
-    result_read = _compile_value(instr.result, ctx)
-    result_write = _compile_lvalue(instr.result, ctx)
-    found_write = _compile_lvalue(instr.found, ctx)
-    value_expr = _compile_value(instr.value, ctx)
-    range_type = _range_type_name(instr.search_range)
+    result_read = _compile_value(instr.result.tag, ctx)
+    result_write = _compile_lvalue(instr.result.tag, ctx)
+    found_write = _compile_lvalue(instr.found.tag, ctx)
+    value = instr.value
+    match value:
+        case TagArg(tag=tag):
+            value_expr = _compile_value(tag, ctx)
+        case PointerArg(ref=ref):
+            value_expr = _compile_value(ref, ctx)
+        case ExprArg(expr=expr):
+            value_expr = _compile_value(expr, ctx)
+        case ConstArg(value=constant):
+            value_expr = _compile_value(constant, ctx)
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            # _compile_value() refuses a range.
+            value_expr = _compile_value(span, ctx)
+        case _:
+            assert_never(value)
+    # The text that the search looks for, when the author wrote it as a constant.
+    text = value.value if isinstance(value, ConstArg) and isinstance(value.value, str) else None
+    range_type = _range_type_name(search_range)
     compare_expr = emit_cmp("_candidate", instr.condition, "_rhs")
-    static_len = _static_range_length(instr.search_range)
+    static_len = _static_range_length(search_range)
     miss_body = [f"{result_write} = -1", f"{found_write} = False"]
 
     text_path = range_type == "CHAR"
@@ -326,9 +343,9 @@ def _compile_search_instruction(
     )
 
     if text_path:
-        if isinstance(instr.value, str) and instr.value == "":
+        if text == "":
             _refuse(ctx, ValueError, "Text search value cannot be empty")
-        fixed_window_len = len(instr.value) if isinstance(instr.value, str) else None
+        fixed_window_len = len(text) if text is not None else None
         len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
         match_lines = [
             "if _cursor_index > _last_start:",
@@ -337,7 +354,7 @@ def _compile_search_instruction(
             "    _matched = None",
             "    for _start in range(_cursor_index, _last_start + 1):",
             "        _candidate = ''.join(str("
-            f"{_range_item_read_expr(instr.search_range, range_symbol, f'{range_indices}[_start + _off]', ctx)}) for _off in range(_window_len))",
+            f"{_range_item_read_expr(search_range, range_symbol, f'{range_indices}[_start + _off]', ctx)}) for _off in range(_window_len))",
             f"        if ({compare_expr}):",
             "            _matched = _start",
             "            break",
@@ -349,9 +366,7 @@ def _compile_search_instruction(
         ]
         enabled_body.extend(
             [
-                f"    _rhs = {value_expr}"
-                if isinstance(instr.value, str)
-                else f"    _rhs = str({value_expr})",
+                f"    _rhs = {value_expr}" if text is not None else f"    _rhs = str({value_expr})",
             ]
         )
         if fixed_window_len is None:
@@ -384,7 +399,7 @@ def _compile_search_instruction(
                 f"    _rhs = {value_expr}",
                 "    _matched = None",
                 f"    for _idx in range(_cursor_index, {len_expr}):",
-                f"        _candidate = {_range_item_read_expr(instr.search_range, range_symbol, f'{range_indices}[_idx]', ctx)}",
+                f"        _candidate = {_range_item_read_expr(search_range, range_symbol, f'{range_indices}[_idx]', ctx)}",
                 f"        if {compare_expr}:",
                 "            _matched = _idx",
                 "            break",
@@ -404,16 +419,15 @@ def _compile_shift_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if _range_type_name(instr.bit_range) != "BOOL":
-        raise TypeError("shift bit_range must contain BOOL tags")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     key = f"_shift_prev_clock:{ctx.state_key_for(instr)}"
     stem = ctx.next_name("shift")
+    bit_range = _copy_range(instr.bit_range)
     range_setup, range_symbol, range_indices, _ = _compile_range_setup(
-        instr.bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
+        bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
     )
-    static_len = _static_range_length(instr.bit_range)
+    static_len = _static_range_length(bit_range)
     if static_len == 0:
         raise ValueError("shift bit_range resolved to an empty range")
     shift_len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
@@ -439,7 +453,7 @@ def _compile_shift_instruction(
         f"_clock_prev = {emit_prev(key)}",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
-        f"    _prev_values = [{emit_truth(_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx))} for _idx in {range_indices}]",
+        f"    _prev_values = [{emit_truth(_range_item_read_expr(bit_range, range_symbol, '_idx', ctx))} for _idx in {range_indices}]",
         f"    {_range_item_write_expr(range_symbol, f'{range_indices}[0]', f'bool({enabled_expr})')}",
         f"    for _pos in range(1, {shift_len_expr}):",
         f"        {_range_item_write_expr(range_symbol, f'{range_indices}[_pos]', '_prev_values[_pos - 1]')}",
@@ -448,7 +462,7 @@ def _compile_shift_instruction(
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
         emit_mem_set(key, "_clock_curr"),
     ]
-    range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
+    range_flush = _compile_range_flush(bit_range, range_symbol, ctx)
     if range_flush:
         lines.extend(
             [

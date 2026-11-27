@@ -434,7 +434,7 @@ def _sole_calc_expr(tag: str, pdg: ProgramGraph, program: Any) -> Any | None:
     if ro is None:
         return None
     for instr in ro._instructions:
-        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
+        if isinstance(instr, CalcInstruction) and instr.dest.tag.name == tag:
             return instr.expression
     return None
 

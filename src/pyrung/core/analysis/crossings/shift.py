@@ -18,7 +18,7 @@ condition.  In particular, a prior-True cell can be replaced on a rising edge.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.analysis.crossings._ranges import range_tags
@@ -33,6 +33,7 @@ from pyrung.core.crossing import (
     disjoint,
 )
 from pyrung.core.instruction.advanced import ShiftInstruction
+from pyrung.core.instruction.operands import PointerRangeArg, RangeArg, Span
 
 
 class ShiftCrossing(BaseCrossing):
@@ -47,7 +48,14 @@ class ShiftCrossing(BaseCrossing):
         value = next(iter(target.values))
         if value is not True:
             return REVERSE_FALLTHROUGH  # reset drives False -> vacuous static constraint
-        tags = range_tags(getattr(instr, "bit_range", None))
+        bit_range: Span = instr.bit_range
+        match bit_range:
+            case RangeArg(span=fixed):
+                tags = range_tags(fixed)
+            case PointerRangeArg():
+                tags = None
+            case _:
+                assert_never(bit_range)
         if not tags:
             return REVERSE_FALLTHROUGH
         for k, bit in enumerate(tags):

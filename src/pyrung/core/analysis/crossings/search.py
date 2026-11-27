@@ -14,7 +14,7 @@ windows rather than individual block elements.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.analysis.crossings._ranges import range_tags
@@ -28,6 +28,28 @@ from pyrung.core.crossing import (
     single,
 )
 from pyrung.core.instruction.advanced import SearchInstruction
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+    held,
+)
+
+
+def _fixed_tags(span: Span) -> list[Any] | None:
+    """Return the tags of *span*, or ``None`` for a range with pointers."""
+    match span:
+        case RangeArg(span=fixed):
+            return range_tags(fixed)
+        case PointerRangeArg():
+            return None
+        case _:
+            assert_never(span)
 
 
 class SearchCrossing(BaseCrossing):
@@ -40,20 +62,26 @@ class SearchCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH
         tag = target.tag
         value = next(iter(target.values))
-        if tag != instr.found.name or value is not True:
+        if tag != instr.found.tag.name or value is not True:
             return REVERSE_FALLTHROUGH  # result-address chase is the frontier
-        tags = range_tags(getattr(instr, "search_range", None))
+        tags = _fixed_tags(instr.search_range)
         if not tags:
             return REVERSE_FALLTHROUGH
-        search_value = instr.value
-        if isinstance(search_value, str) and len(search_value) > 1:
-            # Text search compares consecutive windows, not each CHAR cell to
-            # the whole string. Quant is element-wise and would omit concrete
-            # matching windows, so defer until the constraint algebra has a
-            # window-search shape.
-            return REVERSE_FALLTHROUGH
-        value_is_tag = hasattr(search_value, "name")
-        bound = search_value.name if value_is_tag else search_value
+        search_value: Value | Span = instr.value
+        match search_value:
+            case ConstArg(value=str() as text) if len(text) > 1:
+                # Text search compares consecutive windows, not each CHAR cell to
+                # the whole string. Quant is element-wise and would omit concrete
+                # matching windows, so defer until the constraint algebra has a
+                # window-search shape.
+                return REVERSE_FALLTHROUGH
+            case TagArg(tag=value_tag, immediate=False):
+                value_is_tag, bound = True, value_tag.name
+            case TagArg() | PointerArg() | ExprArg() | ConstArg() | RangeArg() | PointerRangeArg():
+                # The Quant compares each cell with the value as the author wrote it.
+                value_is_tag, bound = False, held(search_value)
+            case _:
+                assert_never(search_value)
         block = tuple(t.name for t in tags)
         return single(
             Quant(

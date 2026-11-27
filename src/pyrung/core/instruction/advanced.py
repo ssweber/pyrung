@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from operator import eq, ge, gt, le, lt, ne
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.crossing import Constraint, Eq
-from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
 from .advance import (
@@ -17,14 +17,22 @@ from .advance import (
     constraint_holds,
 )
 from .base import Instruction, OneShotMixin
-from .operands import RANGE, TAG
-from .resolvers import (
-    _set_fault_address_error,
-    reads_indexed_element,
-    resolve_block_range_ctx,
-    resolve_block_range_tags_ctx,
-    resolve_tag_or_value_ctx,
+from .data_transfer import _read
+from .operands import (
+    RANGE,
+    TAG,
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    RangeOperand,
+    Span,
+    TagArg,
+    Value,
+    parse_value,
 )
+from .resolvers import _set_fault_address_error, reads_indexed_element
 from .utils import (
     guard_oneshot_execution,
     instruction_condition_view,
@@ -49,6 +57,30 @@ _SEARCH_OPERATOR_MAP = {
 
 # search() writes only into a tag, so a pointer refusal says how to reach one.
 _POINTER_HINT = "Then copy() that tag to the pointer."
+
+
+@dataclass(frozen=True)
+class _SearchRange(RangeOperand):
+    """The range of a search().  The author writes it inside the comparison."""
+
+    def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
+        """Return the error that refuses *value*, or None if it fits.
+
+        The error names the comparison, because the range has no argument of its own.
+        """
+        if self.accepts(value):
+            return None
+        return TypeError(
+            f"{call} comparison must use a .select() range, got {type(value).__name__}."
+        )
+
+
+_FOUND = TAG.of(TagType.BOOL, pointers=False, immediate=False, pointer_hint=_POINTER_HINT)
+_RESULT = TAG.of(
+    TagType.INT, TagType.DINT, pointers=False, immediate=False, pointer_hint=_POINTER_HINT
+)
+_SEARCH_RANGE = _SearchRange(immediate=False)
+_BIT_RANGE = RANGE.of(TagType.BOOL, immediate=False)
 
 
 class SearchInstruction(OneShotMixin, Instruction):
@@ -95,12 +127,9 @@ class SearchInstruction(OneShotMixin, Instruction):
         """Return the comparison as the call writes it, such as ``DS1..DS10 >= 100``."""
         return f"{text(self.search_range)} {self.condition} {text(self.value)}"
 
-    _operands = {
-        "found": TAG.of(TagType.BOOL, pointers=False, immediate=False, pointer_hint=_POINTER_HINT),
-        "result": TAG.of(
-            TagType.INT, TagType.DINT, pointers=False, immediate=False, pointer_hint=_POINTER_HINT
-        ),
-    }
+    # The table leaves out the range.  The author writes it inside the comparison, so it
+    # has no argument of its own.
+    _operands = {"found": _FOUND, "result": _RESULT}
 
     def __init__(
         self,
@@ -111,7 +140,7 @@ class SearchInstruction(OneShotMixin, Instruction):
         continuous: bool = False,
         oneshot: bool = False,
     ):
-        from pyrung.core.memory_block import BlockRange, IndirectBlockRange, RangeComparison
+        from pyrung.core.memory_block import RangeComparison
 
         if not isinstance(comparison, RangeComparison):
             raise TypeError(
@@ -123,32 +152,43 @@ class SearchInstruction(OneShotMixin, Instruction):
                 f"Invalid search condition: {comparison.operator!r}. "
                 "Expected one of: ==, !=, <, <=, >, >="
             )
-        if not isinstance(comparison.search_range, (BlockRange, IndirectBlockRange)):
-            raise TypeError(
-                "search() comparison must use a .select() range, "
-                f"got {type(comparison.search_range).__name__}."
-            )
+        self.search_range: Span = _SEARCH_RANGE.parse(
+            "search()", "search_range", comparison.search_range
+        )
+        # The builder does not check the value.  The scan raises for a value that it
+        # cannot compare.
+        self.value: Value | Span = parse_value(comparison.value)
+        self.found: TagArg = _FOUND.parse_tag("search()", "found", found)
+        self.result: TagArg = _RESULT.parse_tag("search()", "result", result)
 
         OneShotMixin.__init__(self, oneshot)
         self.condition = comparison.operator
-        self.value = comparison.value
-        self.search_range = comparison.search_range
-        if isinstance(self.search_range, IndirectBlockRange) or reads_indexed_element(self.value):
+        if isinstance(self.search_range, PointerRangeArg) or reads_indexed_element(
+            comparison.value
+        ):
             # A window out of its block, or a value read below it, sets SC44.  The
             # analyses (PDG, static facts) see the flag written where it can be.
             self._fault_writes = ("fault.address_error",)
-        self.result = result
-        self.found = found
         self.continuous = continuous
         self._compare = _SEARCH_OPERATOR_MAP[comparison.operator]
 
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
+
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        try:
-            resolved_range = resolve_block_range_ctx(self.search_range, ctx)
-        except IndexError:
-            _set_fault_address_error(ctx)
-            return
+        search_range = self.search_range
+        match search_range:
+            case RangeArg(span=span):
+                resolved_range = span
+            case PointerRangeArg(span=span):
+                try:
+                    resolved_range = span.resolve_ctx(ctx)
+                except IndexError:
+                    _set_fault_address_error(ctx)
+                    return
+            case _:
+                assert_never(search_range)
         addresses = list(resolved_range.addresses)
         tags = resolved_range.tags()
 
@@ -167,7 +207,7 @@ class SearchInstruction(OneShotMixin, Instruction):
 
         text_path = self._is_text_path(tags)
         try:
-            rhs = resolve_tag_or_value_ctx(self.value, ctx)
+            rhs = self._read_value(ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
@@ -193,10 +233,22 @@ class SearchInstruction(OneShotMixin, Instruction):
             self._write_miss(ctx)
             return
 
-        ctx.set_tags({self.result.name: matched_address, self.found.name: True})
+        ctx.set_tags({self.result.tag.name: matched_address, self.found.tag.name: True})
+
+    def _read_value(self, ctx: ScanContext) -> Any:
+        """Return the value that the search compares on this scan."""
+        value = self.value
+        match value:
+            case TagArg() | PointerArg() | ExprArg() | ConstArg():
+                return _read(value, ctx)
+            case RangeArg(span=span) | PointerRangeArg(span=span):
+                # The search compares each cell with the range object itself.
+                return span
+            case _:
+                assert_never(value)
 
     def _write_miss(self, ctx: ScanContext) -> None:
-        ctx.set_tags({self.result.name: -1, self.found.name: False})
+        ctx.set_tags({self.result.tag.name: -1, self.found.tag.name: False})
 
     def _resolve_cursor_index(
         self, addresses: list[int], reverse_order: bool, ctx: ScanContext
@@ -204,7 +256,8 @@ class SearchInstruction(OneShotMixin, Instruction):
         if not self.continuous:
             return 0
 
-        current_result = int(ctx.get_tag(self.result.name, self.result.default))
+        result = self.result.tag
+        current_result = int(ctx.get_tag(result.name, result.default))
         if current_result == 0:
             return 0
         if current_result == -1:
@@ -309,7 +362,7 @@ class ShiftInstruction(Instruction):
     _writes = ("bit_range",)
     _conditions = ("data_condition", "clock_condition", "reset_condition")
     _structural_fields = ()
-    _operands = {"bit_range": RANGE.of(TagType.BOOL, immediate=False)}
+    _operands = {"bit_range": _BIT_RANGE}
     _call_operands = (("bit_range", "bit_range"),)
     _call_keywords = ()
     _call_chained = (("clock", "clock_condition"), ("reset", "reset_condition"))
@@ -321,7 +374,7 @@ class ShiftInstruction(Instruction):
         clock_condition: Any,
         reset_condition: Any,
     ):
-        self.bit_range = bit_range
+        self.bit_range: Span = _BIT_RANGE.parse("shift()", "bit_range", bit_range)
         self.data_condition = to_condition(data_condition)
         self.clock_condition = to_condition(clock_condition)
         self.reset_condition = to_condition(reset_condition)
@@ -331,18 +384,20 @@ class ShiftInstruction(Instruction):
         if self.reset_condition is None:
             raise ValueError("shift requires a reset condition")
 
-    def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
-        from pyrung.core.tag import TagType
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
-        tags = resolve_block_range_tags_ctx(self.bit_range, ctx)
+    def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
+        bit_range = self.bit_range
+        match bit_range:
+            case RangeArg(span=span):
+                tags = span.tags()
+            case PointerRangeArg(span=span):
+                tags = span.resolve_ctx(ctx).tags()
+            case _:
+                assert_never(bit_range)
         if not tags:
             raise ValueError("shift bit_range resolved to an empty range")
-        for tag in tags:
-            if tag.type != TagType.BOOL:
-                raise TypeError(
-                    f"shift bit_range must contain only BOOL tags; "
-                    f"got {tag.type.name} at {tag.name}"
-                )
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -373,9 +428,14 @@ class ShiftInstruction(Instruction):
         # An indirect range has no fixed set of owned channels at index-build
         # time. Registering the whole block would claim channels this instance
         # may not write, so leave it to ordinary trace.
-        if not isinstance(self.bit_range, BlockRange):
-            return None
-        tags = tuple(self.bit_range.tags())
+        bit_range = self.bit_range
+        match bit_range:
+            case RangeArg(span=span):
+                tags = tuple(span.tags())
+            case PointerRangeArg():
+                return None
+            case _:
+                assert_never(bit_range)
 
         def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
             if not isinstance(constraint, Eq) or len(constraint.values) != 1:

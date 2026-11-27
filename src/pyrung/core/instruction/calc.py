@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, assert_never
 
 from pyrung.core.expression import (
     ABS_OF_TYPE,
@@ -33,13 +33,26 @@ from .conversions import (
     _math_out_of_range_for_dest,
     _truncate_to_tag_type,
 )
-from .operands import TAG, NumberInto, TextInto, ValueOperand
+from .data_transfer import _read
+from .operands import (
+    TAG,
+    ConstArg,
+    ExprArg,
+    NumberInto,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    TextInto,
+    Value,
+    ValueOperand,
+    check_rules,
+)
 from .resolvers import (
     _raise_fault,
     _set_fault_address_error,
     _set_fault_out_of_range,
-    resolve_tag_name_ctx,
-    resolve_tag_or_value_ctx,
 )
 from .utils import guard_oneshot_execution
 
@@ -48,6 +61,14 @@ if TYPE_CHECKING:
 
 
 CalcMode = Literal["decimal", "hex"]
+
+_SOURCE = ValueOperand(arg="expression")
+# A pointer or a constant has no tag type for the mode to read.
+_DEST = TAG.of(
+    pointers=False,
+    immediate=False,
+    pointer_hint="Write into a tag, then copy() that tag to the pointer.",
+)
 
 
 @dataclass(frozen=True)
@@ -392,8 +413,11 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Constants:** a decimal Math keeps each integer constant whole, as a CLICK
     Math does, so ``math(DD1 / 65536, DS1)`` divides by 65536.  A hex Math cuts
     each one to 16 bits, unsigned.  See :func:`calc_form`.  ``expression`` holds
-    the formula as it runs, and ``source_expression`` the one written, which the
-    CLICK export writes.
+    the formula as it runs.
+
+    The builder parses both operands (:mod:`pyrung.core.instruction.operands`).
+    ``source_expression`` is the formula as the author wrote it, parsed into a
+    ``Value`` or a ``Span``.  The CLICK export writes it.  ``dest`` is a ``TagArg``.
 
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.
@@ -421,15 +445,7 @@ class CalcInstruction(OneShotMixin, Instruction):
     _fault_settles_idle = True
     _conditions = ()
     _structural_fields = ("mode",)
-    # A pointer or a constant has no tag type for the mode to read.
-    _operands = {
-        "source_expression": ValueOperand(arg="expression"),
-        "dest": TAG.of(
-            pointers=False,
-            immediate=False,
-            pointer_hint="Write into a tag, then copy() that tag to the pointer.",
-        ),
-    }
+    _operands = {"source_expression": _SOURCE, "dest": _DEST}
     _operand_rules = (
         NumberInto(value="source_expression", dest="dest", text=True),
         TextInto(dest="dest", writes="number"),
@@ -439,30 +455,40 @@ class CalcInstruction(OneShotMixin, Instruction):
     def __init__(
         self,
         expression: Any,
-        dest: Tag,
+        dest: Any,
         *,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
+        self.source_expression: Value | Span = _SOURCE.parse("math()", "expression", expression)
+        self.dest: TagArg = _DEST.parse_tag("math()", "dest", dest)
+        check_rules(
+            self._operands,
+            self._operand_rules,
+            "math()",
+            {"source_expression": expression, "dest": dest},
+        )
         check_float_literals(expression)
-        self.source_expression = expression
-        self.dest = dest
-        self.mode_inference = infer_calc_mode(expression, dest)
+        self.mode_inference = infer_calc_mode(expression, self.dest.tag)
         self.mode = self.mode_inference.mode
         # Only a Real shows the sign of a 0.  Text keeps Python's ops, so "5" * 2 is "55".
-        into_real = getattr(dest, "type", None) is TagType.REAL and not may_be_text(expression)
+        into_real = self.dest.tag.type is TagType.REAL and not may_be_text(expression)
+        # The analyses and the code generator read this formula.  calc_form() rewrites
+        # it for the mode.  It is not a parse result.
         self.expression = calc_form(expression, self.mode, into_real=into_real)
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        # Evaluate expression (handles Tag, Expression, IndirectRef, literal).
         # A failing operation gives 0 and notes its flag in *faults* (CALC_FAULTS).  The
         # formula carries on.  A division by zero gives 0 and not Inf, so a result that
         # is not finite comes from an Inf or NaN operand, or from an overflow.
         faults: list[str] = []
         token = CALC_FAULTS.set(faults)
         try:
-            value = resolve_tag_or_value_ctx(self.expression, ctx)
+            value = self._read(ctx)
         except IndexError:
             # An indexed source below its block sets the address-error flag and writes
             # nothing, as copy(), the kernel and CircuitPython do.  The flag comes after
@@ -476,16 +502,36 @@ class CalcInstruction(OneShotMixin, Instruction):
             _set_fault_address_error(ctx)
             return
 
-        if _math_out_of_range_for_dest(value, self.dest, self.mode):
+        dest = self.dest.tag
+        if _math_out_of_range_for_dest(value, dest, self.mode):
             _set_fault_out_of_range(ctx)
 
         # Truncate to destination type
         try:
-            value = computed_real(_truncate_to_tag_type(value, self.dest, self.mode))
+            value = computed_real(_truncate_to_tag_type(value, dest, self.mode))
         except OverflowError:
             _set_fault_out_of_range(ctx)
-            value = _truncate_to_tag_type(0, self.dest, self.mode)
+            value = _truncate_to_tag_type(0, dest, self.mode)
 
-        # Resolve destination name (handles indirect)
-        target_name = resolve_tag_name_ctx(self.dest, ctx)
-        ctx.set_tag(target_name, value)
+        ctx.set_tag(dest.name, value)
+
+    def _read(self, ctx: ScanContext) -> Any:
+        """Return the value of the formula on this scan.
+
+        A formula or a constant is read from ``expression``, the form that the mode runs.
+        The mode never changes a tag, a pointer or a range.
+        """
+        source = self.source_expression
+        match source:
+            case TagArg() | PointerArg():
+                return _read(source, ctx)
+            case ExprArg():
+                return self.expression.evaluate(ctx)
+            case ConstArg():
+                return self.expression
+            case RangeArg(span=span) | PointerRangeArg(span=span):
+                # NumberInto lets a range through only into a Bool.  The store converts
+                # the range object to a Bool.
+                return span
+            case _:
+                assert_never(source)
