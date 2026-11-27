@@ -486,20 +486,20 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
-- **The sign of a zero in a product after a minus sign.** pyrung stores the zero sign that a CLICK stores in each
-  runtime (round b16, `math_range/minus_sign` and `zero_sum`). `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on
-  import. Their pairs need the 14 zero-sign rows that `PENDING_ZERO_SIGNS` lists, in a conformance part of their own.
-  `- ( DF1 ) / DF2` and `- ( DF1 ) MOD DF2` need an order probe. With 5.0 and 0.0 into a DF, +0.0 means that the
-  minus sign applies first.
+- **The sign of a zero in a product after a minus sign.** `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on import.
+  Round b20 read the product of a zero and a number at 5.0 and -5.0 only, and each gave the sign that a double gives.
+  The 9 rows that `PENDING_ZERO_SIGNS` lists need every value of their class. Sam decides whether one value stands for
+  its class. If it does, both decimal pairs join `SAME_VALUE_ON_PLAIN_OPERANDS`. No conformance case reads these rows.
+- **A hex minus sign before `*` or `/`.** `- 5h * DH1`, `- DH1 * DH2`, `- ( DH1 ) * DH2` and `- 5h / DH1` warn on
+  import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. No reading shows a hex `/` of a
+  negative value whose quotient has a fraction, such as -5h / 2h.
 - **A Math pair read in one mode only.** The pair lists in `click/codegen/formula.py` have no mode. pyrung assumes
-  that one parser sets the order in both modes. Read a hex case of a pair read only in decimal, and the reverse:
-  - hex `DH1 MOD DH2 MOD DH3` with 7h, 5h and 3h stores 2h from the left and 1h from the right.
-  - decimal `DS1 / DS2 MOD 3` with 7 and 2, into a DF, stores 0.5 from the left and 3.5 from the right.
+  that one parser sets the order in both modes. Round b20 checked two pairs, MOD MOD in hex and `/` MOD in decimal.
+  Each had the order of the other mode. Most other pairs were read in one mode only.
 - **`math_range/minus_sign` and `zero_sum` need a CLICK run.** Their expectations changed to round b16's readings,
   so their hashes changed. Run them on a CLICK to confirm them at the new hashes.
-- **Two open questions about the formula parser.** The parser drops a unary `+`, and no reading shows whether CLICK
-  keeps it as a token. `pyrung.click` exports `parse_click_formula` and `Formula` but not the node classes, such as
-  `BinaryOp`. Export them if ClickNick needs to check a node's class.
+- **The formula parser's node classes.** `pyrung.click` exports `parse_click_formula` and `Formula` but not the node
+  classes, such as `BinaryOp`. Export them if ClickNick needs to check a node's class.
 - **A Math step past 2\*\*53 is rounded to a double.** The rounded value can land just past an exact corner, as in
   `13 ** (A + 15)`. No false domain was found (math-flags review, 2026-11-26).
 - **The jit declines a scan that calls a helper with a default argument.** Four CircuitPython helpers take
