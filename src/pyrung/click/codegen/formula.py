@@ -30,9 +30,15 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
     ("+", "-"),
 )
 
-#: A minus sign before an address, as an operator in :data:`CONFIRMED_PAIRS`. A minus sign
-#: before a constant is part of the constant (CLICK stores ``-2`` as H-2), so it is no operator.
+#: A minus sign before an address, as an operator in :data:`CONFIRMED_PAIRS`. In decimal mode
+#: a minus sign before a constant is part of the constant (CLICK stores ``-2`` as H-2), so it
+#: is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
+
+#: A minus sign before a constant in hex mode, as an operator in :data:`CONFIRMED_PAIRS`. CLICK
+#: stores it as an operator of its own: laddercodec writes ``- 5h / DH1`` as ``-#UH5#/#DH1``,
+#: the same form as ``- DH1 / DH2``. No reading has run one before another operator.
+NEGATE_CONSTANT = "a minus sign before a hex constant"
 
 #: A minus sign before a bracket, and before a function, as operators in
 #: :data:`CONFIRMED_PAIRS`. They are two operators, because a function can raise an error of
@@ -160,6 +166,7 @@ SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
     ("OR", "OR", True),
     ("XOR", "XOR", True),
     (NEGATE_BRACKET, "MOD", True),
+    (NEGATE_CONSTANT, "MOD", True),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
@@ -271,7 +278,7 @@ class RangeCall(_Node):
 
 @dataclass(frozen=True)
 class Negate(_Node):
-    """A minus sign before an address, a function or a bracket."""
+    """A minus sign before an address, a function, a bracket, or a constant in hex mode."""
 
     operand: Formula
 
@@ -299,8 +306,8 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     bracket, or one argument of a function. So ``DS1 - DS2 + DS3 * DS4`` needs the pairs
     ``- +``, ``- *`` and ``+ *``, and ``( DS1 - DS2 ) * 3`` needs none. A minus sign is an
     operator too, of the kind :data:`NEGATE_ADDRESS`, :data:`NEGATE_BRACKET`,
-    :data:`NEGATE_FUNCTION`, :data:`NEGATE_POINTER`, :data:`NEGATE_PI` or
-    :data:`NEGATE_MINUS`.
+    :data:`NEGATE_FUNCTION`, :data:`NEGATE_POINTER`, :data:`NEGATE_PI`, :data:`NEGATE_MINUS`
+    or :data:`NEGATE_CONSTANT`.
 
     A minus sign applies before every operator to its left in its scope, so it pairs only with
     the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A pair in
@@ -366,6 +373,8 @@ def operator_kind(node: Formula) -> str | None:
         return NEGATE_POINTER
     if isinstance(operand, Pi):
         return NEGATE_PI
+    if isinstance(operand, Number):
+        return NEGATE_CONSTANT
     return NEGATE_MINUS
 
 
@@ -519,8 +528,9 @@ class _Parser:
         if token == ("punct", "-"):
             self.pos += 1
             after = self._peek()
-            if after is not None and after[0] in ("number", "hex"):
-                # CLICK stores a minus sign before a constant in the constant (-2 is H-2).
+            if not self.hex_mode and after is not None and after[0] in ("number", "hex"):
+                # A decimal CLICK stores a minus sign before a constant in the constant (-2 is
+                # H-2). In hex mode the minus sign stays an operator.
                 self.pos += 1
                 return self._number(after, negative=True)
             return Negate(self._unary())

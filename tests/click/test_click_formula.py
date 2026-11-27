@@ -30,6 +30,7 @@ from pyrung.click.codegen.formula import (
     CONFIRMED_PAIRS,
     NEGATE_ADDRESS,
     NEGATE_BRACKET,
+    NEGATE_CONSTANT,
     NEGATE_FUNCTION,
     NEGATE_MINUS,
     NEGATE_PI,
@@ -302,6 +303,7 @@ def test_click_formula_parse_refuses_a_power_in_hex_mode(text: str) -> None:
 _MINUS_SIGNS = {
     NEGATE_ADDRESS,
     NEGATE_BRACKET,
+    NEGATE_CONSTANT,
     NEGATE_FUNCTION,
     NEGATE_POINTER,
     NEGATE_PI,
@@ -620,6 +622,9 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
         texts = [f"{bank}1 {a} {bank}2 {b} {bank}3" for a in ops for b in ops]
         texts += [f"- {bank}1 {b} {bank}2" for b in ops]
         texts += [f"- ( {bank}1 ) {b} {bank}2" for b in ops]
+        if hex_mode:
+            # The pair holds for every constant, so it comes with small and large ones.
+            texts += [f"- {c} {b} {bank}2" for c in ("0h", "5h", "8000h", "FFFFh") for b in ops]
         texts += [f"- {call.format(b)}" for call in _function_calls(bank) for b in ops]
         for text in texts:
             tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
@@ -899,6 +904,17 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         ("- DS[DS1] ^ 2", False, [(NEGATE_POINTER, "^")]),
         ("- - DS1 ^ 2", False, [(NEGATE_MINUS, "^")]),
         ("- - DS1 + 2", False, [(NEGATE_MINUS, "+")]),
+        # In hex mode a minus sign before a constant is an operator, and no reading orders it.
+        # math_order/hex_minus_and and hex_minus_or move each constant into a register, so they
+        # read a minus sign before an address.
+        ("- 5h / DH1", True, [(NEGATE_CONSTANT, "/")]),
+        ("- 5h * DH1", True, [(NEGATE_CONSTANT, "*")]),
+        ("- 2h AND 3h", True, [(NEGATE_CONSTANT, "AND")]),
+        ("- 2h OR 1h", True, [(NEGATE_CONSTANT, "OR")]),
+        ("- 3h XOR 1h", True, [(NEGATE_CONSTANT, "XOR")]),
+        ("- 5h + DH1", True, [(NEGATE_CONSTANT, "+")]),
+        ("- 5h - DH1", True, [(NEGATE_CONSTANT, "-")]),
+        ("- 5 / DH1", True, [(NEGATE_CONSTANT, "/")]),
         # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
         ("- ( DH1 ) * DH2", True, [(NEGATE_BRACKET, "*")]),
@@ -979,12 +995,25 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DS1 ) - DS2", False),
         ("- DS1 / DS2", False),
         ("- DH1 MOD DH2", True),
+        # A bracket gives the order. In decimal mode the minus sign is part of the constant.
+        ("( - 5h ) / DH1", True),
+        ("- 5 / DS1", False),
+        # Both groupings give the same value and flags on plain operands.
+        ("- 5h MOD DH1", True),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
     text: str, hex_mode: bool
 ) -> None:
     assert parse_click_formula(text, hex_mode=hex_mode) is not None
+
+
+def test_click_formula_parse_keeps_a_hex_minus_sign_before_a_constant_as_an_operator() -> None:
+    # CLICK stores - 5h / DH1 as -#UH5#/#DH1 and - 5 / DS1 as #H-5#/#DS1.
+    negate = parse_with_unconfirmed_pairs("- 5h / DH1", hex_mode=True)[0].left
+    assert negate == formula_module.Negate(Number(5))
+    folded = parse_with_unconfirmed_pairs("- 5 / DS1")[0].left
+    assert folded == Number(-5)
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1151,7 @@ def test_imported_constants_compute_what_math_computes(
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("- DF2 * 4", "DF3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
         ("- ( DF1 ) MOD DF2", "DF3", f"{NEGATE_BRACKET} and 'MOD'", "the minus sign first"),
+        ("- 5h / DH1", "DH2,mode=hex", f"{NEGATE_CONSTANT} and '/'", "the minus sign first"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(
@@ -1136,6 +1166,27 @@ def test_imported_formula_with_an_unconfirmed_pair_warns(
         "the formula in CLICK to set the order."
     ]
     assert all(m.isascii() for m in messages)
+
+
+@pytest.mark.parametrize(
+    ("formula", "stored"),
+    [
+        # A CLICK stores FFFEh and sets SC43 (math_flags, the first case).
+        ("- 2h", 0xFFFE),
+        # The same value as - DH3 MOD DH1 with DH3 = 5h. A constant of FFFBh would give 2h.
+        ("- 5h MOD DH1", 0xFFFE),
+    ],
+)
+def test_imported_hex_minus_sign_before_a_constant_runs_in_the_scan(
+    formula: str, stored: int, runner_factory
+) -> None:
+    source = ladder_to_pyrung(_bundle("copy(3h,DH1)", f"math({formula},DH2,mode=hex)"))
+    assert "LiteralExpr(0x" in _math_line(source)
+    plc = runner_factory(exec_with_source(source)["logic"])
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["DH2"] & 0xFFFF == stored
+    assert tags["fault.out_of_range"] is True
 
 
 # ---------------------------------------------------------------------------

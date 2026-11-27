@@ -582,6 +582,12 @@ def _render_parsed_formula(
             return f"{block}.{_RANGE_AGG_TO_METHOD[node.name]}()", _ATOM_STRENGTH
         if isinstance(node, Negate):
             operand, strength = render(node.operand)
+            if _is_python_number(node.operand):
+                # Python would fold the minus sign into the constant when it loads the file. A
+                # hex Math reads a negative constant as its 16 bits, so - 5h / DH1 would
+                # divide FFFBh. A LiteralExpr keeps the minus sign a step of the scan.
+                operand, strength = f"LiteralExpr({operand})", _ATOM_STRENGTH
+                collection.used_expr_funcs.add("LiteralExpr")
             if strength < _UNARY_STRENGTH:
                 operand = f"({operand})"
             return f"-{operand}", _UNARY_STRENGTH
@@ -620,8 +626,6 @@ def _render_number(value: int | float, is_hex: bool, text: str) -> tuple[str, in
 
 def _is_python_number(node: Formula) -> bool:
     """Return whether Python computes *node* to a plain number when it loads the file."""
-    if isinstance(node, Negate):
-        return _is_python_number(node.operand)
     if isinstance(node, Call) and _CLICK_FUNC_TO_PYTHON[node.name] == "abs":
         # ABS is Python's builtin abs, which gives a plain number for a plain number.
         return len(node.args) == 1 and _is_python_number(node.args[0])
@@ -629,13 +633,15 @@ def _is_python_number(node: Formula) -> bool:
 
 
 def _has_constant_operation(node: Formula) -> bool:
-    """Return whether the rendered *node* has an operation between two plain numbers."""
+    """Return whether the rendered *node* has an operation between two plain numbers, or a
+    minus sign before one.
+    """
     if isinstance(node, BinaryOp):
         if _is_python_number(node.left) and _is_python_number(node.right):
             return True
         return _has_constant_operation(node.left) or _has_constant_operation(node.right)
     if isinstance(node, Negate):
-        return _has_constant_operation(node.operand)
+        return _is_python_number(node.operand) or _has_constant_operation(node.operand)
     if isinstance(node, Call):
         return any(_has_constant_operation(arg) for arg in node.args)
     return False
