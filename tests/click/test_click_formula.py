@@ -34,6 +34,7 @@ from pyrung.click.codegen.formula import (
     NEGATE_FUNCTION,
     NEGATE_MINUS,
     NEGATE_PI,
+    NEGATE_PLUS,
     NEGATE_POINTER,
     PLUS_SIGN,
     READ_FORMULAS,
@@ -330,6 +331,7 @@ _SIGNS = {
     NEGATE_POINTER,
     NEGATE_PI,
     NEGATE_MINUS,
+    NEGATE_PLUS,
     PLUS_SIGN,
 }
 
@@ -337,7 +339,7 @@ _SIGNS = {
 def _written_orders(pair: frozenset[str]) -> list[tuple[str, str]]:
     """Return each order in which a formula can write the two operators of *pair*.
 
-    A minus sign, or a plus sign in hex mode, pairs only with an operator to its right.
+    A minus sign or a plus sign pairs only with an operator to its right.
     """
     if len(pair) == 1:
         [op] = pair
@@ -645,10 +647,13 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
         texts = [f"{bank}1 {a} {bank}2 {b} {bank}3" for a in ops for b in ops]
         texts += [f"- {bank}1 {b} {bank}2" for b in ops]
         texts += [f"- ( {bank}1 ) {b} {bank}2" for b in ops]
+        # A decimal plus before a constant has no node, so a stand-in for the register would
+        # drop it. A bracket keeps it.
+        plus = f"+ {bank}1" if hex_mode else f"+ ( {bank}1 )"
+        texts += [f"{plus} {b} {bank}2" for b in ops]
         if hex_mode:
             # The pair holds for every constant, so it comes with small and large ones.
             texts += [f"- {c} {b} {bank}2" for c in ("0h", "5h", "8000h", "FFFFh") for b in ops]
-            texts += [f"+ {bank}1 {b} {bank}2" for b in ops]
         texts += [f"- {call.format(b)}" for call in _function_calls(bank) for b in ops]
         for text in texts:
             tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
@@ -896,6 +901,10 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         ("+ 5h * DH1", True, [(PLUS_SIGN, "*")]),
         ("+ ( 0h - DH1 ) + 1h", True, [(PLUS_SIGN, "+")]),
         ("+ 0h - DH1 + 1h", True, [(PLUS_SIGN, "-"), (PLUS_SIGN, "+")]),
+        ("- + 5h * DH1", True, [(NEGATE_PLUS, "*"), (PLUS_SIGN, "*")]),
+        # Round b20 read a decimal plus before a constant only.
+        ("+ DS1 * 2", False, [(PLUS_SIGN, "*")]),
+        ("+ ( DS1 - 3 ) * 2", False, [(PLUS_SIGN, "*")]),
         # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
         ("- ( DH1 ) * DH2", True, [(NEGATE_BRACKET, "*")]),
@@ -1019,7 +1028,7 @@ def test_click_formula_parse_keeps_a_hex_minus_sign_before_a_constant_as_an_oper
     assert folded == Number(-5)
 
 
-def test_click_formula_parse_keeps_a_hex_plus_sign_as_an_operator() -> None:
+def test_click_formula_parse_keeps_a_plus_sign_as_an_operator() -> None:
     # Round b20 read + 5 * DS401 and + 5h * DH401 with 3 in the register. CLICK stored the
     # decimal plus in the constant (H+5#*#DS401) and the hex plus as a token of its own
     # (+#UH5#*#DH401). Each stored 15.
@@ -1034,6 +1043,10 @@ def test_click_formula_parse_keeps_a_hex_plus_sign_as_an_operator() -> None:
     )
     assert bracket[0] != plain[0]
     assert bracket[1] and plain[1]
+    # No reading shows a decimal plus before an address or a bracket.
+    assert parse_with_unconfirmed_pairs("+ DS1 * 2")[0] == BinaryOp(
+        "*", formula_module.Plus(Address("DS", 1)), Number(2)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1093,14 +1106,30 @@ def test_imported_formula_brackets_what_click_groups(token: str, line: str) -> N
     [
         ("math(+ 5h * DH1,DH2,mode=hex)", "math(+LiteralExpr(0x5) * DH1, DH2)"),
         ("math(+ ( 0h - DH1 ) + 1h,DH2,mode=hex)", "math(+(0x0 - DH1) + 0x1, DH2)"),
+        ("math(+ DS1 * 2,DS2)", "math(+DS1 * 2, DS2)"),
+        ("math(+ ( DS1 - 3 ) * 2,DS2)", "math(+(DS1 - 3) * 2, DS2)"),
     ],
 )
-def test_imported_formula_keeps_a_hex_plus_sign(token: str, line: str) -> None:
-    # No reading shows whether a hex plus cuts its operand to 16 bits, so the import keeps it
-    # as a step of the scan, and warns.
+def test_imported_formula_keeps_a_plus_sign(token: str, line: str) -> None:
+    # No reading shows whether a hex plus cuts its operand to 16 bits, or what a decimal plus
+    # before an address or a bracket does. So the import keeps the plus as a step of the scan,
+    # and warns.
     with pytest.warns(UserWarning, match=PLUS_SIGN):
         source = ladder_to_pyrung(_bundle(token))
     assert _math_line(source) == line
+    # The export, imported again, gives the same line.
+    ns = exec_with_source(source)
+    exported = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    with pytest.warns(UserWarning, match=PLUS_SIGN):
+        again = ladder_to_pyrung(exported)
+    assert _math_line(again) == line
+
+
+def test_imported_formula_names_a_minus_sign_before_a_plus_sign() -> None:
+    with pytest.warns(UserWarning) as caught:
+        source = ladder_to_pyrung(_bundle("math(- + 5h * DH1,DH2,mode=hex)"))
+    assert any(f"uses {NEGATE_PLUS} and '*'" in str(w.message) for w in caught)
+    assert _math_line(source) == "math(-+LiteralExpr(0x5) * DH1, DH2)"
 
 
 def test_imported_formula_drops_a_decimal_plus_sign() -> None:
@@ -1193,6 +1222,7 @@ def test_imported_constants_compute_what_math_computes(
         ("- ( DF1 ) * DF2", "DF3", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
         ("- 5h / DH1", "DH2,mode=hex", f"{NEGATE_CONSTANT} and '/'", "the minus sign first"),
         ("+ 5h * DH1", "DH2,mode=hex", f"{PLUS_SIGN} and '*'", "the plus sign first"),
+        ("+ DS1 * 2", "DS2", f"{PLUS_SIGN} and '*'", "the plus sign first"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(
@@ -1473,11 +1503,12 @@ def _close(got: Any, want: float) -> bool:
 @pytest.fixture(scope="module")
 def confirmed() -> tuple[Any, ...]:
     # The program moves each reading onto registers of its own, so the formulas of
-    # READ_FORMULAS no longer match a reading's tree, and each warns once.
+    # READ_FORMULAS no longer match a reading's tree, and each warns once. b20-d_dec warns too,
+    # because its plus now stands before a register.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         program = _program(READINGS)
-    assert len(caught) == len(READ_FORMULAS)
+    assert len(caught) == len(READ_FORMULAS) + 1
     return program
 
 

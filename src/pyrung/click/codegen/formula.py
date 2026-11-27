@@ -47,17 +47,19 @@ NEGATE_CONSTANT = "a minus sign before a hex constant"
 NEGATE_BRACKET = "a minus sign before a bracket"
 NEGATE_FUNCTION = "a minus sign before a function"
 
-#: A minus sign before a pointer, before PI and before another minus sign. Each is an operator
-#: of its own, because no reading has run one yet.
+#: A minus sign before a pointer, before PI, before another minus sign and before a plus sign.
+#: Each is an operator of its own, because no reading has run one yet.
 NEGATE_POINTER = "a minus sign before a pointer"
 NEGATE_PI = "a minus sign before PI"
 NEGATE_MINUS = "a minus sign before another minus sign"
+NEGATE_PLUS = "a minus sign before a plus sign"
 
-#: A plus sign in hex mode, as an operator in :data:`CONFIRMED_PAIRS`. CLICK stores it as a
-#: token of its own, such as ``+#UH5#*#DH401`` (round b20). It is an operator because no
-#: reading shows whether it cuts its operand to 16 bits, as AND does. In decimal mode the
-#: parse drops a plus. CLICK stores one before a constant in the constant (H+5).
-PLUS_SIGN = "a plus sign in hex mode"
+#: A plus sign, as an operator in :data:`CONFIRMED_PAIRS`. In hex mode CLICK stores it as a
+#: token of its own, such as ``+#UH5#*#DH401`` (round b20). No reading shows whether it cuts
+#: its operand to 16 bits, as AND does. In decimal mode CLICK stores a plus before a constant
+#: in the constant (H+5), so the parse drops that one. No reading shows a decimal plus before
+#: an address or a bracket, so that one is an operator too.
+PLUS_SIGN = "a plus sign"
 
 #: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
 #: readings. Two operators meet when one is an operand of the other, and the operand has no
@@ -302,7 +304,7 @@ class Negate(_Node):
 
 @dataclass(frozen=True)
 class Plus(_Node):
-    """A plus sign before an operand in hex mode."""
+    """A plus sign before an operand. In decimal mode a plus before a constant has no node."""
 
     operand: Formula
 
@@ -334,7 +336,7 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     """
     # The pairs that a formula needs are those of each bracket scope: the formula outside
     # brackets, the inside of one bracket, or one argument of a function. A minus sign is an
-    # operator of one of the NEGATE_* kinds, and a plus sign in hex mode is a PLUS_SIGN. Each
+    # operator of one of the NEGATE_* kinds, and a plus sign is a PLUS_SIGN. Each
     # applies before every operator to its left in its scope, so it pairs only with the
     # operators to its right. A pair in SAME_VALUE_PAIRS needs no reading. A pair in
     # SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps have plain operands. A
@@ -402,6 +404,8 @@ def operator_kind(node: Formula) -> str | None:
         return NEGATE_PI
     if isinstance(operand, Number):
         return NEGATE_CONSTANT
+    if isinstance(operand, Plus):
+        return NEGATE_PLUS
     return NEGATE_MINUS
 
 
@@ -551,9 +555,12 @@ class _Parser:
         token = self._peek()
         if token == ("punct", "+"):
             self.pos += 1
-            if self.hex_mode:
-                return Plus(self._unary())
-            return self._unary()
+            after = self._peek()
+            if not self.hex_mode and after is not None and after[0] in ("number", "hex"):
+                # A decimal CLICK stores a plus before a constant in the constant (+5 is H+5).
+                self.pos += 1
+                return self._number(after)
+            return Plus(self._unary())
         if token == ("punct", "-"):
             self.pos += 1
             after = self._peek()
