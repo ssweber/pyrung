@@ -40,7 +40,14 @@ from pyrung.core.expression import (
     ExprCompare,
     Expression,
 )
-from pyrung.core.instruction.operands import PARSED, held
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    TagArg,
+)
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -138,50 +145,64 @@ def _instruction_fields(instr: Any) -> tuple[str, ...] | None:
 # ---------------------------------------------------------------------------
 
 
+def operand_object(value: Any) -> tuple[Any, bool]:
+    """Return the object inside a parsed operand, and whether it is in ``immediate()``.
+
+    Return any other value unchanged, with False.  The program walkers call this on each
+    value, so they reach the tags inside an instruction's parsed operands, a tuple of
+    them included.
+    """
+    match value:
+        case TagArg(tag=inner, immediate=immediate) | RangeArg(span=inner, immediate=immediate):
+            return inner, immediate
+        case (
+            PointerArg(ref=inner)
+            | PointerRangeArg(span=inner)
+            | ExprArg(expr=inner)
+            | ConstArg(value=inner)
+        ):
+            return inner, False
+        case _:
+            return value, False
+
+
+def _classify_immediate(wrapped: Any) -> tuple[ValueKind, str, str, dict[str, str | int | bool]]:
+    """Classify *wrapped*, an operand in ``immediate()``, as one ``ImmediateRef`` fact."""
+    metadata: dict[str, str | int | bool] = {
+        "wrapped_type": type(wrapped).__name__,
+        "wrapped_value_kind": (
+            "tag"
+            if isinstance(wrapped, Tag)
+            else "block_range"
+            if isinstance(wrapped, BlockRange)
+            else "unknown"
+        ),
+    }
+    if isinstance(wrapped, Tag):
+        metadata["tag_name"] = wrapped.name
+        metadata["tag_type"] = wrapped.type.name
+        summary = f"ImmediateRef(Tag({wrapped.name}:{wrapped.type.name}))"
+    elif isinstance(wrapped, BlockRange):
+        summary = f"ImmediateRef(BlockRange({wrapped.block.name}[{wrapped.start}:{wrapped.end}]))"
+        metadata["block_name"] = wrapped.block.name
+        metadata["start"] = wrapped.start
+        metadata["end"] = wrapped.end
+    else:
+        summary = f"ImmediateRef({type(wrapped).__name__})"
+    return "immediate_ref", ImmediateRef.__name__, summary, metadata
+
+
 def _classify_value(
     obj: Any,
 ) -> tuple[ValueKind, str, str, dict[str, str | int | bool]]:
     """Classify a value by exact type checks in priority order.
 
-    Returns (value_kind, value_type, summary, metadata).
+    Returns (value_kind, value_type, summary, metadata).  The caller classifies an
+    operand in ``immediate()`` with :func:`_classify_immediate`.
     """
     from pyrung.core.expression import format_expr
 
-    # 1. ImmediateRef wrapper
-    if isinstance(obj, ImmediateRef):
-        wrapped = obj.value
-        metadata: dict[str, str | int | bool] = {
-            "wrapped_type": type(wrapped).__name__,
-            "wrapped_value_kind": (
-                "tag"
-                if isinstance(wrapped, Tag)
-                else "block_range"
-                if isinstance(wrapped, BlockRange)
-                else "unknown"
-            ),
-        }
-        if isinstance(wrapped, Tag):
-            metadata["tag_name"] = wrapped.name
-            metadata["tag_type"] = wrapped.type.name
-            summary = f"ImmediateRef(Tag({wrapped.name}:{wrapped.type.name}))"
-        elif isinstance(wrapped, BlockRange):
-            summary = (
-                f"ImmediateRef(BlockRange({wrapped.block.name}[{wrapped.start}:{wrapped.end}]))"
-            )
-            metadata["block_name"] = wrapped.block.name
-            metadata["start"] = wrapped.start
-            metadata["end"] = wrapped.end
-        else:
-            summary = f"ImmediateRef({type(wrapped).__name__})"
-
-        return (
-            "immediate_ref",
-            type(obj).__name__,
-            summary,
-            metadata,
-        )
-
-    # 2. IndirectExprRef (before IndirectRef — both are dataclasses, no subclass)
+    # 1. IndirectExprRef (before IndirectRef — both are dataclasses, no subclass)
     if isinstance(obj, IndirectExprRef):
         return (
             "indirect_expr_ref",
@@ -194,7 +215,7 @@ def _classify_value(
             },
         )
 
-    # 3. IndirectRef
+    # 2. IndirectRef
     if isinstance(obj, IndirectRef):
         metadata: dict[str, str | int | bool] = {
             "block_name": obj.block.name,
@@ -214,7 +235,7 @@ def _classify_value(
             metadata,
         )
 
-    # 4. Expression
+    # 3. Expression
     if isinstance(obj, Expression):
         return (
             "expression",
@@ -223,7 +244,7 @@ def _classify_value(
             {"expr_type": type(obj).__name__, "expr_dsl": format_expr(obj)},
         )
 
-    # 5. IndirectBlockRange (before BlockRange)
+    # 4. IndirectBlockRange (before BlockRange)
     if isinstance(obj, IndirectBlockRange):
         return (
             "indirect_block_range",
@@ -232,7 +253,7 @@ def _classify_value(
             {"block_name": obj.block.name},
         )
 
-    # 6. BlockRange
+    # 5. BlockRange
     if isinstance(obj, BlockRange):
         return (
             "block_range",
@@ -241,7 +262,7 @@ def _classify_value(
             {"block_name": obj.block.name, "start": obj.start, "end": obj.end},
         )
 
-    # 7. Condition (and recurse — handled by caller)
+    # 6. Condition (and recurse — handled by caller)
     if isinstance(obj, Condition):
         return (
             "condition",
@@ -250,7 +271,7 @@ def _classify_value(
             {"condition_type": type(obj).__name__},
         )
 
-    # 8. CopyConverter
+    # 7. CopyConverter
     if isinstance(obj, CopyConverter):
         metadata: dict[str, str | int | bool] = {"mode": obj.mode}
         if obj.mode == "text":
@@ -264,7 +285,7 @@ def _classify_value(
             metadata,
         )
 
-    # 9. Tag
+    # 8. Tag
     if isinstance(obj, Tag):
         return (
             "tag",
@@ -273,7 +294,7 @@ def _classify_value(
             {"tag_name": obj.name, "tag_type": obj.type.name},
         )
 
-    # 10. Literal scalars (bool before int since bool is subclass of int)
+    # 9. Literal scalars (bool before int since bool is subclass of int)
     if isinstance(obj, bool):
         return ("literal", "bool", repr(obj), {})
     if obj is None:
@@ -281,7 +302,7 @@ def _classify_value(
     if isinstance(obj, (int, float, str)):
         return ("literal", type(obj).__name__, repr(obj), {})
 
-    # 11. Enum values
+    # 10. Enum values
     if isinstance(obj, Enum):
         return (
             "literal",
@@ -290,7 +311,7 @@ def _classify_value(
             {"enum_value": obj.name},
         )
 
-    # 12. Unknown
+    # 11. Unknown
     return (
         "unknown",
         type(obj).__name__,
@@ -430,8 +451,7 @@ def walk_rung_operands(
                 walk_value(cond)
 
     def walk_value(value: Any) -> None:
-        if isinstance(value, PARSED):
-            value = held(value)
+        value = operand_object(value)[0]
         value_id = id(value)
         if value_id in seen_values:
             return
@@ -738,17 +758,25 @@ class _Walker:
         instr_type: str | None,
         arg_path: str,
     ) -> None:
-        if isinstance(obj, PARSED):
-            # The guard keys on the authored operand. Two copies into one tag then give
+        inner, immediate = operand_object(obj)
+        if immediate:
+            # The guard keys on the ImmediateRef that the author passed.
+            key = obj.wrapper
+        elif isinstance(inner, ImmediateRef):  # a contact in immediate()
+            key, inner, immediate = inner, inner.value, True
+        else:
+            # The guard keys on the operand itself.  Two copies into one tag then give
             # one fact, as two operands of any other instruction do.
-            obj = held(obj)
-        # Cycle guard
-        seen_key = (id(obj), arg_path)
+            key = inner
+        seen_key = (id(key), arg_path)
         if seen_key in self._seen:
             return
         self._seen.add(seen_key)
 
-        kind, value_type, summary, metadata = _classify_value(obj)
+        if immediate:
+            kind, value_type, summary, metadata = _classify_immediate(inner)
+        else:
+            kind, value_type, summary, metadata = _classify_value(inner)
 
         loc = ProgramLocation(
             scope=scope,
@@ -770,8 +798,8 @@ class _Walker:
         )
 
         # Recurse into condition children
-        if kind == "condition" and isinstance(obj, Condition):
-            for child_name, child_val in _condition_children(obj):
+        if kind == "condition" and isinstance(inner, Condition):
+            for child_name, child_val in _condition_children(inner):
                 self._walk_value(
                     child_val,
                     scope,
@@ -783,9 +811,9 @@ class _Walker:
                     f"{arg_path}.{child_name}",
                 )
 
-        if kind == "immediate_ref" and isinstance(obj, ImmediateRef):
+        if immediate:
             self._walk_value(
-                obj.value,
+                inner,
                 scope,
                 subroutine,
                 rung_index,
