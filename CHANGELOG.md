@@ -16,6 +16,8 @@
 ### Fixes
 
 - A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on `CompiledPLC` and in the generated CircuitPython code. 0.19.0 raised an error there.
+- `math()` on `Word` tags only now rounds a quotient below 0 down, as a CLICK does. `math((0 - DH[1]) / 3, DH[2])` with 1 now stores FFFFh and sets `fault.out_of_range` (it stored 0).
+- `ladder_to_pyrung()` now imports `- DS1 * DS2`, and `- 5h / DH1` in hex mode, with no warning. A CLICK was read computing each.
 
 ## v0.19.0 (2026-11-26)
 
