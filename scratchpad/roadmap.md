@@ -45,6 +45,20 @@ brackets in an exported `math()` stay low priority, outside this order.
     parse checks the shape of each operand: its kind, its type, a range against a tag, and a count. laddercodec keeps
     every CLICK rule (which banks, which addresses, which constants), and the export passes it the checked objects.
   - The operand declarations become pyrung's one grammar.
+- **`end_early()`, a conditional END in the main program.** It is the main-program counterpart of `return_early()`,
+  and comes after the rest of parse-once (Sam, 2026-11-26). The name says what the author means, and pairs with
+  `return_early()`. A CLICK keeps a conditional END mid-main (laddercodec's end-return round, cases f1 and f6), and
+  pyrung can't import one today. The import turns a conditional `end()` into `end_early()`, and the export writes it
+  back as `end()`. clicknick's round b19 read what a CLICK does (`plc-questions/b19/RESULTS.md`, firmware 4.00). Sam
+  accepted those readings as they are. [nothing]
+  - A true conditional END stops the scan there, on the first scan too.
+  - Each rung it skips keeps its state. An Out keeps its last value. TMR and TMRA hold Acc, then carry on with no
+    jump, and their done bits don't change.
+  - A counter compares with the input it saw the last time its rung ran. A pulse during the skip never counts.
+  - No SC flag changes.
+  - This is what `return_early()` already does in a subroutine, so `end_early()` can likely reuse that path.
+  - Add conformance cases for the forms b19 didn't read: a down counter, an off-delay timer, and timer units other
+    than ms.
 
 ## 0. Gate fixes, and the range bound
 
@@ -469,6 +483,20 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **The sign of an integer 0 stored into a Real.** pyrung stores +0.0 or -0.0 by grouping in four formulas.
+  `- DS1 / DS2` at (0, 1) and the MOD minus pairs at (0.0, 1.0) are examples. `DS * DS` at (0, -1) stores +0.0. Fix
+  it once round b16's `math_range/minus_sign` rows are read. The 31 rows of `PENDING_ZERO_SIGNS` that no case reads
+  then need a probe part of their own.
+- **A Math step past 2\*\*53 is rounded to a double.** The rounded value can land just past an exact corner, as in
+  `13 ** (A + 15)`. No false domain was found (math-flags review, 2026-11-26).
+- **The jit declines `_abs_int` and `_pow_calc`.** Their 3-argument calls, with `flags=None` by default, make the
+  guarded loop refuse the rung.
+- **A four-operand hex chain warns on import** (N18), even where its groupings agree. It is a missed exemption, not a
+  wrong value.
+- **A comment in hex Math.** At `circuitpy/codegen/compile/_primitives.py:182-184`, the comment should say that the
+  dividend is 0 or more.
+- **`send()` drops the Send function code on import.** A one-register run sends FC06, and a 2-Char TXT send exports
+  as FC16 with count 2. The bytes on the wire are the same. Add a function-code option if a device needs one.
 - **A scan that raises during a free run leaves the client showing "running".** The continue worker's thread dies
   with no last frame and no `stopped` event, so ClickNick's Simulator keeps showing RUN. Base 0.18.0 does the same.
   The fix is for the worker's `finally` to queue a frame with `running` false, a `stopped` event and the exception.
