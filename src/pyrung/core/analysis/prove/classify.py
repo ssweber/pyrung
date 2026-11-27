@@ -1099,7 +1099,7 @@ def _interval_bounds(
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[float, float] | None:
     """Resolve min/max interval for an expression node, or None if unbounded."""
-    from pyrung.core.expression import BinaryExpr, RangeAggregateExpr
+    from pyrung.core.expression import BinaryExpr, DoubleBinaryExpr, RangeAggregateExpr
 
     if isinstance(node, RangeAggregateExpr):
         # max/min/median/mean all lie in the hull of the member intervals.
@@ -1141,6 +1141,13 @@ def _interval_bounds(
 
     a_lo, a_hi = left
     b_lo, b_hi = right
+    if isinstance(node, DoubleBinaryExpr):
+        # The step computes in doubles, so its corners must too.  Past 2 ** 53 a double
+        # power differs from the exact one, and a Dint stores the double's low bits.
+        try:
+            a_lo, a_hi, b_lo, b_hi = (float(end) for end in (a_lo, a_hi, b_lo, b_hi))
+        except OverflowError:
+            return None
 
     if node.symbol in ("/", "//") and b_lo <= 0 <= b_hi:
         # When the divisor can be 0, the corners do not bound the quotient.  With D in

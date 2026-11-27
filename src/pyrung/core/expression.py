@@ -185,6 +185,26 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
     return result
 
 
+#: ln(2 ** 1024) is about 709.8.  An integer power whose natural log passes this limit is
+#: past the double range.  The limit is 10 higher, so a rounded log cannot cross it.
+POW_LOG_LIMIT = 720.0
+
+
+def int_power_past_doubles(a: Numeric, b: Numeric) -> bool:
+    """Return whether ``a ** b`` of two ints is surely past the double range.
+
+    A Math rounds such a power to +/-Inf, so it need not compute it.  Python's exact
+    ``5 ** 2147483647`` would take hours.  The test reads only a log, so it is cheap.
+    """
+    return (
+        type(a) is int
+        and type(b) is int
+        and b > 0
+        and abs(a) > 1
+        and math.log(abs(a)) * b > POW_LOG_LIMIT
+    )
+
+
 def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
     """Return ``a ** b`` as a Math computes it.
 
@@ -192,11 +212,18 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
     CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF. It stores 0 for
     ``0 ^ -1 + 5`` into a DS, because the whole formula is +Inf (hardware, 2026-11-10).
     Python raises ``ZeroDivisionError`` for both.
+
+    A decimal Math converts the operands to doubles first (``DoubleBinaryExpr``).  A hex
+    Math keeps an integer power exact, and so does a formula that reads text.  Such a
+    power past the double range is +/-Inf (:func:`int_power_past_doubles`).  The exact
+    power would round to the same Inf as a Math step (:func:`to_double`).
     """
     if a == 0 and b <= 0:
         if b == 0:
             raise QuietMathError(f"({a!r}) ** {b!r}")
         return math.inf
+    if int_power_past_doubles(a, b):
+        return -math.inf if a < 0 and b % 2 else math.inf
     return _op_pow(a, b)
 
 
@@ -637,12 +664,15 @@ class CalcUnaryExpr(UnaryExpr):
 
 
 class DoubleBinaryExpr(CalcBinaryExpr):
-    """A step of a decimal Math into a Real. It converts both operands to doubles.
+    """A step of a decimal Math that converts both operands to doubles.
 
     A CLICK computes this Math in doubles, so a DS of 0 is the double +0.0. A product or
     a MOD can then give -0.0. ``DS1 * DS2`` with 0 and -5 stores -0.0 into a DF
-    (hardware, 2026-11-26). ``calc_form`` builds this class for ``+``, ``-``, ``*``,
-    ``/``, MOD and ``**``. These are the operators of CLICK's decimal Math.
+    (hardware, 2026-11-26). Into a Real, ``calc_form`` builds this class for ``+``,
+    ``-``, ``*``, ``/``, MOD and ``**``. These are the operators of CLICK's decimal Math.
+    Into any other type it builds this class for ``**`` only. A DS or a DD then stores
+    the low bits of the double: ``3 ^ 35`` into a DD stores -651126888 (hardware,
+    2026-11-27).
     """
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:

@@ -64,6 +64,9 @@ if TYPE_CHECKING:
 
 CalcMode = Literal["decimal", "hex"]
 
+#: Which steps of a decimal Math convert their operands to doubles (:func:`calc_form`).
+CalcDoubles = Literal["none", "power", "all"]
+
 _SOURCE = ValueOperand(arg="expression")
 # A pointer or a constant has no tag type for the mode to read.
 _DEST = TAG.of(
@@ -160,6 +163,13 @@ _HEX_MASKED_SYMBOLS = frozenset({"<<", "&", "|", "^"})
 _DOUBLE_BINARY_SYMBOLS = frozenset({"+", "-", "*", "/", "%", "**"})
 _DOUBLE_UNARY_SYMBOLS = frozenset({"-", "+", "abs"})
 
+#: The binary and unary symbols that each :data:`CalcDoubles` computes in doubles.
+_DOUBLES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "none": (frozenset(), frozenset()),
+    "power": (frozenset({"**"}), frozenset()),
+    "all": (_DOUBLE_BINARY_SYMBOLS, _DOUBLE_UNARY_SYMBOLS),
+}
+
 
 @dataclass(frozen=True)
 class _CalcForm:
@@ -170,7 +180,8 @@ class _CalcForm:
     mask_bits: bool = False
     calc_ops: bool = True
     whole_division: bool = False
-    doubles: bool = False
+    binary_doubles: frozenset[str] = frozenset()
+    unary_doubles: frozenset[str] = frozenset()
 
     def cut(self, value: int) -> int:
         return value & 0xFFFF if self.unsigned else _int32(value)
@@ -211,7 +222,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
                 op = _op_hex_div
         cls = type(value)
         if form.calc_ops:
-            doubles = form.doubles and value.symbol in _DOUBLE_BINARY_SYMBOLS
+            doubles = value.symbol in form.binary_doubles
             cls = DoubleBinaryExpr if doubles else CalcBinaryExpr
         node = value
         if (
@@ -231,7 +242,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             op = ABS_OF_TYPE.get(operand.tag.type.name, op)
         cls = type(value)
         if form.calc_ops:
-            doubles = form.doubles and value.symbol in _DOUBLE_UNARY_SYMBOLS
+            doubles = value.symbol in form.unary_doubles
             cls = DoubleUnaryExpr if doubles else CalcUnaryExpr
         if operand is value.operand and op is value.op and type(value) is cls:
             return value
@@ -296,7 +307,7 @@ def cut_int_constants(value: Any) -> Any:
     return _rebuild(value, _CalcForm(calc_ops=False))
 
 
-def calc_form(expression: Any, mode: CalcMode, *, into_real: bool = False) -> Any:
+def calc_form(expression: Any, mode: CalcMode, *, doubles: CalcDoubles = "none") -> Any:
     """Return *expression* as a CLICK Math in *mode* runs it (measured, 2026-11-11).
 
     - A decimal Math keeps each integer constant whole, whatever the destination
@@ -329,20 +340,27 @@ def calc_form(expression: Any, mode: CalcMode, *, into_real: bool = False) -> An
       ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
       2026-11-26).  An operand past 16 bits gets the same cut, with no SC43.  So
       ``( DH1 * DH2 ) OR 0h`` with 100h and 100h stores 0000h (read, 2026-11-26).
-    - With *into_real* (a decimal Math into a Real), each operator of CLICK's decimal
-      Math converts its operands to doubles (``DoubleBinaryExpr``, ``DoubleUnaryExpr``).
-      These are ``+``, ``-``, ``*``, ``/``, ``%``, ``**``, a minus or plus sign and
-      ``abs()``.  A CLICK computes a DS of 0 as the double +0.0, so ``- DS1`` with
-      DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5 stores -0.0 (read,
-      2026-11-26).  The other ops, such as ``//`` and ``&``, are not in CLICK's decimal
-      Math.  They do not convert their operands.
+    - *doubles* names the steps of a decimal Math that convert their operands to doubles
+      (``DoubleBinaryExpr``, ``DoubleUnaryExpr``).  A hex Math ignores it.
+
+      - ``"all"``, for a Math into a Real: each operator of CLICK's decimal Math.  These
+        are ``+``, ``-``, ``*``, ``/``, ``%``, ``**``, a minus or plus sign and
+        ``abs()``.  A CLICK computes a DS of 0 as the double +0.0, so ``- DS1`` with
+        DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5 stores -0.0 (read,
+        2026-11-26).  The other ops, such as ``//`` and ``&``, are not in CLICK's
+        decimal Math.  They do not convert their operands.
+      - ``"power"``, for a Math into an integer type: ``**`` only.  A CLICK computes
+        ``3 ^ 35`` as a double, and a DD stores the double's low 32 bits (read,
+        2026-11-27).  The other operators give the same integer with exact steps.
+      - ``"none"``: no step.  code.py uses it, because the P1AM-200 has no doubles.
 
     Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
         form = _CalcForm(unsigned=True, mask_bits=True, whole_division=True)
     else:
-        form = _CalcForm(abs_ops=True, doubles=into_real)
+        binary, unary = _DOUBLES[doubles]
+        form = _CalcForm(abs_ops=True, binary_doubles=binary, unary_doubles=unary)
     return _rebuild(expression, form)
 
 
@@ -472,11 +490,16 @@ class CalcInstruction(OneShotMixin, Instruction):
         source = operand_object(self.source_expression)
         self.mode_inference = infer_calc_mode(source, self.dest.tag)
         self.mode = self.mode_inference.mode
-        # Only a Real shows the sign of a 0.  Text keeps Python's ops, so "5" * 2 is "55".
-        into_real = self.dest.tag.type is TagType.REAL and not may_be_text(source)
+        # Only a Real shows the sign of a 0, so only a Math into a Real computes every
+        # step in doubles.  Text keeps Python's ops, so "5" * 2 is "55".
+        doubles: CalcDoubles = "power"
+        if may_be_text(source):
+            doubles = "none"
+        elif self.dest.tag.type is TagType.REAL:
+            doubles = "all"
         # The analyses and the code generator read this formula.  calc_form() rewrites
         # it for the mode.  It is not a parse result.
-        self.expression = calc_form(expression, self.mode, into_real=into_real)
+        self.expression = calc_form(expression, self.mode, doubles=doubles)
 
     def check_operands(self, call: str | None = None) -> None:
         """Do nothing, because the builder parsed every operand."""
