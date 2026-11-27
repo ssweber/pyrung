@@ -181,13 +181,18 @@ def _compile_expression_impl(
         if isinstance(expr, DoubleBinaryExpr):
             if calc_op and expr.symbol == "**":
                 # The core computes a power of two ints exactly and rounds it to a double
-                # (DoubleBinaryExpr).  _pow_calc computes the same power, and float(_dbl())
-                # rounds it.  A double step always returns a float (_int_bound).
+                # (DoubleBinaryExpr).  _pow and _pow_calc compute the same power, and
+                # float(_dbl()) rounds it.  A double step always returns a float
+                # (_int_bound).  The jit cannot trace _pow_calc, because its flags
+                # parameter has a default.  So an exponent from 1 to 64, which needs no
+                # guard, calls _pow.
                 ctx.mark_helper("_math_func")
                 ctx.mark_helper("_pow")
+                ctx.mark_helper("_dbl")
+                if _small_count_literal(expr.right, low=1):
+                    return f"float(_dbl(_pow({left}, {right})))"
                 ctx.mark_helper("_pow_calc")
                 ctx.mark_helper("_term_fail")
-                ctx.mark_helper("_dbl")
                 return f"float(_dbl(_pow_calc({left}, {right}, {flags})))"
             left, right = _double_operands(expr, left, right)
         if expr.op is _op_hex_div:
