@@ -1242,6 +1242,120 @@ def test_imported_formula_stores_what_round_b16_part_b_read(
     assert set(results.values()) == {(stored, out_of_range)}, results
 
 
+_SC40, _SC43, _SC46 = "division_error", "out_of_range", "math_operation_error"
+
+#: The registers of round b20's Part C: +0.0, the -1.0 that stages -0.0 in DF110, 5.0 and -5.0.
+_B20_ZEROS = {"DF111": 0.0, "DF112": -1.0, "DF110": -0.0, "DF113": 5.0, "DF114": -5.0}
+
+#: Round b20: (case, formula as CLICK displays it, hex mode, register values, destination,
+#: value the PLC stored, the flags of SC40, SC43 and SC46 that were on after the Math). The
+#: round staged -0.0 in DF110 as ``DF111 * DF112``, with 0.0 and -1.0. Each destination held a
+#: sentinel value before the Math, such as -12345.0 in a DF.
+ROUND_B20_READINGS: list[tuple[str, str, bool, dict[str, float], str, float, set[str]]] = [
+    # Part A. A hex minus sign before a typed constant applies first.
+    ("b20-a_and", "- 2h AND 3h", True, {}, "DH1", 0x0002, set()),
+    ("b20-a_or", "- 2h OR 1h", True, {}, "DH2", 0xFFFF, set()),
+    ("b20-a_xor", "- 3h XOR 1h", True, {}, "DH3", 0xFFFC, set()),
+    ("b20-a_add", "- 5h + 1h", True, {}, "DH4", 0xFFFC, {_SC43}),
+    ("b20-a_sub", "- 5h - 1h", True, {}, "DH5", 0xFFFA, {_SC43}),
+    # The staging check, and Part B. A minus sign before a bracket applies first.
+    ("b20-s0", "DF111 * DF112", False, {"DF111": 0.0, "DF112": -1.0}, "DF6", -0.0, set()),
+    ("b20-b_div", "- ( DF121 ) / DF122", False, {"DF121": 5.0, "DF122": 0.0}, "DF7", 0.0, {_SC40}),
+    (
+        "b20-b_mod",
+        "- ( DF121 ) MOD DF122",
+        False,
+        {"DF121": 5.0, "DF122": 0.0},
+        "DF8",
+        0.0,
+        {_SC46},
+    ),
+    # Part C. Each product of a zero has the sign that a double gives.
+    *(
+        (f"b20-c{n:02}", f"{left} * {right}", False, _B20_ZEROS, f"DF{8 + n}", stored, set())
+        for n, (left, right, stored) in enumerate(
+            [
+                ("DF111", "DF111", 0.0),
+                ("DF111", "DF110", -0.0),
+                ("DF110", "DF111", -0.0),
+                ("DF110", "DF110", 0.0),
+                ("DF111", "DF113", 0.0),
+                ("DF113", "DF111", 0.0),
+                ("DF110", "DF113", -0.0),
+                ("DF113", "DF110", -0.0),
+                ("DF111", "DF114", -0.0),
+                ("DF114", "DF111", -0.0),
+                ("DF110", "DF114", 0.0),
+                ("DF114", "DF110", 0.0),
+            ],
+            start=1,
+        )
+    ),
+    ("b20-c13", "- DF110", False, _B20_ZEROS, "DF21", 0.0, set()),
+    ("b20-c14", "SQRT ( DF114 )", False, {"DF114": -5.0}, "DF22", 0.0, {_SC46}),
+    # Part D. A unary plus changes nothing.
+    ("b20-d_dec", "+ 5 * DS401", False, {"DS401": 3}, "DS23", 15, set()),
+    ("b20-d_hex", "+ 5h * DH401", True, {"DH401": 3}, "DH24", 0x000F, set()),
+    # Part E. Two operators of one tier apply from the left in each mode.
+    (
+        "b20-e_hex",
+        "DH411 MOD DH412 MOD DH413",
+        True,
+        {"DH411": 7, "DH412": 5, "DH413": 3},
+        "DH25",
+        0x0002,
+        set(),
+    ),
+    ("b20-e_dec", "DS411 / DS412 MOD 3", False, {"DS411": 7, "DS412": 2}, "DF26", 0.5, set()),
+]
+
+
+def _b20_rungs(text: str, hex_mode: bool, registers: dict[str, float], dest: str) -> list[str]:
+    """Return the rungs that stage *registers* and a sentinel in *dest*, then run *text*.
+
+    A -0.0 in DF110 comes from ``DF111 * DF112``, as the round staged it.
+    """
+    tokens = []
+    for name, value in registers.items():
+        if name == "DF110":
+            tokens.append("math(DF111 * DF112,DF110)")
+        elif hex_mode:
+            tokens.append(f"copy({int(value):X}h,{name})")
+        else:
+            tokens.append(f"copy({value},{name})")
+    sentinel = {"DS": "-12345", "DH": "BEEFh", "DF": "-12345.0"}[dest[:2]]
+    mode = ",mode=hex" if hex_mode else ""
+    return [*tokens, f"copy({sentinel},{dest})", f"math({text},{dest}{mode})"]
+
+
+@pytest.mark.parametrize(
+    ("text", "hex_mode", "registers", "dest", "stored", "flags"),
+    [reading[1:] for reading in ROUND_B20_READINGS],
+    ids=[reading[0] for reading in ROUND_B20_READINGS],
+)
+def test_imported_formula_stores_what_round_b20_read(
+    text: str,
+    hex_mode: bool,
+    registers: dict[str, float],
+    dest: str,
+    stored: float,
+    flags: set[str],
+    monkeypatch,
+) -> None:
+    with warnings.catch_warnings():
+        # The readings settle the order of each formula, so none warns.
+        warnings.simplefilter("error")
+        source = ladder_to_pyrung(_bundle(*_b20_rungs(text, hex_mode, registers, dest)))
+    ns = exec_with_source(source)
+    faults = [getattr(system.fault, name) for name in (_SC40, _SC43, _SC46)]
+    results = _on_every_backend(ns["logic"], monkeypatch, [ns[dest], *faults], scans=1)
+    want = (stored, *(name in flags for name in (_SC40, _SC43, _SC46)))
+    for backend, got in results.items():
+        assert got == want, backend
+        # == cannot tell -0.0 from +0.0, so compare the sign too.
+        assert math.copysign(1, got[0]) == math.copysign(1, stored), backend
+
+
 @pytest.mark.parametrize(
     ("formula", "stored"),
     [
