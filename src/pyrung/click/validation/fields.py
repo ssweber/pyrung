@@ -24,7 +24,17 @@ from laddercodec import Code, FieldError, LaddercodecError
 from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.core.expression import Expression
-from pyrung.core.instruction.operands import ConstArg, Preset, TagArg, as_authored
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    Preset,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+)
 from pyrung.core.memory_block import BlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation._common import instruction_frame
@@ -202,8 +212,7 @@ def declared_operands(instruction: Any, words: Mapping[str, str]) -> tuple[Opera
 
     def add(argument: int | str, name: str, attributes: tuple[str, ...]) -> None:
         values = tuple(
-            (attribute, as_authored(getattr(instruction, attribute, None)))
-            for attribute in attributes
+            (attribute, getattr(instruction, attribute, None)) for attribute in attributes
         )
         if any(value is not None for _attribute, value in values):
             spelled = _authored_range_tags(instruction, *values[0]) if len(values) == 1 else None
@@ -228,12 +237,15 @@ def _authored_range_tags(
     ``x3``. So the two ends of the range read alike.
     """
     authored = getattr(instruction, f"authored_{attribute}", None)
-    if not isinstance(authored, Tag) or not isinstance(value, BlockRange):
-        return None
+    match value:
+        case RangeArg(span=span, immediate=False) if isinstance(authored, Tag):
+            pass
+        case _:
+            return None
     first = operand_name(authored)
-    start = f"{value.block.name}{value.addresses[0]}"
+    start = f"{span.block.name}{span.addresses[0]}"
     form = _ADDRESS_FORM.fullmatch(first)
-    tags = [(value.block[address], address) for address in value.addresses[1:]]
+    tags = [(span.block[address], address) for address in span.addresses[1:]]
     if form is None or not _spells(first, start):
         return ((authored, first), *((tag, operand_name(tag)) for tag, _address in tags))
     letters, digits = form.groups()
@@ -275,10 +287,32 @@ def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) 
         return exporter._render_operand(value, path=f"instruction.{attribute}", source=instruction)
     except _RenderError as exc:
         if isinstance(value, str) and '"' in value:
-            # Only a Fill refuses a quote in text. It hands laddercodec the quote doubled,
-            # which laddercodec refuses in its own words.
+            # Only a Fill refuses a quote in text. This function then hands laddercodec the
+            # text with each quote doubled, and laddercodec refuses it in its own words.
             return '"{}"'.format(value.replace('"', '""'))
         raise Unbuildable from exc
+
+
+def render_arg(exporter: Any, arg: Value | Span, attribute: str, instruction: Any) -> str:
+    """Return the parsed operand *arg* in *attribute* of *instruction* as the export writes it.
+
+    Raise :class:`Unbuildable` when the export refuses it.
+    """
+    from pyrung.click.ladder.types import _RenderError
+
+    if isinstance(arg, ExprArg):
+        # CLK_EXPR_ONLY_IN_MATH reports an expression outside math().
+        raise Unbuildable
+    try:
+        return exporter._render_arg(arg, path=f"instruction.{attribute}", source=instruction)
+    except _RenderError as exc:
+        match arg:
+            case ConstArg(value=str() as text) if '"' in text:
+                # Only a Fill refuses a quote in text. This function then hands laddercodec
+                # the text with each quote doubled, and laddercodec refuses it in its own words.
+                return '"{}"'.format(text.replace('"', '""'))
+            case _:
+                raise Unbuildable from exc
 
 
 def render_preset(exporter: Any, preset: Preset, attribute: str, instruction: Any) -> str:
@@ -315,15 +349,43 @@ def refusals_of(build: Callable[[], Any]) -> list[Any]:
 
 def memory_types(operand: Any, resolver: _ResolutionCache) -> set[str]:
     """Return the CLICK banks that *operand* maps to."""
-    return {slot.memory_type for slot in resolver.resolve_operand_slots(operand).slots}
+    slots = resolver.resolve_operand_slots(operand_object(operand)).slots
+    return {slot.memory_type for slot in slots}
 
 
-def _range_text(exporter: Any, value: Any, path: str, instruction: Any) -> tuple[str, Any]:
-    """Return a range as the export writes it, and its problem, as ``_range_text`` does."""
+def operand_object(value: Any) -> Any:
+    """Return the tag, range, pointer, expression or constant inside a parsed operand.
+
+    The checks in this module read a condition's operands and an instruction's operands
+    alike. They call this function on an instruction's operand first. The function drops
+    ``immediate()``, because those checks read the tag inside it.
+    Any value that is not a parsed operand comes back unchanged.
+    """
+    match value:
+        case TagArg(tag=tag):
+            return tag
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            return span
+        case PointerArg(ref=ref):
+            return ref
+        case ExprArg(expr=expr):
+            return expr
+        case ConstArg(value=constant):
+            return constant
+        case _:
+            return value
+
+
+def _range_text(exporter: Any, span: BlockRange, path: str, instruction: Any) -> tuple[str, Any]:
+    """Return the range *span* as the export writes it, and its problem.
+
+    Both come from ``_block_range_text``. Raise :class:`Unbuildable` when the export
+    refuses the range.
+    """
     from pyrung.click.ladder.types import _RenderError
 
     try:
-        return exporter._range_text(value, path=path, instruction=instruction)
+        return exporter._block_range_text(span, path=path, instruction=instruction)
     except _RenderError as exc:
         raise Unbuildable from exc
 
@@ -336,12 +398,15 @@ def _broken_ranges(instruction: Any, exporter: Any, family: Family) -> list[Rang
     """
     problems: list[RangeProblem] = []
     for attribute in family.ranges.get(type(instruction).__name__, ()):
-        value = as_authored(getattr(instruction, attribute))
-        if isinstance(value, ImmediateRef):
-            # An immediate() range has the same list form, and the export refuses it too.
-            value = value.value
+        match getattr(instruction, attribute):
+            case RangeArg(span=span):
+                # An immediate() range has the same list form, and the export refuses it too.
+                pass
+            case _:
+                # Only a range with fixed ends can be written as a list.
+                continue
         try:
-            _text, problem = _range_text(exporter, value, f"instruction.{attribute}", instruction)
+            _text, problem = _range_text(exporter, span, f"instruction.{attribute}", instruction)
         except Unbuildable:
             continue
         if problem is not None:
@@ -372,6 +437,7 @@ def _leaves(value: Any) -> list[Any]:
     from pyrung.core.condition import Condition
     from pyrung.core.validation.walker import _condition_children
 
+    value = operand_object(value)
     if not isinstance(value, Condition):
         return [value]
     return [leaf for _name, child in _condition_children(value) for leaf in _leaves(child)]
@@ -709,7 +775,9 @@ __all__ = [
     "default_place",
     "evaluate_family",
     "memory_types",
+    "operand_object",
     "refusals_of",
+    "render_arg",
     "render_operand",
     "split_range",
     "tag_names",

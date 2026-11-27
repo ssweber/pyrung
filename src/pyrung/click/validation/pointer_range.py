@@ -15,9 +15,8 @@ from pyrung.core.instruction.control import (
     for_loop_iterations,
     iter_loop_body_rungs,
 )
-from pyrung.core.instruction.operands import ConstArg, as_authored
+from pyrung.core.instruction.operands import ConstArg
 from pyrung.core.memory_block import IndirectBlockRange, IndirectRef
-from pyrung.core.tag import ImmediateRef
 from pyrung.core.validation.walker import ProgramLocation, _instruction_fields
 
 from .findings import CLK_PTR_PAST_BANK, ClickFinding, ValidationMode
@@ -105,7 +104,7 @@ def _uses(instruction: Any) -> list[tuple[str, Any]]:
     found: list[tuple[str, Any]] = []
     seen: set[int] = set()
     for field in _instruction_fields(instruction) or ():
-        _names, refs = _scan(as_authored(getattr(instruction, field, None)))
+        _names, refs = _scan(getattr(instruction, field, None))
         for ref in refs:
             if id(ref) not in seen:
                 seen.add(id(ref))
@@ -114,12 +113,9 @@ def _uses(instruction: Any) -> list[tuple[str, Any]]:
 
 
 def _is_write(instruction: Any, ref: Any) -> bool:
-    for target in instruction_write_targets(instruction):
-        while isinstance(target, ImmediateRef):
-            target = target.value
-        if target is ref:
-            return True
-    return False
+    # immediate() accepts only a tag or a range with fixed ends. So no write target is a
+    # pointer inside immediate().
+    return any(target is ref for target in instruction_write_targets(instruction))
 
 
 def _check_use(

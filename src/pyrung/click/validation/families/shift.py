@@ -9,8 +9,6 @@ from typing import Any
 
 from laddercodec import Shift
 
-from pyrung.core.instruction.operands import held
-
 from ..fields import Family, Unbuildable, refusals_of, split_range
 from ..resolve import _ResolutionCache
 
@@ -33,7 +31,7 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
 
     try:
         text = exporter._render_shift_range(
-            held(instruction.bit_range), path="instruction.bit_range", source=instruction
+            instruction.bit_range, path="instruction.bit_range", source=instruction
         )
     except _RenderError as exc:
         raise Unbuildable from exc
