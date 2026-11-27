@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, assert_never, cast
 
 from pyrung.core.analysis.write_sites import static_write_target_tags
 from pyrung.core.condition import (
@@ -26,7 +26,16 @@ from pyrung.core.condition import (
     Condition,
     NormallyClosedCondition,
 )
-from pyrung.core.instruction.operands import as_authored, held
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+)
 from pyrung.core.tag import ImmediateRef, Tag
 
 if TYPE_CHECKING:
@@ -72,6 +81,22 @@ _CallerMap = dict[str, list[_CallerEntry]]
 # ---------------------------------------------------------------------------
 
 
+def operand_tags(operand: Value | Span) -> tuple[Tag, ...]:
+    """Return the tags that a parsed operand names at a fixed address, in the order of the range.
+
+    A pointer, a range with pointers, an expression and a constant name none.
+    """
+    match operand:
+        case TagArg(tag=tag):
+            return (tag,)
+        case RangeArg(span=span):
+            return tuple(span.tags())
+        case PointerArg() | PointerRangeArg() | ExprArg() | ConstArg():
+            return ()
+        case _:
+            assert_never(operand)
+
+
 def _resolve_tag_names(target: Any) -> list[str]:
     """Statically known tag names of an operand, in address order (none for a pointer)."""
     return [tag.name for tag in static_write_target_tags(target)]
@@ -106,31 +131,31 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
     targets: list[str] = []
 
     if isinstance(instr, OutInstruction):
-        targets = _resolve_tag_names(instr.target)
+        targets = [tag.name for tag in operand_tags(instr.target)]
     elif isinstance(instr, ToggleInstruction):
-        targets = _resolve_tag_names(instr.target)
+        targets = [tag.name for tag in operand_tags(instr.target)]
     elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
-        targets = _resolve_tag_names(instr.target)
+        targets = [tag.name for tag in operand_tags(instr.target)]
         # Each phase claims its whole Timer, but only the accumulator is written:
         # an Out coil never sets the Timer's Done.
         targets += [instr.on_acc.name, instr.off_acc.name]
     elif isinstance(instr, TimedInstruction):
         targets = [instr.target.tag.name, instr.timer_acc.name]
     elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
-        targets = [as_authored(instr.done_bit).name, as_authored(instr.accumulator).name]
+        targets = [instr.done_bit.tag.name, instr.accumulator.tag.name]
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):
-        targets = [as_authored(instr.done_bit).name, as_authored(instr.accumulator).name]
+        targets = [instr.done_bit.tag.name, instr.accumulator.tag.name]
     elif isinstance(instr, ShiftInstruction):
-        targets = _resolve_tag_names(instr.bit_range)
+        targets = [tag.name for tag in operand_tags(instr.bit_range)]
     elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
-        targets = [t.name for t in map(as_authored, instr.outputs)]
-        targets.append(as_authored(instr.current_step).name)
-        targets.append(as_authored(instr.completion_flag).name)
-        targets.append(as_authored(instr.accumulator).name)
+        targets = [output.tag.name for output in instr.outputs]
+        targets.append(instr.current_step.tag.name)
+        targets.append(instr.completion_flag.tag.name)
+        targets.append(instr.accumulator.tag.name)
     elif isinstance(instr, EventDrumInstruction):
-        targets = [t.name for t in map(as_authored, instr.outputs)]
-        targets.append(as_authored(instr.current_step).name)
-        targets.append(as_authored(instr.completion_flag).name)
+        targets = [output.tag.name for output in instr.outputs]
+        targets.append(instr.current_step.tag.name)
+        targets.append(instr.completion_flag.tag.name)
     elif isinstance(instr, ModbusSendInstruction):
         targets = [
             instr.sending.name,
@@ -379,22 +404,28 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool]:
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    count = held(loop.count)
-    if isinstance(count, int) or FOR_ZERO_COUNT_ITERATIONS:
+    count: Value = loop.count
+    if FOR_ZERO_COUNT_ITERATIONS:
         return ((), True)
-    if isinstance(count, Tag):
-        type_name = count.type.name
-        exact = type_name in _EXACT_COUNT_TYPES or (
-            type_name == "DINT" and _dint_count_is_small(count)
-        )
-        return (CompareNe(count, 0),), exact
-    if isinstance(count, (IndirectRef, IndirectExprRef)):
-        block_type = getattr(count.block, "type", None)
-        exact = block_type is not None and block_type.name in _EXACT_COUNT_TYPES
-        return (IndirectCompareNe(cast(Any, count), 0),), exact
-    return (), False
+    match count:
+        case ConstArg(value=int()):
+            return ((), True)
+        case TagArg(tag=tag, immediate=False):
+            type_name = tag.type.name
+            exact = type_name in _EXACT_COUNT_TYPES or (
+                type_name == "DINT" and _dint_count_is_small(tag)
+            )
+            return (CompareNe(tag, 0),), exact
+        case PointerArg(ref=ref):
+            block_type = getattr(ref.block, "type", None)
+            exact = block_type is not None and block_type.name in _EXACT_COUNT_TYPES
+            return (IndirectCompareNe(cast(Any, ref), 0),), exact
+        case TagArg() | ConstArg() | ExprArg():
+            # An expression count and an immediate() count get no condition.
+            return (), False
+        case _:
+            assert_never(count)
 
 
 @dataclass

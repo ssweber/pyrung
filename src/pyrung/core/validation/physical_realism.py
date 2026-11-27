@@ -11,18 +11,18 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.write_sites import static_write_target_tags
 from pyrung.core.condition import (
     AllCondition,
     FallingEdgeCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import (
     WriteSite,
     _chain_pair_mutually_exclusive,
     _collect_write_sites,
+    operand_tags,
     site_frame,
 )
 from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
@@ -71,21 +71,14 @@ def _is_numeric_literal(value: object) -> bool:
 def _literal_range_targets(instr: Any) -> list[tuple[Tag, str, int | float]]:
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
-    itype = type(instr).__name__
-
-    if isinstance(instr, CopyInstruction):
-        source = as_authored(instr.source)
-        if not _is_numeric_literal(source):
+    match instr:
+        case (
+            CopyInstruction(source=ConstArg(value=value), dest=dest)
+            | FillInstruction(value=ConstArg(value=value), dest=dest)
+        ) if _is_numeric_literal(value):
+            return [(tag, type(instr).__name__, value) for tag in operand_tags(dest)]
+        case _:
             return []
-        return [(tag, itype, source) for tag in static_write_target_tags(as_authored(instr.target))]
-
-    if isinstance(instr, FillInstruction):
-        source = as_authored(instr.value)
-        if not _is_numeric_literal(source):
-            return []
-        return [(tag, itype, source) for tag in static_write_target_tags(as_authored(instr.dest))]
-
-    return []
 
 
 def _literal_write_sites(program: Program) -> list[tuple[WriteSite, int | float, Tag]]:
@@ -253,10 +246,7 @@ def _out_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.instruction.coils import OutInstruction
 
     if isinstance(instr, OutInstruction):
-        return [
-            (tag.name, type(instr).__name__)
-            for tag in static_write_target_tags(as_authored(instr.target))
-        ]
+        return [(tag.name, type(instr).__name__) for tag in operand_tags(instr.target)]
     return []
 
 
