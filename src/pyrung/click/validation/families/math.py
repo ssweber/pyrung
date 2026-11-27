@@ -27,7 +27,6 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
-    held,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
@@ -252,8 +251,8 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     # A hex Math reads every constant as hex, as the export writes it.
     with exporter._hex_constants("math" if mode == "hex" else None):
         try:
-            formula = exporter._render_operand(
-                held(source),
+            formula = exporter._render_arg(
+                source,
                 path="instruction.expression",
                 source=instruction,
             )

@@ -24,7 +24,6 @@ from pyrung.click.validation.findings import (
     _bank_pointer_advice,
     _build_suggestion,
     immediate_coil_not_y_text,
-    immediate_coil_operand_text,
     immediate_edge_text,
     immediate_misplaced_text,
     pointer_block_range_text,
@@ -72,6 +71,7 @@ from pyrung.core.expression import (
     UnaryExpr,
 )
 from pyrung.core.instruction.operands import (
+    Coil,
     ConstArg,
     ExprArg,
     PointerArg,
@@ -308,7 +308,7 @@ class _TranslatorMixin:
 
         def _fn(self, name: str, *args: str, **kwargs: str) -> str: ...
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
-        def _render_run(self, value: Any, *, path: str, instruction: Any) -> str: ...
+        def _render_block_run(self, span: BlockRange, *, path: str, instruction: Any) -> str: ...
 
     def _condition_leaf_token(self, condition: Condition, *, path: str) -> str:
         if isinstance(condition, BitCondition):
@@ -478,6 +478,53 @@ class _TranslatorMixin:
                 ),
                 source=source,
             )
+        if isinstance(value, Expression):
+            return self._render_expression(value, path=path, source=source)
+        return self._render_constant(value, path=path, source=source)
+
+    def _render_arg(self, arg: Value | Span, *, path: str, source: Any) -> str:
+        """Return an instruction's operand as the export writes it.
+
+        Only a coil accepts ``immediate()``, and :meth:`_render_immediate_coil` renders it.
+        """
+        match arg:
+            case TagArg(immediate=True) | RangeArg(immediate=True):
+                self._raise_issue(
+                    path=path,
+                    message=self._with_advice(
+                        immediate_misplaced_text(), CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED
+                    ),
+                    source=source,
+                )
+            case TagArg(tag=tag):
+                return self._resolve_tag(tag, path=path, source=source)
+            case RangeArg(span=span):
+                return self._render_block_range(span, path=path, source=source)
+            case PointerArg(ref=IndirectRef() as ref):
+                return self._render_indirect_ref(ref, path=path, source=source)
+            case PointerArg():
+                self._raise_issue(
+                    path=path,
+                    message=self._with_advice(pointer_expression_text(), CLK_PTR_EXPR_NOT_ALLOWED),
+                    source=source,
+                )
+            case PointerRangeArg():
+                self._raise_issue(
+                    path=path,
+                    message=self._with_advice(
+                        pointer_block_range_text(), CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED
+                    ),
+                    source=source,
+                )
+            case ExprArg(expr=expr):
+                return self._render_expression(expr, path=path, source=source)
+            case ConstArg(value=value):
+                return self._render_constant(value, path=path, source=source)
+            case _:
+                assert_never(arg)
+
+    def _render_constant(self, value: Any, *, path: str, source: Any) -> str:
+        """Return a constant, a time unit or a list of operands as the export writes it."""
         if isinstance(value, CopyConverter):
             self._raise_issue(
                 path=path,
@@ -487,8 +534,6 @@ class _TranslatorMixin:
                 ),
                 source=source,
             )
-        if isinstance(value, Expression):
-            return self._render_expression(value, path=path, source=source)
         if isinstance(value, TimeUnit):
             return value.name
         if isinstance(value, str):
@@ -586,9 +631,17 @@ class _TranslatorMixin:
                 self._resolve_tag(tag, path=f"{path}.value", source=source),
             )
 
-        if context == "coil":
-            if isinstance(wrapped, Tag):
-                address = self._resolve_tag(wrapped, path=f"{path}.value", source=source)
+        self._raise_issue(
+            path=path,
+            message=f"Unknown immediate render context: {context!r}.",
+            source=source,
+        )
+
+    def _render_immediate_coil(self, target: Coil, *, path: str, source: Any) -> str:
+        """Return a coil's ``immediate()`` target, and refuse one that is not in Y."""
+        match target:
+            case TagArg(tag=tag):
+                address = self._resolve_tag(tag, path=f"{path}.value", source=source)
                 parsed = _parse_display_address(address)
                 if parsed is None or parsed[0] != "Y":
                     self._raise_issue(
@@ -597,12 +650,10 @@ class _TranslatorMixin:
                         source=source,
                     )
                 return self._fn("immediate", address)
-
-            if isinstance(wrapped, BlockRange):
-                tags = wrapped.tags()
+            case RangeArg(span=span):
                 addresses = [
                     self._resolve_tag(tag, path=f"{path}.value[{idx}]", source=source)
-                    for idx, tag in enumerate(tags)
+                    for idx, tag in enumerate(span.tags())
                 ]
                 if not addresses:
                     self._raise_issue(
@@ -619,20 +670,10 @@ class _TranslatorMixin:
                             source=source,
                         )
                 # CLICK has no list form, so a range with a gap is refused even under allow=.
-                compact = self._render_run(wrapped, path=path, instruction=source)
+                compact = self._render_block_run(span, path=path, instruction=source)
                 return self._fn("immediate", compact)
-
-            self._raise_issue(
-                path=path,
-                message=immediate_coil_operand_text(type(wrapped).__name__),
-                source=source,
-            )
-
-        self._raise_issue(
-            path=path,
-            message=f"Unknown immediate render context: {context!r}.",
-            source=source,
-        )
+            case _:
+                assert_never(target)
 
     def _render_converter(
         self, converter: CopyConverter, instruction: Any, source_text: str, *, path: str
@@ -835,24 +876,28 @@ class _TranslatorMixin:
             rendered.append(self._render_operand(value, path=f"{path}[{index}]", source=source))
         return f"[{','.join(rendered)}]"
 
-    def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str:
+    def _render_shift_range(self, bit_range: Span, *, path: str, source: Any) -> str:
         """Return a shift range.  A reversed one is ``C1018..C1011`` (end below start).
 
         CLICK stores the shift register's start and end as separate fields and
         shifts from start toward end.  An ending address lower than the
         starting one therefore shifts downward.  pyrung spells that ``.reverse()``.
         """
-        if isinstance(bit_range, BlockRange):
-            addresses = [
-                self._resolve_tag(tag, path=f"{path}[{index}]", source=source)
-                for index, tag in enumerate(bit_range.tags())
-            ]
-            descending = _compact_contiguous_range(addresses[::-1])
-            if len(addresses) > 1 and descending is not None:
-                return f"{addresses[0]}..{addresses[-1]}"
-            # CLICK has no list form, so a scattered range is refused even under allow=.
-            return self._render_run(bit_range, path=path, instruction=source)
-        return self._render_operand(bit_range, path=path, source=source)
+        match bit_range:
+            case RangeArg(span=span, immediate=False):
+                addresses = [
+                    self._resolve_tag(tag, path=f"{path}[{index}]", source=source)
+                    for index, tag in enumerate(span.tags())
+                ]
+                descending = _compact_contiguous_range(addresses[::-1])
+                if len(addresses) > 1 and descending is not None:
+                    return f"{addresses[0]}..{addresses[-1]}"
+                # CLICK has no list form, so a scattered range is refused even under allow=.
+                return self._render_block_run(span, path=path, instruction=source)
+            case RangeArg() | PointerRangeArg():
+                return self._render_arg(bit_range, path=path, source=source)
+            case _:
+                assert_never(bit_range)
 
     def _render_block_range(self, block_range: BlockRange, *, path: str, source: Any) -> str:
         tags = block_range.tags()

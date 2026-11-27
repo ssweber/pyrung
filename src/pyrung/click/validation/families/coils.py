@@ -10,7 +10,7 @@ from typing import Any, assert_never
 from laddercodec import Coil, CoilKind
 
 from pyrung.core.instruction.operands import Coil as CoilTarget
-from pyrung.core.instruction.operands import RangeArg, TagArg, held
+from pyrung.core.instruction.operands import RangeArg, TagArg
 from pyrung.core.validation.render import Call, declared_call
 
 from ..fields import Family, Unbuildable, memory_types, refusals_of, render_operand
@@ -36,7 +36,7 @@ _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 
 
 def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache) -> str | None:
-    if code == "bank-not-allowed" and memory_types(held(instruction.target), resolver) - _BIT_BANKS:
+    if code == "bank-not-allowed" and memory_types(instruction.target, resolver) - _BIT_BANKS:
         return "Write a register with copy() or fill()."
     return None
 

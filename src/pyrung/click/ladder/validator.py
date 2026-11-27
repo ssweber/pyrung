@@ -22,7 +22,6 @@ from pyrung.click.validation.findings import (
 )
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.instruction import ForLoopInstruction
-from pyrung.core.instruction.operands import held
 from pyrung.core.rung import Rung
 from pyrung.core.validation._common import rung_path
 
@@ -34,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Collection
 
     from pyrung.click.tag_map import TagMap
+    from pyrung.core.instruction.operands import Span, Value
     from pyrung.core.program import Program
 
 
@@ -197,6 +197,7 @@ class _RoundTripValidationMixin:
             allow_immediate: bool = False,
             immediate_context: str = "",
         ) -> str: ...
+        def _render_arg(self, arg: Value | Span, *, path: str, source: Any) -> str: ...
         def _pin_specs(
             self, instruction: Any, *, path: str
         ) -> list[tuple[str, Condition, str]]: ...
@@ -322,8 +323,8 @@ class _RoundTripValidationMixin:
                 )
             for_token = self._fn(
                 "for",
-                self._render_operand(
-                    held(instruction.count),
+                self._render_arg(
+                    instruction.count,
                     path=f"{path}.instruction[0](ForLoopInstruction).count",
                     source=instruction,
                 ),

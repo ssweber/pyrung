@@ -9,9 +9,7 @@ from typing import Any
 
 from laddercodec import Search
 
-from pyrung.core.instruction.operands import held
-
-from ..fields import Family, refusals_of, render_operand, split_range
+from ..fields import Family, refusals_of, render_arg, render_operand, split_range
 from ..resolve import _ResolutionCache
 
 # The argument of the pyrung call that holds each field of laddercodec's Search. The
@@ -49,16 +47,13 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the Search that the export writes."""
 
-    def render(attribute: str, operand: Any) -> str:
-        return render_operand(exporter, operand, attribute, instruction)
-
-    table = render("search_range", held(instruction.search_range))
+    table = render_arg(exporter, instruction.search_range, "search_range", instruction)
     start, end = split_range(table)
     # The export writes a constant value in hex when the table is in a hex bank.
     with exporter._hex_constants("exact" if exporter._is_hex_bank_operand(table) else None):
-        value = render("value", held(instruction.value))
-    result = render("result", instruction.result.tag)
-    found = render("found", instruction.found.tag)
+        value = render_arg(exporter, instruction.value, "value", instruction)
+    result = render_operand(exporter, instruction.result.tag, "result", instruction)
+    found = render_operand(exporter, instruction.found.tag, "found", instruction)
     return refusals_of(
         lambda: Search(
             table_start=start,
