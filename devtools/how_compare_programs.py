@@ -2007,8 +2007,8 @@ class _Cmd(IntEnum):
 def _enum_request_cleared():
     """The operator sets Request to Cmd.START, and the ladder clears it to Cmd.NONE.
 
-    Running follows Request == Cmd.START for the scan before the clear.  Preset copies
-    Cmd.START into Nudged, which is also written from outside.
+    Running is on for the one scan in which Request equals Cmd.START.  The same rung then
+    clears Request.  Preset copies Cmd.START into Nudged.  Nudged is external.
     """
     request, nudged, running = Int("Request"), Int("Nudged", external=True), Bool("Running")
     with Program(strict=False) as prog:

@@ -7,7 +7,9 @@ must read both declarations the same way:
 - a mapping contributes its values, and a sequence its elements;
 - a parsed operand contributes the tag, range or pointer inside it, without
   its ``immediate()``;
-- a raw ``immediate()`` reference stays wrapped;
+- a raw ``immediate()`` reference stays wrapped.  No instruction that a builder
+  makes holds one, so only a test double or a hand-built instruction reaches this
+  case;
 - a dynamic destination stays unresolved, for its own consumer to resolve.
 
 The one derived shape is a ``CopyInstruction`` that writes text over several
