@@ -663,7 +663,7 @@ class _InstructionMixin:
             return self._fn(
                 "shift",
                 self._render_shift_range(
-                    instruction.bit_range,
+                    held(instruction.bit_range),
                     path=f"{path}.bit_range",
                     source=instruction,
                 ),

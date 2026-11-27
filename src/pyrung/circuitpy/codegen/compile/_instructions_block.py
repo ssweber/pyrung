@@ -419,16 +419,15 @@ def _compile_shift_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if _range_type_name(instr.bit_range) != "BOOL":
-        raise TypeError("shift bit_range must contain BOOL tags")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     key = f"_shift_prev_clock:{ctx.state_key_for(instr)}"
     stem = ctx.next_name("shift")
+    bit_range = _copy_range(instr.bit_range)
     range_setup, range_symbol, range_indices, _ = _compile_range_setup(
-        instr.bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
+        bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
     )
-    static_len = _static_range_length(instr.bit_range)
+    static_len = _static_range_length(bit_range)
     if static_len == 0:
         raise ValueError("shift bit_range resolved to an empty range")
     shift_len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
@@ -454,7 +453,7 @@ def _compile_shift_instruction(
         f"_clock_prev = {emit_prev(key)}",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
-        f"    _prev_values = [{emit_truth(_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx))} for _idx in {range_indices}]",
+        f"    _prev_values = [{emit_truth(_range_item_read_expr(bit_range, range_symbol, '_idx', ctx))} for _idx in {range_indices}]",
         f"    {_range_item_write_expr(range_symbol, f'{range_indices}[0]', f'bool({enabled_expr})')}",
         f"    for _pos in range(1, {shift_len_expr}):",
         f"        {_range_item_write_expr(range_symbol, f'{range_indices}[_pos]', '_prev_values[_pos - 1]')}",
@@ -463,7 +462,7 @@ def _compile_shift_instruction(
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
         emit_mem_set(key, "_clock_curr"),
     ]
-    range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
+    range_flush = _compile_range_flush(bit_range, range_symbol, ctx)
     if range_flush:
         lines.extend(
             [

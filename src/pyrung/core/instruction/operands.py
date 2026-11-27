@@ -36,7 +36,7 @@ These instructions parse their operands instead:
 - ``copy()``, ``fill()`` and ``blockcopy()``;
 - ``pack_bits()``, ``pack_words()``, ``pack_text()``, ``unpack_to_bits()`` and
   ``unpack_to_words()``;
-- ``math()`` and ``search()``;
+- ``math()``, ``search()`` and ``shift()``;
 - the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
   ``flasher()`` and ``timed()``.  Each coil parses only its target.
 

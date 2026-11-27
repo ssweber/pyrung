@@ -7,7 +7,6 @@ from operator import eq, ge, gt, le, lt, ne
 from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.crossing import Constraint, Eq
-from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
 from .advance import (
@@ -33,11 +32,7 @@ from .operands import (
     Value,
     parse_value,
 )
-from .resolvers import (
-    _set_fault_address_error,
-    reads_indexed_element,
-    resolve_block_range_tags_ctx,
-)
+from .resolvers import _set_fault_address_error, reads_indexed_element
 from .utils import (
     guard_oneshot_execution,
     instruction_condition_view,
@@ -85,6 +80,7 @@ _RESULT = TAG.of(
     TagType.INT, TagType.DINT, pointers=False, immediate=False, pointer_hint=_POINTER_HINT
 )
 _SEARCH_RANGE = _SearchRange(immediate=False)
+_BIT_RANGE = RANGE.of(TagType.BOOL, immediate=False)
 
 
 class SearchInstruction(OneShotMixin, Instruction):
@@ -351,7 +347,8 @@ class ShiftInstruction(Instruction):
     - ``C.select(1, 8)`` → shifts low-to-high (data at C1, exits at C8).
     - ``C.select(8, 1).reverse()`` → shifts high-to-low.
 
-    The `bit_range` must contain only BOOL tags.
+    The `bit_range` must contain only BOOL tags.  The builder parses it into a
+    ``Span`` (:mod:`pyrung.core.instruction.operands`).
 
     Args:
         bit_range: `BlockRange` or `IndirectBlockRange` from `.select()`.
@@ -366,7 +363,7 @@ class ShiftInstruction(Instruction):
     _writes = ("bit_range",)
     _conditions = ("data_condition", "clock_condition", "reset_condition")
     _structural_fields = ()
-    _operands = {"bit_range": RANGE.of(TagType.BOOL, immediate=False)}
+    _operands = {"bit_range": _BIT_RANGE}
     _call_operands = (("bit_range", "bit_range"),)
     _call_keywords = ()
     _call_chained = (("clock", "clock_condition"), ("reset", "reset_condition"))
@@ -378,7 +375,7 @@ class ShiftInstruction(Instruction):
         clock_condition: Any,
         reset_condition: Any,
     ):
-        self.bit_range = bit_range
+        self.bit_range: Span = _BIT_RANGE.parse("shift()", "bit_range", bit_range)
         self.data_condition = to_condition(data_condition)
         self.clock_condition = to_condition(clock_condition)
         self.reset_condition = to_condition(reset_condition)
@@ -388,18 +385,20 @@ class ShiftInstruction(Instruction):
         if self.reset_condition is None:
             raise ValueError("shift requires a reset condition")
 
-    def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
-        from pyrung.core.tag import TagType
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
-        tags = resolve_block_range_tags_ctx(self.bit_range, ctx)
+    def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
+        bit_range = self.bit_range
+        match bit_range:
+            case RangeArg(span=span):
+                tags = span.tags()
+            case PointerRangeArg(span=span):
+                tags = span.resolve_ctx(ctx).tags()
+            case _:
+                assert_never(bit_range)
         if not tags:
             raise ValueError("shift bit_range resolved to an empty range")
-        for tag in tags:
-            if tag.type != TagType.BOOL:
-                raise TypeError(
-                    f"shift bit_range must contain only BOOL tags; "
-                    f"got {tag.type.name} at {tag.name}"
-                )
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -430,9 +429,14 @@ class ShiftInstruction(Instruction):
         # An indirect range has no fixed set of owned channels at index-build
         # time. Registering the whole block would claim channels this instance
         # may not write, so leave it to ordinary trace.
-        if not isinstance(self.bit_range, BlockRange):
-            return None
-        tags = tuple(self.bit_range.tags())
+        bit_range = self.bit_range
+        match bit_range:
+            case RangeArg(span=span):
+                tags = tuple(span.tags())
+            case PointerRangeArg():
+                return None
+            case _:
+                assert_never(bit_range)
 
         def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
             if not isinstance(constraint, Eq) or len(constraint.values) != 1:
