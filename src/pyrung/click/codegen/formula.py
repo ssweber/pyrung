@@ -53,6 +53,12 @@ NEGATE_POINTER = "a minus sign before a pointer"
 NEGATE_PI = "a minus sign before PI"
 NEGATE_MINUS = "a minus sign before another minus sign"
 
+#: A plus sign in hex mode, as an operator in :data:`CONFIRMED_PAIRS`. CLICK stores it as a
+#: token of its own, such as ``+#UH5#*#DH401`` (round b20). It is an operator because no
+#: reading shows whether it cuts its operand to 16 bits, as AND does. In decimal mode the
+#: parse drops a plus. CLICK stores one before a constant in the constant (H+5).
+PLUS_SIGN = "a plus sign in hex mode"
+
 #: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
 #: readings. Two operators meet when one is an operand of the other, and the operand has no
 #: brackets of its own. Only two operators that meet have one other grouping to test, so a
@@ -142,7 +148,7 @@ CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = ()
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
 #: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
 #: readings.
-READ_FORMULAS: tuple[tuple[str, bool], ...] = (("- DS1 * 3", False),)
+READ_FORMULAS: tuple[tuple[str, bool], ...] = (("- DS1 * 3", False), ("+ 5h * DH401", True))
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
 #: CLICK, as (first operator, second operator, hex mode) in the order that the formula writes
@@ -295,6 +301,13 @@ class Negate(_Node):
 
 
 @dataclass(frozen=True)
+class Plus(_Node):
+    """A plus sign before an operand in hex mode."""
+
+    operand: Formula
+
+
+@dataclass(frozen=True)
 class BinaryOp(_Node):
     """A binary operation. *op* is CLICK's spelling: ``+ - * / ^ MOD AND OR XOR``."""
 
@@ -303,7 +316,7 @@ class BinaryOp(_Node):
     right: Formula
 
 
-Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | BinaryOp
+Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | Plus | BinaryOp
 """A node of the tree that :func:`parse_click_formula` returns."""
 
 
@@ -321,10 +334,11 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     """
     # The pairs that a formula needs are those of each bracket scope: the formula outside
     # brackets, the inside of one bracket, or one argument of a function. A minus sign is an
-    # operator of one of the NEGATE_* kinds. It applies before every operator to its left in
-    # its scope, so it pairs only with the operators to its right. A pair in SAME_VALUE_PAIRS
-    # needs no reading. A pair in SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps
-    # have plain operands. A formula with the tree of one in READ_FORMULAS needs none.
+    # operator of one of the NEGATE_* kinds, and a plus sign in hex mode is a PLUS_SIGN. Each
+    # applies before every operator to its left in its scope, so it pairs only with the
+    # operators to its right. A pair in SAME_VALUE_PAIRS needs no reading. A pair in
+    # SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps have plain operands. A
+    # formula with the tree of one in READ_FORMULAS needs none.
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
 
@@ -347,7 +361,7 @@ def parse_with_unconfirmed_pairs(
     for steps in _scope_steps(tree):
         for index, first_step in enumerate(steps):
             for second_step in steps[index + 1 :]:
-                if isinstance(second_step, Negate):
+                if isinstance(second_step, (Negate, Plus)):
                     continue
                 first, second = operator_kind(first_step), operator_kind(second_step)
                 assert first is not None and second is not None
@@ -371,6 +385,8 @@ def operator_kind(node: Formula) -> str | None:
     """
     if isinstance(node, BinaryOp):
         return node.op
+    if isinstance(node, Plus):
+        return PLUS_SIGN
     if not isinstance(node, Negate):
         return None
     operand = node.operand
@@ -402,7 +418,7 @@ def plain_operands(first: Formula, second: Formula, *, hex_mode: bool) -> bool:
     for step in (first, second):
         if isinstance(step, BinaryOp):
             operands: tuple[Formula, ...] = (step.left, step.right)
-        elif isinstance(step, Negate):
+        elif isinstance(step, (Negate, Plus)):
             operands = (step.operand,)
         else:
             return False
@@ -420,10 +436,10 @@ def plain_operands(first: Formula, second: Formula, *, hex_mode: bool) -> bool:
 
 def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:
     """Yield the operators of each bracket scope of *tree*, in the order the formula writes
-    them, each with whether it is a minus sign before its operand.
+    them, each with whether it is a sign before its operand.
     """
     for steps in _scope_steps(tree):
-        yield [(str(operator_kind(step)), isinstance(step, Negate)) for step in steps]
+        yield [(str(operator_kind(step)), isinstance(step, (Negate, Plus))) for step in steps]
 
 
 def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
@@ -440,7 +456,7 @@ def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
             walk(node.left)
             steps.append(node)
             walk(node.right)
-        elif isinstance(node, Negate):
+        elif isinstance(node, (Negate, Plus)):
             steps.append(node)
             walk(node.operand)
         elif isinstance(node, Call):
@@ -534,9 +550,9 @@ class _Parser:
     def _unary(self) -> Formula:
         token = self._peek()
         if token == ("punct", "+"):
-            # A unary plus changes no value in any grouping. CLICK 4.00 stores it in the
-            # constant in decimal mode (H+5) and as a token of its own in hex mode (round b20).
             self.pos += 1
+            if self.hex_mode:
+                return Plus(self._unary())
             return self._unary()
         if token == ("punct", "-"):
             self.pos += 1

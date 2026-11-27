@@ -27,6 +27,7 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
+    Plus,
     Pointer,
     RangeCall,
     operator_kind,
@@ -116,6 +117,7 @@ def click_steps(
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
     - a pointer
+    - a hex plus before any value but 5h
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -192,6 +194,12 @@ class _Guard:
                 self.flags.add("math_operation_error")
                 return 0.0
         return math.sqrt(x)
+
+    def plus(self, value: float) -> None:
+        # CLICK stores a hex plus as a token of its own (+#UH5#*#DH401). Round b20 read it before
+        # 5h only, so no reading shows whether it cuts a value past FFFFh or below 0h to 16 bits.
+        if value != 5:
+            raise Unread(f"a hex plus before {value}")
 
     def operands(self, *values: float) -> None:
         # A DF can hold Inf and NaN. 3.0E+38 * 10 stores Inf
@@ -403,6 +411,11 @@ def _value(
         if guard is not None:
             guard.operands(operand)
         return -operand
+    if isinstance(node, Plus):
+        operand = _value(node.operand, hex_mode, registers, guard)
+        if guard is not None:
+            guard.plus(operand)
+        return operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)
     b = _value(node.right, hex_mode, registers, guard)
@@ -498,6 +511,8 @@ def pyrung_expression(node: Formula, tags: Mapping[int, Any]) -> Any:
         return -(LiteralExpr(0) - inner)
     if isinstance(node, Negate):
         return -pyrung_expression(node.operand, tags)
+    if isinstance(node, Plus):
+        return +pyrung_expression(node.operand, tags)
     if isinstance(node, Call):
         name = _CLICK_FUNC_TO_PYTHON[node.name]
         function = abs if name == "abs" else getattr(expression, name)
@@ -513,7 +528,7 @@ def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
 
     A minus sign on the right of an operator has no other order, so it yields nothing.
     """
-    if isinstance(node, Negate):
+    if isinstance(node, (Negate, Plus)):
         for parent, child, child_is_left, operand in regroupings(node.operand):
             yield parent, child, child_is_left, replace(node, operand=operand)
         return
@@ -526,9 +541,9 @@ def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
     op, left, right = node.op, node.left, node.right
     if isinstance(left, BinaryOp) and not left.bracketed:
         yield op, left.op, True, BinaryOp(left.op, left.left, BinaryOp(op, left.right, right))
-    if isinstance(left, Negate) and not left.bracketed:
+    if isinstance(left, (Negate, Plus)) and not left.bracketed:
         kind = operator_kind(left)
         assert kind is not None
-        yield op, kind, True, Negate(BinaryOp(op, left.operand, right))
+        yield op, kind, True, type(left)(BinaryOp(op, left.operand, right))
     if isinstance(right, BinaryOp) and not right.bracketed:
         yield op, right.op, False, BinaryOp(right.op, BinaryOp(op, left, right.left), right.right)

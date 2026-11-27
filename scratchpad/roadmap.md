@@ -493,6 +493,10 @@ All [nothing] unless marked.
 - **A hex minus sign before `*` or `/`.** `- 5h * DH1`, `- DH1 * DH2`, `- ( DH1 ) * DH2` and `- 5h / DH1` warn on
   import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. No reading shows a hex `/` of a
   negative value whose quotient has a fraction, such as -5h / 2h.
+- **A plus sign in a Math formula.** In hex mode CLICK stores a plus as a token of its own, and round b20 read
+  `+ 5h * DH401` only. So each hex formula with a plus warns on import, and the import keeps the plus. With 1h in DH1,
+  `+ ( 0h - DH1 ) + 1h` stores 0h with no SC43 if the plus cuts its operand to 16 bits. The parse drops a decimal plus.
+  Round b20 read it before a constant only, so no reading shows a decimal plus before an address or a bracket.
 - **A Math pair read in one mode only.** The pair lists in `click/codegen/formula.py` have no mode. pyrung assumes
   that one parser sets the order in both modes. Round b20 checked two pairs, MOD MOD in hex and `/` MOD in decimal.
   Each had the order of the other mode. Most other pairs were read in one mode only.

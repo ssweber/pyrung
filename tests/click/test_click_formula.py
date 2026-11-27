@@ -35,6 +35,7 @@ from pyrung.click.codegen.formula import (
     NEGATE_MINUS,
     NEGATE_PI,
     NEGATE_POINTER,
+    PLUS_SIGN,
     READ_FORMULAS,
     SAME_VALUE_ON_PLAIN_OPERANDS,
     SAME_VALUE_PAIRS,
@@ -321,7 +322,7 @@ def test_click_formula_parse_refuses_a_power_in_hex_mode(text: str) -> None:
     parse_with_unconfirmed_pairs(text.replace("h", ""))
 
 
-_MINUS_SIGNS = {
+_SIGNS = {
     NEGATE_ADDRESS,
     NEGATE_BRACKET,
     NEGATE_CONSTANT,
@@ -329,21 +330,22 @@ _MINUS_SIGNS = {
     NEGATE_POINTER,
     NEGATE_PI,
     NEGATE_MINUS,
+    PLUS_SIGN,
 }
 
 
 def _written_orders(pair: frozenset[str]) -> list[tuple[str, str]]:
     """Return each order in which a formula can write the two operators of *pair*.
 
-    A minus sign pairs only with an operator to its right.
+    A minus sign, or a plus sign in hex mode, pairs only with an operator to its right.
     """
     if len(pair) == 1:
         [op] = pair
         return [(op, op)]
-    if pair & _MINUS_SIGNS:
-        [minus] = pair & _MINUS_SIGNS
-        [other] = pair - _MINUS_SIGNS
-        return [(minus, other)]
+    if pair & _SIGNS:
+        [sign] = pair & _SIGNS
+        [other] = pair - _SIGNS
+        return [(sign, other)]
     first, second = sorted(pair)
     return [(first, second), (second, first)]
 
@@ -357,7 +359,7 @@ def _settles(ruled_out: set[str], first: str, second: str) -> bool:
     The parse groups the formula in one of these orders. The order is settled when the readings
     rule out each order that groups the formula another way.
     """
-    if first == second or first in _MINUS_SIGNS:
+    if first == second or first in _SIGNS:
         return second in ruled_out
     if _TIER_OF[second] < _TIER_OF[first]:
         # The parse applies the second first. Applying the first first, or both from the left,
@@ -646,6 +648,7 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
         if hex_mode:
             # The pair holds for every constant, so it comes with small and large ones.
             texts += [f"- {c} {b} {bank}2" for c in ("0h", "5h", "8000h", "FFFFh") for b in ops]
+            texts += [f"+ {bank}1 {b} {bank}2" for b in ops]
         texts += [f"- {call.format(b)}" for call in _function_calls(bank) for b in ops]
         for text in texts:
             tree = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)[0]
@@ -888,6 +891,11 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         ("- 5h / DH1", True, [(NEGATE_CONSTANT, "/")]),
         ("- 5h * DH1", True, [(NEGATE_CONSTANT, "*")]),
         ("- 5 / DH1", True, [(NEGATE_CONSTANT, "/")]),
+        # Round b20 read a hex plus before 5h only. No reading shows whether it cuts its operand
+        # to 16 bits.
+        ("+ 5h * DH1", True, [(PLUS_SIGN, "*")]),
+        ("+ ( 0h - DH1 ) + 1h", True, [(PLUS_SIGN, "+")]),
+        ("+ 0h - DH1 + 1h", True, [(PLUS_SIGN, "-"), (PLUS_SIGN, "+")]),
         # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
         ("- ( DH1 ) * DH2", True, [(NEGATE_BRACKET, "*")]),
@@ -979,9 +987,8 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DH1 ) MOD 7h", True),
         ("- ( DH1 * DH2 ) MOD DH3", True),
         ("DH1 MOD DH2 MOD DH3", True),
-        # A unary plus changes nothing in either mode.
+        # A decimal CLICK stores a plus before a constant in the constant.
         ("+ 5 * DS1", False),
-        ("+ 5h * DH1", True),
         # A bracket gives the order. In decimal mode the minus sign is part of the constant.
         ("( - 5h ) / DH1", True),
         ("- 5 / DS1", False),
@@ -1012,14 +1019,21 @@ def test_click_formula_parse_keeps_a_hex_minus_sign_before_a_constant_as_an_oper
     assert folded == Number(-5)
 
 
-def test_click_formula_parse_drops_a_unary_plus() -> None:
+def test_click_formula_parse_keeps_a_hex_plus_sign_as_an_operator() -> None:
     # Round b20 read + 5 * DS401 and + 5h * DH401 with 3 in the register. CLICK stored the
     # decimal plus in the constant (H+5#*#DS401) and the hex plus as a token of its own
     # (+#UH5#*#DH401). Each stored 15.
     assert parse_click_formula("+ 5 * DS1") == parse_click_formula("5 * DS1")
-    assert parse_click_formula("+ 5h * DH1", hex_mode=True) == parse_click_formula(
-        "5h * DH1", hex_mode=True
+    tree = parse_with_unconfirmed_pairs("+ 5h * DH1", hex_mode=True)[0]
+    assert tree == BinaryOp("*", formula_module.Plus(Number(5)), Address("DH", 1))
+    # If a hex plus cuts its operand to 16 bits, as AND does, these two differ with 1h in DH1.
+    # The first stores 0h with no SC43, and the second sets SC43.
+    bracket, plain = (
+        parse_with_unconfirmed_pairs(text, hex_mode=True)
+        for text in ("+ ( 0h - DH1 ) + 1h", "+ 0h - DH1 + 1h")
     )
+    assert bracket[0] != plain[0]
+    assert bracket[1] and plain[1]
 
 
 # ---------------------------------------------------------------------------
@@ -1072,6 +1086,26 @@ def _math_line(code: str) -> str:
 )
 def test_imported_formula_brackets_what_click_groups(token: str, line: str) -> None:
     assert _math_line(ladder_to_pyrung(_bundle(token))) == line
+
+
+@pytest.mark.parametrize(
+    ("token", "line"),
+    [
+        ("math(+ 5h * DH1,DH2,mode=hex)", "math(+LiteralExpr(0x5) * DH1, DH2)"),
+        ("math(+ ( 0h - DH1 ) + 1h,DH2,mode=hex)", "math(+(0x0 - DH1) + 0x1, DH2)"),
+    ],
+)
+def test_imported_formula_keeps_a_hex_plus_sign(token: str, line: str) -> None:
+    # No reading shows whether a hex plus cuts its operand to 16 bits, so the import keeps it
+    # as a step of the scan, and warns.
+    with pytest.warns(UserWarning, match=PLUS_SIGN):
+        source = ladder_to_pyrung(_bundle(token))
+    assert _math_line(source) == line
+
+
+def test_imported_formula_drops_a_decimal_plus_sign() -> None:
+    # A decimal CLICK stores + 5 as the constant H+5.
+    assert _math_line(ladder_to_pyrung(_bundle("math(+ 5 * DS1,DS2)"))) == "math(5 * DS1, DS2)"
 
 
 @pytest.mark.parametrize("operand", ['DS1 XOR "a"', "DS1..DS2 MOD 2", "DS1 ^ none"])
@@ -1158,6 +1192,7 @@ def test_imported_constants_compute_what_math_computes(
         ("- DF2 * 4", "DF3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
         ("- ( DF1 ) * DF2", "DF3", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
         ("- 5h / DH1", "DH2,mode=hex", f"{NEGATE_CONSTANT} and '/'", "the minus sign first"),
+        ("+ 5h * DH1", "DH2,mode=hex", f"{PLUS_SIGN} and '*'", "the plus sign first"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(
@@ -1293,7 +1328,7 @@ ROUND_B20_READINGS: list[tuple[str, str, bool, dict[str, float], str, float, set
     ),
     ("b20-c13", "- DF110", False, _B20_ZEROS, "DF21", 0.0, set()),
     ("b20-c14", "SQRT ( DF114 )", False, {"DF114": -5.0}, "DF22", 0.0, {_SC46}),
-    # Part D. A unary plus changes nothing.
+    # Part D. Each plus stores 5 times the register.
     ("b20-d_dec", "+ 5 * DS401", False, {"DS401": 3}, "DS23", 15, set()),
     ("b20-d_hex", "+ 5h * DH401", True, {"DH401": 3}, "DH24", 0x000F, set()),
     # Part E. Two operators of one tier apply from the left in each mode.
