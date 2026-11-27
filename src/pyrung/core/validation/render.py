@@ -412,10 +412,11 @@ def _keyword_text(instr: Any, name: str) -> str | None:
 
 
 def _calc_expression_text(source: Value | Span) -> str:
-    """Return the text of the expression that the author passed to ``math()``.
+    """Return the text that the renderer writes for the source of ``math()``.
 
-    :func:`render_expr` names the class of anything that is not an expression, such as
-    ``LiveTag`` for a lone tag.  This function keeps that text for such a source.
+    For an expression it is the formula.  For any other source it is the class name that
+    :func:`render_expr` writes, such as ``LiveTag``.  That text is kept as it is until it
+    is fixed on purpose.
     """
     match source:
         case ExprArg(expr=expr):

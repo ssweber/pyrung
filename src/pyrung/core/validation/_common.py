@@ -82,7 +82,7 @@ _CallerMap = dict[str, list[_CallerEntry]]
 
 
 def operand_tags(operand: Value | Span) -> tuple[Tag, ...]:
-    """Return the tags that a parsed operand names at a fixed address, in address order.
+    """Return the tags that a parsed operand names at a fixed address, in the order of the range.
 
     A pointer, a range with pointers, an expression and a constant name none.
     """

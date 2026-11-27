@@ -148,9 +148,10 @@ def _instruction_fields(instr: Any) -> tuple[str, ...] | None:
 def operand_object(value: Any) -> tuple[Any, bool]:
     """Return the object inside a parsed operand, and whether it is in ``immediate()``.
 
-    Return any other value unchanged, with False.  The program walkers call this on each
-    value, so they reach the tags inside an instruction's parsed operands, a tuple of
-    them included.
+    Return any other value unchanged, with False.  ``walk_program()`` and
+    ``walk_rung_operands()`` call it on each value that they meet.
+    ``walk_rung_operands()`` also calls it on each item of a tuple, so it finds the tags
+    in a drum's outputs.
     """
     match value:
         case TagArg(tag=inner, immediate=immediate) | RangeArg(span=inner, immediate=immediate):
@@ -762,11 +763,13 @@ class _Walker:
         if immediate:
             # The guard keys on the ImmediateRef that the author passed.
             key = obj.wrapper
-        elif isinstance(inner, ImmediateRef):  # a contact in immediate()
+        elif isinstance(inner, ImmediateRef):
+            # A raw immediate(): a contact, or the formula of math() with a lone operand.
             key, inner, immediate = inner, inner.value, True
         else:
-            # The guard keys on the operand itself.  Two copies into one tag then give
-            # one fact, as two operands of any other instruction do.
+            # The guard keys on the object and its argument path, across the whole
+            # program.  So when two copies write one tag, the walk records one fact for
+            # that tag.
             key = inner
         seen_key = (id(key), arg_path)
         if seen_key in self._seen:
