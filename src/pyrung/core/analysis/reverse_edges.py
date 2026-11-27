@@ -12,9 +12,19 @@ their own map from ``calc_reverse_edge`` and ``IDENTITY`` to seed input domains.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    Dest,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -47,6 +57,44 @@ def literal_value_from_value(value: Any) -> Any | None:
     if isinstance(raw, (bool, int, float)):
         return raw
     return None
+
+
+def value_tag_name(value: Value) -> str | None:
+    """Return the name of the one tag that a copy or fill source reads as it is, or None."""
+    match value:
+        case TagArg(tag=tag):
+            return tag.name
+        case ExprArg(expr=expr):
+            return tag_name_from_value(expr)
+        case PointerArg() | ConstArg():
+            return None
+        case _:
+            assert_never(value)
+
+
+def _dest_names(dest: Dest, expand: Callable[[Any], list[str]]) -> list[str]:
+    """Return the names of the tags that *dest* writes.  *expand* lists them for a pointer."""
+    match dest:
+        case TagArg(tag=tag):
+            return [tag.name]
+        case PointerArg(ref=ref):
+            return expand(ref)
+        case _:
+            assert_never(dest)
+
+
+def _span_names(span: Span, expand: Callable[[Any], list[str]]) -> list[str]:
+    """Return the names of the tags in *span*.
+
+    *expand* lists them for a range with pointers, or for a range that lists no tags.
+    """
+    match span:
+        case RangeArg(span=static):
+            return [tag.name for tag in static.tags()] or expand(static)
+        case PointerRangeArg(span=dynamic):
+            return expand(dynamic)
+        case _:
+            assert_never(span)
 
 
 def calc_reverse_edge(
@@ -131,7 +179,7 @@ def build_reverse_edge_map(
         program: The program to analyze.
         expand_indirect: Optional callback to resolve indirect memory
             references to concrete tag names.  When ``None``, indirect
-            refs that ``_resolve_tag_names`` can't handle are skipped.
+            refs are skipped.
     """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import (
@@ -139,7 +187,7 @@ def build_reverse_edge_map(
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+    from pyrung.core.validation._common import walk_instructions
 
     _expand = expand_indirect or (lambda dest: [])
 
@@ -149,34 +197,26 @@ def build_reverse_edge_map(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = tag_name_from_value(as_authored(instr.source))
+            source_name = value_tag_name(instr.source)
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(as_authored(instr.dest))
-            if not target_names:
-                target_names = _expand(as_authored(instr.dest))
-            for target_name in target_names:
+            for target_name in _dest_names(instr.dest, _expand):
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, FillInstruction):
             if instr.convert is not None:
                 continue
-            source_name = tag_name_from_value(as_authored(instr.value))
+            source_name = value_tag_name(instr.value)
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(as_authored(instr.dest))
-            if not target_names:
-                target_names = _expand(as_authored(instr.dest))
-            for target_name in target_names:
+            for target_name in _span_names(instr.dest, _expand):
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _resolve_tag_names(as_authored(instr.source))
-            dest_names = _resolve_tag_names(as_authored(instr.dest))
-            if not dest_names:
-                dest_names = _expand(as_authored(instr.dest))
+            source_names = _span_names(instr.source, lambda _: [])
+            dest_names = _span_names(instr.dest, _expand)
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
@@ -187,9 +227,7 @@ def build_reverse_edge_map(
                             reverse_edges.setdefault(src, []).append((dst, IDENTITY))
 
         elif isinstance(instr, CalcInstruction):
-            target_name = tag_name_from_value(as_authored(instr.dest))
-            if target_name is None:
-                continue
+            target_name = instr.dest.tag.name
             edge = calc_reverse_edge(instr.expression)
             if edge is not None:
                 source_name, invert = edge

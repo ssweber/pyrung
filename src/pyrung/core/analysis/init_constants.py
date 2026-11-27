@@ -18,9 +18,9 @@ C. **System first_scan guard** — tags written only under ``system.sys.first_sc
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, Value
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -54,16 +54,15 @@ def find_instruction_at_site(program: Program, site: Any) -> Any:
 _NO_LITERAL_WRITE = object()
 
 
-def _normalize_literal_write_value(raw_value: Any, target: Any) -> Any | object:
+def _normalize_literal_write_value(value: Any, target: Any) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
     from pyrung.core.instruction.conversions import (
         _store_copy_value_to_tag_type,
         copy_source_kind,
     )
-    from pyrung.core.tag import ImmediateRef, Tag
+    from pyrung.core.tag import Tag
 
-    value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
     source = copy_source_kind(value)
     if isinstance(value, Tag) and value.readonly:
         value = value.default  # a readonly tag is a named constant
@@ -91,15 +90,22 @@ def _check_literal_write(
         return None
 
     if isinstance(instr, CopyInstruction):
-        if instr.convert is not None:
-            return None
-        raw_value = as_authored(instr.source)
+        source: Value = instr.source
     elif isinstance(instr, FillInstruction):
-        if instr.convert is not None:
-            return None
-        raw_value = as_authored(instr.value)
+        source = instr.value
     else:
         return None
+    if instr.convert is not None:
+        return None
+    match source:
+        case TagArg(tag=tag):
+            raw_value: Any = tag
+        case ConstArg(value=constant):
+            raw_value = constant
+        case PointerArg() | ExprArg():
+            return None
+        case _:
+            assert_never(source)
 
     target = tags.get(tag_name)
     if target is None:
