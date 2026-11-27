@@ -7,11 +7,13 @@ the bijective ``to_ascii``/``to_binary`` conversions (exact), the conservative
 
 from __future__ import annotations
 
-from pyrung import Char, Dint, Int, Real, Word
+from enum import IntEnum
+
+from pyrung import Char, Dint, Int, Real, Word, sqrt
 from pyrung.core.analysis import crossings
 from pyrung.core.analysis.crossings.copy import CopyCrossing
 from pyrung.core.copy_converters import to_ascii, to_binary, to_text, to_value
-from pyrung.core.crossing import Cmp, CrossingContext, Eq, eq_target
+from pyrung.core.crossing import UNKNOWN, Cmp, CrossingContext, Eq, Literal, eq_target
 from pyrung.core.instruction.data_transfer import (
     BlockCopyInstruction,
     CopyInstruction,
@@ -368,3 +370,42 @@ def test_block_copy_converting_falls_through() -> None:
     dst_blk = Block("DD", TagType.INT, 1, 5)
     instr = BlockCopyInstruction(src_blk.select(1, 3), dst_blk.select(1, 3), convert=to_value)
     assert crossings.reverse(instr, None, eq_target("DD1", 1), _ctx()).fallthrough is True
+
+
+# --- a constant or a function that has a name -----------------------------------
+
+
+class _Mode(IntEnum):
+    STOP = 0
+    RUN = 3
+
+
+def test_copy_of_an_intenum_member_is_its_value() -> None:
+    # The member has a .name ("RUN"), but it is a constant, not a tag.
+    state = Int("State")
+    instr = CopyInstruction(_Mode.RUN, state)
+    assert _COPY.forward(instr, "State", _ctx(state)) == Literal(3)
+    hit = _COPY.reverse(instr, None, eq_target("State", 3), _ctx(state))
+    assert hit.exact is True and hit.branches == ((),)
+    miss = _COPY.reverse(instr, None, eq_target("State", 5), _ctx(state))
+    assert miss.exact is True
+    assert _only(miss) == (Eq("State", frozenset()),)
+
+
+def test_fill_of_an_intenum_member_is_its_value() -> None:
+    blk = Block("DS", TagType.INT, 1, 3)
+    instr = FillInstruction(_Mode.RUN, blk.select(1, 2))
+    assert _COPY.forward(instr, "DS1", _ctx()) == Literal(3)
+    hit = _COPY.reverse(instr, None, eq_target("DS2", 3), _ctx())
+    assert hit.exact is True and hit.branches == ((),)
+    miss = _COPY.reverse(instr, None, eq_target("DS2", 5), _ctx())
+    assert _only(miss) == (Eq("DS2", frozenset()),)
+
+
+def test_copy_of_sqrt_reads_no_tag_named_sqrt() -> None:
+    # sqrt(Level) has a .name ("sqrt"), but no tag of that name exists.
+    level, dest = Int("Level"), Int("Dest")
+    instr = CopyInstruction(sqrt(level), dest)
+    assert _COPY.forward(instr, "Dest", _ctx(level, dest)) is UNKNOWN
+    r = _COPY.reverse(instr, None, eq_target("Dest", 3), _ctx(level, dest))
+    assert r.fallthrough is True

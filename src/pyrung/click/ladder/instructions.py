@@ -23,14 +23,18 @@ from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.operands import (
     Coil,
     ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
     Preset,
     RangeArg,
+    Span,
     TagArg,
     Value,
-    held,
 )
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.memory_block import BlockRange
+from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation.render import operand_name
 
 from ._loop_items import is_own_rung, loop_item_rung
@@ -73,6 +77,11 @@ class _InstructionMixin:
             allow_immediate: bool = False,
             immediate_context: str = "",
         ) -> str: ...
+        def _render_arg(self, arg: Value | Span, *, path: str, source: Any) -> str: ...
+        def _render_block_range(
+            self, block_range: BlockRange, *, path: str, source: Any
+        ) -> str: ...
+        def _render_immediate_coil(self, target: Coil, *, path: str, source: Any) -> str: ...
         def _render_network(
             self,
             conditions: list[Condition],
@@ -83,7 +92,7 @@ class _InstructionMixin:
             first_marker: str,
         ) -> list[tuple[str, ...]]: ...
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
-        def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
+        def _render_shift_range(self, bit_range: Span, *, path: str, source: Any) -> str: ...
         def _hex_constants(
             self, mode: Literal["word", "copy", "math", "exact"] | None
         ) -> AbstractContextManager[None]: ...
@@ -122,7 +131,7 @@ class _InstructionMixin:
         # forloop() lowers to: for(...) + child instructions + next().
         for_token = self._fn(
             "for",
-            self._render_operand(held(instruction.count), path=f"{path}.count", source=instruction),
+            self._render_arg(instruction.count, path=f"{path}.count", source=instruction),
             **for_kw,
         )
         rows = self._render_network(
@@ -308,7 +317,7 @@ class _InstructionMixin:
                 ),
                 source=instruction,
             )
-        if _plain_text_converter(held(value), tag) is not None:
+        if _plain_text_converter(_authored_value(value), tag) is not None:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
@@ -320,20 +329,39 @@ class _InstructionMixin:
             )
         dest = self._render_operand(tag, path=f"{path}.dest", source=instruction)
         with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
-            source = self._render_operand(held(value), path=f"{path}.value", source=instruction)
+            source = self._render_arg(value, path=f"{path}.value", source=instruction)
         return self._fn("copy", source, dest, **oneshot_kw)
 
     def _range_text(
-        self, value: Any, *, path: str, instruction: Any
+        self, value: Value | Span, *, path: str, instruction: Any
     ) -> tuple[str, RangeProblem | None]:
         """Return a Copy family range as the export writes it, and its problem, if any.
 
         The render writes a range that is not consecutive ascending addresses as a list,
         such as ``[DS1,DS5]``. CLICK has no list form.
         """
-        text = self._render_operand(value, path=path, source=instruction)
+        text = self._render_arg(value, path=path, source=instruction)
+        match value:
+            case RangeArg(span=span):
+                return text, self._range_problem(text, span, instruction)
+            case TagArg() | PointerArg() | PointerRangeArg() | ConstArg() | ExprArg():
+                return text, None
+            case _:
+                assert_never(value)
+
+    def _block_range_text(
+        self, span: BlockRange, *, path: str, instruction: Any
+    ) -> tuple[str, RangeProblem | None]:
+        """Return the range *span* as the export writes it, and its problem, if any."""
+        text = self._render_block_range(span, path=path, source=instruction)
+        return text, self._range_problem(text, span, instruction)
+
+    def _range_problem(
+        self, text: str, block_range: BlockRange, instruction: Any
+    ) -> RangeProblem | None:
+        """Return the problem of a range that the export wrote as *text*, or None."""
         if not text.startswith("["):
-            return text, None
+            return None
         addresses = [address for address in text[1:-1].split(",") if address]
         if (
             type(instruction).__name__ == "ShiftInstruction"
@@ -341,8 +369,7 @@ class _InstructionMixin:
             and _compact_contiguous_range(addresses[::-1]) is not None
         ):
             # A shift runs down a descending run of addresses, so only a scattered range is a fault.
-            return text, None
-        block_range = value.value if isinstance(value, ImmediateRef) else value
+            return None
         fault: RangeFault
         if not addresses:
             fault = "empty"
@@ -357,15 +384,26 @@ class _InstructionMixin:
         else:
             fault = "scattered"
         own = [_display_address(tag.name) for tag in block_range.tags()] == addresses
-        return text, (operand_name(value), fault, addresses, own)
+        return (operand_name(block_range), fault, addresses, own)
 
-    def _render_run(self, value: Any, *, path: str, instruction: Any) -> str:
+    def _render_run(self, value: Value | Span, *, path: str, instruction: Any) -> str:
         """Render a Copy family range, and refuse one that CLICK cannot hold as a range.
 
         The export refuses it even when CLK_COPY_RANGE_NOT_CONSECUTIVE is allowed, so it
         never writes a list.
         """
         text, problem = self._range_text(value, path=path, instruction=instruction)
+        self._refuse_range(problem, path=path, instruction=instruction)
+        return text
+
+    def _render_block_run(self, span: BlockRange, *, path: str, instruction: Any) -> str:
+        """Render the range *span*, and refuse it as :meth:`_render_run` does."""
+        text, problem = self._block_range_text(span, path=path, instruction=instruction)
+        self._refuse_range(problem, path=path, instruction=instruction)
+        return text
+
+    def _refuse_range(self, problem: RangeProblem | None, *, path: str, instruction: Any) -> None:
+        """Refuse a range that has a *problem*, because CLICK has no list form."""
         if problem is not None:
             self._raise_issue(
                 path=path,
@@ -376,7 +414,6 @@ class _InstructionMixin:
                 ),
                 source=instruction,
             )
-        return text
 
     def _render_coil_target(self, instruction: Any, *, path: str) -> str:
         """Render a coil's target, and refuse a range that CLICK cannot hold as one.
@@ -386,19 +423,15 @@ class _InstructionMixin:
         Set and Reset take no list.
         """
         target: Coil = instruction.target
-        text = self._render_operand(
-            held(target),
-            path=path,
-            source=instruction,
-            allow_immediate=True,
-            immediate_context="coil",
-        )
         match target:
+            case TagArg(immediate=True) | RangeArg(immediate=True):
+                return self._render_immediate_coil(target, path=path, source=instruction)
             case TagArg():
-                return text
-            case RangeArg(span=span, immediate=immediate):
-                if not immediate and text.startswith("["):
-                    self._render_run(span, path=path, instruction=instruction)
+                return self._render_arg(target, path=path, source=instruction)
+            case RangeArg(span=span):
+                text = self._render_arg(target, path=path, source=instruction)
+                if text.startswith("["):
+                    self._render_block_run(span, path=path, instruction=instruction)
                 return text
             case _:
                 assert_never(target)
@@ -455,13 +488,11 @@ class _InstructionMixin:
             converter = _exported_converter(instruction)
             # The export writes what the author passed, so an immediate() operand that
             # CLICK refuses in a Copy is refused in the words that every instruction uses.
-            dest = self._render_operand(
-                held(instruction.dest), path=f"{path}.dest", source=instruction
-            )
+            dest = self._render_arg(instruction.dest, path=f"{path}.dest", source=instruction)
             self._refuse_constant_text_past_txt(instruction, dest, path=f"{path}.dest")
             with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
-                copy_source = self._render_operand(
-                    held(instruction.source), path=f"{path}.source", source=instruction
+                copy_source = self._render_arg(
+                    instruction.source, path=f"{path}.source", source=instruction
                 )
             if converter is not None:
                 convert_kw["convert"] = self._render_converter(
@@ -471,7 +502,7 @@ class _InstructionMixin:
         if instruction_type == "BlockCopyInstruction":
             convert_kw = {}
             block_source = self._render_run(
-                held(instruction.source), path=f"{path}.source", instruction=instruction
+                instruction.source, path=f"{path}.source", instruction=instruction
             )
             if instruction.convert is not None:
                 convert_kw["convert"] = self._render_converter(
@@ -480,9 +511,7 @@ class _InstructionMixin:
             return self._fn(
                 "blockcopy",
                 block_source,
-                self._render_run(
-                    held(instruction.dest), path=f"{path}.dest", instruction=instruction
-                ),
+                self._render_run(instruction.dest, path=f"{path}.dest", instruction=instruction),
                 **convert_kw,
                 **oneshot_kw,
             )
@@ -492,20 +521,18 @@ class _InstructionMixin:
                 return self._single_register_fill_token(
                     instruction, single, path=path, oneshot_kw=oneshot_kw
                 )
-            dest = self._render_run(
-                held(instruction.dest), path=f"{path}.dest", instruction=instruction
-            )
+            dest = self._render_run(instruction.dest, path=f"{path}.dest", instruction=instruction)
             with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
-                fill_value = self._render_operand(
-                    held(instruction.value), path=f"{path}.value", source=instruction
+                fill_value = self._render_arg(
+                    instruction.value, path=f"{path}.value", source=instruction
                 )
             return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
             mode = instruction.mode
             # Hex-mode Math reads every constant as hex (shift counts too).
             with self._hex_constants("math" if str(mode) == "hex" else None):
-                formula = self._render_operand(
-                    held(instruction.source_expression),
+                formula = self._render_arg(
+                    instruction.source_expression,
                     path=f"{path}.expression",
                     source=instruction,
                 )
@@ -522,13 +549,13 @@ class _InstructionMixin:
                 kw["continuous"] = "1"
             kw.update(oneshot_kw)
             range_str = self._render_run(
-                held(instruction.search_range),
+                instruction.search_range,
                 path=f"{path}.search_range",
                 instruction=instruction,
             )
             with self._hex_constants("exact" if self._is_hex_bank_operand(range_str) else None):
-                value_str = self._render_operand(
-                    held(instruction.value), path=f"{path}.value", source=instruction
+                value_str = self._render_arg(
+                    instruction.value, path=f"{path}.value", source=instruction
                 )
             comparison = f"{range_str} {instruction.condition} {value_str}"
             return self._fn(
@@ -546,26 +573,22 @@ class _InstructionMixin:
             return self._fn(
                 "pack_bits",
                 self._render_run(
-                    held(instruction.bit_block),
+                    instruction.bit_block,
                     path=f"{path}.bit_block",
                     instruction=instruction,
                 ),
-                self._render_operand(
-                    held(instruction.dest), path=f"{path}.dest", source=instruction
-                ),
+                self._render_arg(instruction.dest, path=f"{path}.dest", source=instruction),
                 **oneshot_kw,
             )
         if instruction_type == "PackWordsInstruction":
             return self._fn(
                 "pack_words",
                 self._render_run(
-                    held(instruction.word_block),
+                    instruction.word_block,
                     path=f"{path}.word_block",
                     instruction=instruction,
                 ),
-                self._render_operand(
-                    held(instruction.dest), path=f"{path}.dest", source=instruction
-                ),
+                self._render_arg(instruction.dest, path=f"{path}.dest", source=instruction),
                 **oneshot_kw,
             )
         if instruction_type == "PackTextInstruction":
@@ -576,23 +599,19 @@ class _InstructionMixin:
             return self._fn(
                 "pack_text",
                 self._render_run(
-                    held(instruction.source_range),
+                    instruction.source_range,
                     path=f"{path}.source_range",
                     instruction=instruction,
                 ),
-                self._render_operand(
-                    held(instruction.dest), path=f"{path}.dest", source=instruction
-                ),
+                self._render_arg(instruction.dest, path=f"{path}.dest", source=instruction),
                 **pt_kw,
             )
         if instruction_type == "UnpackToBitsInstruction":
             return self._fn(
                 "unpack_to_bits",
-                self._render_operand(
-                    held(instruction.source), path=f"{path}.source", source=instruction
-                ),
+                self._render_arg(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_run(
-                    held(instruction.bit_block),
+                    instruction.bit_block,
                     path=f"{path}.bit_block",
                     instruction=instruction,
                 ),
@@ -601,11 +620,9 @@ class _InstructionMixin:
         if instruction_type == "UnpackToWordsInstruction":
             return self._fn(
                 "unpack_to_words",
-                self._render_operand(
-                    held(instruction.source), path=f"{path}.source", source=instruction
-                ),
+                self._render_arg(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_run(
-                    held(instruction.word_block),
+                    instruction.word_block,
                     path=f"{path}.word_block",
                     instruction=instruction,
                 ),
@@ -689,7 +706,7 @@ class _InstructionMixin:
             return self._fn(
                 "shift",
                 self._render_shift_range(
-                    held(instruction.bit_range),
+                    instruction.bit_range,
                     path=f"{path}.bit_range",
                     source=instruction,
                 ),
@@ -798,7 +815,7 @@ class _InstructionMixin:
                 target=target_expr,
                 remote_start=remote_start_expr,
                 source=self._render_run(
-                    held(instruction.source), path=f"{path}.source", instruction=instruction
+                    instruction.source, path=f"{path}.source", instruction=instruction
                 ),
             )
             kwargs.update(self._render_status_bits(instruction, "sending", path))
@@ -812,7 +829,7 @@ class _InstructionMixin:
                 target=target_expr,
                 remote_start=remote_start_expr,
                 dest=self._render_run(
-                    held(instruction.dest), path=f"{path}.dest", instruction=instruction
+                    instruction.dest, path=f"{path}.dest", instruction=instruction
                 ),
             )
             kwargs.update(self._render_status_bits(instruction, "receiving", path))
@@ -912,6 +929,25 @@ class _InstructionMixin:
         if not parts:
             return f"{name}()"
         return f"{name}({','.join(parts)})"
+
+
+def _authored_value(value: Value) -> Any:
+    """Return the tag, pointer, expression or constant inside *value*.
+
+    ``_plain_text_converter`` reads the operand that the author passed. It finds the same
+    conversion for a tag with or without ``immediate()``.
+    """
+    match value:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return ref
+        case ExprArg(expr=expr):
+            return expr
+        case ConstArg(value=constant):
+            return constant
+        case _:
+            assert_never(value)
 
 
 # ---- External target / remote-start helpers ----

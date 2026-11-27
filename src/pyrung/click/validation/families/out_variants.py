@@ -73,8 +73,9 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
         return f"Use unit= one of {choices} and scale the preset."
     if code == "constant-out-of-range" and field in _PRESET_FIELDS:
         preset: Preset = getattr(instruction, _PRESET_FIELDS[field])
-        if isinstance(preset, ConstArg) and isinstance(preset.value, int) and preset.value <= 0:
-            return "Pass a DS tag as the preset. A register preset takes any value."
+        match preset:
+            case ConstArg(value=int() as value) if value <= 0:
+                return "Pass a DS tag as the preset. A register preset takes any value."
     return None
 
 
@@ -139,12 +140,12 @@ def _call(instruction: Any) -> Call:
             text += ", "
             add("on_acc", _owner(instruction.timer_acc), "positional")
             text += ", "
-            add("on_preset", operand_name(instruction.on_preset), "positional")
+            add("on_preset", operand_name(_preset_value(instruction.on_preset)), "positional")
             continue
         text += f", {side}=("
         add(f"{side}_acc", _owner(getattr(instruction, acc)), "keyword")
         text += ", "
-        add(f"{side}_preset", operand_name(getattr(instruction, preset)), "keyword")
+        add(f"{side}_preset", operand_name(_preset_value(getattr(instruction, preset))), "keyword")
         text += ")"
     if instruction.unit is not TimeUnit.Tms:
         text += ", unit="

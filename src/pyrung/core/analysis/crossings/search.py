@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, assert_never
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
-from pyrung.core.analysis.crossings._ranges import range_tags
+from pyrung.core.analysis.crossings._ranges import fixed_tags
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
     Constraint,
@@ -37,19 +37,7 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
-    held,
 )
-
-
-def _fixed_tags(span: Span) -> list[Any] | None:
-    """Return the tags of *span*, or ``None`` for a range with pointers."""
-    match span:
-        case RangeArg(span=fixed):
-            return range_tags(fixed)
-        case PointerRangeArg():
-            return None
-        case _:
-            assert_never(span)
 
 
 class SearchCrossing(BaseCrossing):
@@ -64,7 +52,7 @@ class SearchCrossing(BaseCrossing):
         value = next(iter(target.values))
         if tag != instr.found.tag.name or value is not True:
             return REVERSE_FALLTHROUGH  # result-address chase is the frontier
-        tags = _fixed_tags(instr.search_range)
+        tags = fixed_tags(instr.search_range)
         if not tags:
             return REVERSE_FALLTHROUGH
         search_value: Value | Span = instr.value
@@ -77,9 +65,16 @@ class SearchCrossing(BaseCrossing):
                 return REVERSE_FALLTHROUGH
             case TagArg(tag=value_tag, immediate=False):
                 value_is_tag, bound = True, value_tag.name
-            case TagArg() | PointerArg() | ExprArg() | ConstArg() | RangeArg() | PointerRangeArg():
-                # The Quant compares each cell with the value as the author wrote it.
-                value_is_tag, bound = False, held(search_value)
+            case (
+                TagArg(tag=read)
+                | PointerArg(ref=read)
+                | ExprArg(expr=read)
+                | ConstArg(value=read)
+                | RangeArg(span=read)
+                | PointerRangeArg(span=read)
+            ):
+                # The Quant compares each cell with the object inside the operand.
+                value_is_tag, bound = False, read
             case _:
                 assert_never(search_value)
         block = tuple(t.name for t in tags)

@@ -44,7 +44,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.program import Program
 from pyrung.core.rung import dsl_call
 from pyrung.core.system_points import system
-from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation.walker import walk_rung_operands
 
 
@@ -573,9 +573,7 @@ class CodegenContext:
             return compact[addr]
         return addr - self.block_bindings[block_id].start
 
-    def global_symbol_for_tag(self, tag: Tag | ImmediateRef) -> str:
-        if isinstance(tag, ImmediateRef):
-            tag = tag.tag
+    def global_symbol_for_tag(self, tag: Tag) -> str:
         block_info = self.tag_block_addresses.get(tag.name)
         if block_info is not None:
             block_id, _addr = block_info
@@ -589,9 +587,7 @@ class CodegenContext:
             raise RuntimeError(f"Missing scalar symbol for tag {tag.name!r}")
         return symbol
 
-    def symbol_for_tag(self, tag: Tag | ImmediateRef) -> str:
-        if isinstance(tag, ImmediateRef):
-            tag = tag.tag
+    def symbol_for_tag(self, tag: Tag) -> str:
         block_info = self.tag_block_addresses.get(tag.name)
         if block_info is not None:
             block_id, addr = block_info

@@ -58,7 +58,7 @@ when both already hold at the start.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.crossings import forward
 from pyrung.core.analysis.pdg import resolve_rung
@@ -69,12 +69,12 @@ from pyrung.core.analysis.write_sites import instruction_write_targets, instruct
 from pyrung.core.crossing import CrossingContext, Literal
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg
 from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.memory_block import Block, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.synthesis import coil_timer
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-from pyrung.core.tag import ImmediateRef, TagType, tag_written_from_outside
+from pyrung.core.tag import TagType, tag_written_from_outside
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.validation._common import walk_instructions
 
@@ -174,11 +174,20 @@ def _pointer_written_blocks(program: Any) -> frozenset[Block]:
     blocks: set[Block] = set()
     for instr in walk_instructions(program):
         for target in instruction_write_targets(instr):
-            if isinstance(target, ImmediateRef):
-                target = target.value
             if isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
                 blocks.add(target.block)
     return frozenset(blocks)
+
+
+def _constant_preset(preset: Preset) -> int | None:
+    """Return the constant in *preset*, or None for a tag."""
+    match preset:
+        case ConstArg(value=int() as value):
+            return value
+        case ConstArg() | TagArg():
+            return None
+        case _:
+            assert_never(preset)
 
 
 def facts_for(setup: DriveSetup) -> ProofFacts:
@@ -309,7 +318,7 @@ class _LinkProof:
             (node_index, instr)
             for node_index in writers
             for instr in getattr(self.facts.rung_of(node_index), "_instructions", ())
-            if isinstance(instr, OnDelayInstruction) and as_authored(instr.done_bit).name == tag
+            if isinstance(instr, OnDelayInstruction) and instr.done_bit.tag.name == tag
         ]
         if not found:
             return NotImplemented
@@ -322,7 +331,7 @@ class _LinkProof:
             return None
         node_index, timer = found[0]
         node = pdg.rung_nodes[node_index]
-        acc = as_authored(timer.accumulator).name
+        acc = timer.accumulator.tag.name
         if self._rung_also_writes(node_index, timer, (acc, tag)):
             return None
         # Skipped scans would hold the count, as a retentive timer does.
@@ -330,7 +339,7 @@ class _LinkProof:
             node.subroutine is not None
             or node.guard_reads
             or timer.reset_condition is not None
-            or not isinstance(preset := as_authored(timer.preset), int)
+            or (preset := _constant_preset(timer.preset)) is None
             or pdg.writers_of.get(acc, frozenset()) != writers
             or acc in self.facts.free
             or self.facts._writable_through_pointer(acc)

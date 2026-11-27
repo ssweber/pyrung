@@ -8,7 +8,7 @@ from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_nod
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import TagArg
 from pyrung.core.state import value_changed
 
 from ._rung_writes import RungWrite, ScanRungWriteProjection, build_scan_rung_write_projection
@@ -1784,7 +1784,6 @@ def _replayed_writer_proves_value(
         CopyInstruction,
         _store_copy_value_to_tag_type,
     )
-    from pyrung.core.tag import Tag
 
     written = _written_value_for_tag(rung, tag_name)
     if isinstance(written, Literal):
@@ -1799,21 +1798,18 @@ def _replayed_writer_proves_value(
     # A named slot inside a block can evade the generic forward crossing even
     # though Boolean coil semantics remain exact.
     instr = _writer_for_tag(rung, tag_name)
-    if (
-        isinstance(instr, CopyInstruction)
-        and instr.convert is None
-        and isinstance(as_authored(instr.source), Tag)
-        and isinstance(as_authored(instr.dest), Tag)
-        and as_authored(instr.dest).name == tag_name
-    ):
-        try:
-            source = fire_view.get_tag(as_authored(instr.source).name)
-            stored = _store_copy_value_to_tag_type(
-                source, as_authored(instr.dest), as_authored(instr.source).type
-            )
-            return _same_value(stored, to_value)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            return False
+    if isinstance(instr, CopyInstruction) and instr.convert is None:
+        # This reader skips an operand in immediate().
+        match instr.source, instr.dest:
+            case TagArg(tag=read, immediate=False), TagArg(tag=dest, immediate=False) if (
+                dest.name == tag_name
+            ):
+                try:
+                    source = fire_view.get_tag(read.name)
+                    stored = _store_copy_value_to_tag_type(source, dest, read.type)
+                    return _same_value(stored, to_value)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    return False
     return isinstance(instr, (OutInstruction, LatchInstruction)) and _same_value(
         to_value,
         True,

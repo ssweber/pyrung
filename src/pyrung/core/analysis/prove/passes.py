@@ -6,11 +6,11 @@ import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.instruction.operands import as_authored, held
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, RangeArg, TagArg
 from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP, CompiledKernel, ForIterationsBeyondCap
 
 from .absorb import _prior_key_done_specs, _ThresholdAbsorptions
@@ -192,12 +192,13 @@ def _collect_receive_dest_names(program: Program) -> set[str]:
     for instr in walk_instructions(program):
         if not isinstance(instr, ModbusReceiveInstruction):
             continue
-        dest = as_authored(instr.dest)
-        if hasattr(dest, "name"):
-            names.add(dest.name)
-        elif hasattr(dest, "tags"):
-            for tag in dest.tags():
+        match instr.dest:
+            case TagArg(tag=tag):
                 names.add(tag.name)
+            case RangeArg(span=span):
+                names.update(tag.name for tag in span.tags())
+            case _:
+                assert_never(instr.dest)
     return names
 
 
@@ -306,8 +307,13 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str) -> bool:
         if isinstance(instr, ForLoopInstruction):
             if not _instructions_write(instr.instructions, name):
                 continue
-            count = held(instr.count)
-            literal = isinstance(count, int) and not isinstance(count, bool)
+            match instr.count:
+                case ConstArg(value=value):
+                    literal = isinstance(value, int) and not isinstance(value, bool)
+                case TagArg() | PointerArg() | ExprArg():
+                    literal = False
+                case _:
+                    assert_never(instr.count)
             if instr._oneshot or instr.body_rungs or not literal:
                 return False
             if not _writes_run_when_powered(instr.instructions, name):

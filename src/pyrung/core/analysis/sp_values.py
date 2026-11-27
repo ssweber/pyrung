@@ -25,7 +25,7 @@ from pyrung.core.crossing import (
     Literal,
     invert_affine_candidate,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import TagArg
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -292,7 +292,7 @@ def writer_value_facts(program: Any, pdg: ProgramGraph) -> dict[str, tuple[Write
                 instr = _writer_for_tag(rung_obj, tag_name)
                 if not (
                     isinstance(instr, OutInstruction)
-                    and getattr(as_authored(instr.target), "name", None) == tag_name
+                    and _plain_tag_name(instr.target) == tag_name
                     and not getattr(instr, "_oneshot", False)
                 ):
                     continue
@@ -316,25 +316,28 @@ def writer_value_facts(program: Any, pdg: ProgramGraph) -> dict[str, tuple[Write
     return result
 
 
+def _plain_tag_name(arg: Any) -> str | None:
+    """Return the name of the tag in *arg* if it is one tag without ``immediate()``, else None.
+
+    The readers in this module skip a tag in ``immediate()``.
+    """
+    match arg:
+        case TagArg(tag=tag, immediate=False):
+            return tag.name
+        case _:
+            return None
+
+
 def _named_copy_source(instr: Any) -> str | None:
     """Source name when *instr* is a copy-from-named-non-readonly-tag, else ``None``."""
     from pyrung.core.instruction.data_transfer import CopyInstruction
 
-    src = (
-        as_authored(getattr(instr, "source", None))
-        if isinstance(instr, CopyInstruction)
-        else as_authored(getattr(instr, "value", None))
-    )
-    if src is None:
-        return None
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-    if isinstance(src, (IndirectRef, IndirectExprRef)):
-        return None
-    name = getattr(src, "name", None)
-    if name is not None and not getattr(src, "readonly", False):
-        return name
-    return None
+    src = instr.source if isinstance(instr, CopyInstruction) else getattr(instr, "value", None)
+    match src:
+        case TagArg(tag=tag, immediate=False) if not tag.readonly:
+            return tag.name
+        case _:
+            return None
 
 
 class _SnapshotView:
@@ -627,8 +630,8 @@ def _derive_one_hop(
         for instr in ro._instructions:
             if not isinstance(instr, CalcInstruction):
                 continue
-            dest = getattr(as_authored(instr.dest), "name", None)
-            if dest is None or dest in out:
+            dest = instr.dest.tag.name
+            if dest in out:
                 continue
             names = _expr_tag_names(instr.expression)
             if not names or not (names & overlay.keys()):

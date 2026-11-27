@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.memory_block import (
-    BlockRange,
-    IndirectBlockRange,
     PastBankError,
     _element_name,
     _store_block,
@@ -51,6 +49,7 @@ from .operands import (
     Value,
     check_rules,
     describe,
+    parse_value,
 )
 from .resolvers import (
     _sequential_tags,
@@ -168,22 +167,35 @@ def _number_text(value: Any, source_tag: Tag | None, converter: CopyConverter) -
     return rendered + _termination_char(converter.termination_code)
 
 
-def _unwrapped(value: Any) -> Any:
-    from pyrung.core.tag import ImmediateRef
+def _range_type(value: Any) -> TagType | None:
+    """Return the tag type of *value* if it is a range from ``.select()``, or None.
 
-    return value.value if isinstance(value, ImmediateRef) else value
+    *value* is an argument as the author passed it.
+    """
+    parsed = parse_value(value)
+    match parsed:
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            return span.block.type
+        case TagArg() | PointerArg() | ConstArg() | ExprArg():
+            return None
+        case _:
+            assert_never(parsed)
 
 
 def _is_range(value: Any) -> bool:
-    return isinstance(_unwrapped(value), (BlockRange, IndirectBlockRange))
+    """Return True if *value*, an argument as the author passed it, is a range."""
+    return _range_type(value) is not None
 
 
-def _range_type(block_range: Any) -> Any:
-    """Return the tag type of a range from ``.select()``, or ``None`` for anything else."""
-    block_range = _unwrapped(block_range)
-    if isinstance(block_range, (BlockRange, IndirectBlockRange)):
-        return block_range.block.type
-    return None
+def _span_type(span: Span) -> TagType:
+    """Return the tag type of the range that *span* holds."""
+    match span:
+        case RangeArg(span=fixed):
+            return fixed.block.type
+        case PointerRangeArg(span=pointed):
+            return pointed.block.type
+        case _:
+            assert_never(span)
 
 
 def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) -> None:
@@ -309,43 +321,59 @@ def _copy_dest(dest: Any) -> Any:
     the range's first TXT and writes on through the block, as the CLICK export's Copy
     into that TXT does.  Any other range is refused.
     """
-    target = _unwrapped(dest)
-    if isinstance(target, BlockRange) and target.block.type is TagType.CHAR:
-        tags = target.tags()
-        if not tags:
-            raise ValueError("copy() into an empty range writes nothing. Copy into one TXT.")
-        return tags[0]
-    if isinstance(target, IndirectBlockRange):
-        raise TypeError(
-            "copy() writes one register, and its destination here is a range with a pointer. "
-            f"Copy into one element with a pointer, as in {target.block.name}[Ptr]."
-        )
-    if isinstance(target, BlockRange):
-        raise TypeError(
-            "copy() writes one register, and its destination here is a range. Use fill() to "
-            "write one value into a range, or blockcopy() to copy a range."
-        )
-    return dest
+    parsed = parse_value(dest)
+    match parsed:
+        case RangeArg(span=span) if span.block.type is TagType.CHAR:
+            tags = span.tags()
+            if not tags:
+                raise ValueError("copy() into an empty range writes nothing. Copy into one TXT.")
+            return tags[0]
+        case PointerRangeArg(span=span):
+            raise TypeError(
+                "copy() writes one register, and its destination here is a range with a "
+                f"pointer. Copy into one element with a pointer, as in {span.block.name}[Ptr]."
+            )
+        case RangeArg():
+            raise TypeError(
+                "copy() writes one register, and its destination here is a range. Use fill() "
+                "to write one value into a range, or blockcopy() to copy a range."
+            )
+        case TagArg() | PointerArg() | ConstArg() | ExprArg():
+            return dest
+        case _:
+            assert_never(parsed)
 
 
-def _block_copy_dest(source: Any, dest: Any) -> Any:
+def _block_copy_dest(source: Span, dest: Any) -> Any:
     """Return the range that a Block Copy from *source* into *dest* writes.
 
     CLICK's Block Copy takes only the first destination address and writes one element
     for each source element.  So a single tag as *dest* becomes that range of its block.
+    *dest* is the argument as the author passed it.
     """
-    if _is_range(dest):
-        return dest
-    target = _unwrapped(dest)
-    if not isinstance(target, Tag):
-        raise TypeError(
-            "blockcopy() writes a range. Pass the destination as a range from .select()."
-        )
-    if not isinstance(source, BlockRange):
-        raise TypeError(
-            f"blockcopy() into {target.name} reads a range with a pointer, so pyrung cannot "
-            "tell where the destination ends. Pass the destination as a range from .select()."
-        )
+    parsed = parse_value(dest)
+    match parsed:
+        case RangeArg() | PointerRangeArg():
+            return dest
+        case TagArg(tag=target):
+            pass
+        case PointerArg() | ConstArg() | ExprArg():
+            raise TypeError(
+                "blockcopy() writes a range. Pass the destination as a range from .select()."
+            )
+        case _:
+            assert_never(parsed)
+    match source:
+        case RangeArg(span=span):
+            count = len(span)
+        case PointerRangeArg():
+            raise TypeError(
+                f"blockcopy() into {target.name} reads a range with a pointer, so pyrung cannot "
+                "tell where the destination ends. Pass the destination as a range from "
+                ".select()."
+            )
+        case _:
+            assert_never(source)
     found = _store_block(target)
     if found is None:
         raise TypeError(
@@ -353,7 +381,6 @@ def _block_copy_dest(source: Any, dest: Any) -> Any:
             "the destination as a range from .select()."
         )
     block, addr = found
-    count = len(source)
     size = block.end - block.start + 1
     if count > size:
         raise ValueError(
@@ -737,18 +764,21 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 "or fill() to write one value into a range."
             )
         self.authored_dest = dest
-        dest = _block_copy_dest(_unwrapped(source), dest)
-        fixed_source, fixed_dest = _unwrapped(source), _unwrapped(dest)
-        if isinstance(fixed_source, BlockRange) and isinstance(fixed_dest, BlockRange):
-            # len() counts what execute() copies: the fields of a named_array, not its gaps.
-            source_count, dest_count = len(fixed_source), len(fixed_dest)
-            if source_count != dest_count:
-                raise ValueError(
-                    "blockcopy() needs ranges of the same length. "
-                    f"The source has {source_count} tags, and the destination has {dest_count}."
-                )
         self.source: Span = RANGE.parse("blockcopy()", "source", source)
+        dest = _block_copy_dest(self.source, dest)
         self.dest: Span = RANGE.parse("blockcopy()", "dest", dest)
+        match self.source, self.dest:
+            case RangeArg(span=fixed_source), RangeArg(span=fixed_dest):
+                # len() counts what execute() copies: the fields of a named_array, not its gaps.
+                source_count, dest_count = len(fixed_source), len(fixed_dest)
+                if source_count != dest_count:
+                    raise ValueError(
+                        "blockcopy() needs ranges of the same length. The source has "
+                        f"{source_count} tags, and the destination has {dest_count}."
+                    )
+            case _:
+                # The scan checks the length of a range with pointers.
+                pass
         check_rules(
             {},
             (_BLOCK_COPY_TEXT,),
@@ -756,8 +786,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
             {"source": source, "dest": dest, "convert": convert},
         )
         self.authored_convert = convert
-        if convert is None and _range_type(source) is TagType.CHAR:
-            if _range_type(dest) in _NUMBER_TYPES:
+        if convert is None and _span_type(self.source) is TagType.CHAR:
+            if _span_type(self.dest) in _NUMBER_TYPES:
                 from pyrung.core.copy_converters import to_value
 
                 convert = to_value
@@ -860,11 +890,12 @@ class FillInstruction(OneShotMixin, Instruction):
                 "fill() writes a range. Pass the destination as a range from .select(), "
                 "or use copy() to write one register."
             )
+        self.dest: Span = RANGE.parse("fill()", "dest", dest)
         if value is None:
             raise TypeError("fill() needs a value: a tag, a pointer or a constant.")
         if _is_range(value):
             raise TypeError("fill() writes one value. Use blockcopy() to copy a range.")
-        dest_type = _range_type(dest)
+        dest_type = _span_type(self.dest)
         if dest_type is TagType.CHAR and isinstance(value, bool):
             # The export writes True as 1, and a CLICK fills the digit "1".
             value = int(value)
@@ -878,7 +909,6 @@ class FillInstruction(OneShotMixin, Instruction):
         _refuse_text_that_stores_no_number("fill()", value, dest_type)
         check_real_literal(value, dest, "fill() value")
         self.value: Value = _one_value(VALUE.parse("fill()", "value", value))
-        self.dest: Span = RANGE.parse("fill()", "dest", dest)
         check_rules(self._operands, self._operand_rules, "fill()", {"value": value, "dest": dest})
         self.convert = _plain_text_converter(value, dest)
 

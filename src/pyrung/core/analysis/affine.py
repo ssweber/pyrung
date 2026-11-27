@@ -11,11 +11,11 @@ from typing import Any
 from pyrung.core.analysis.reverse_edges import (
     literal_value_from_value,
     tag_name_from_value,
+    value_tag_name,
 )
 from pyrung.core.expression import BinaryExpr, UnaryExpr
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.operands import as_authored
 
 AffineForm = tuple[str, int, int | float]
 
@@ -60,7 +60,7 @@ def extract_forward_affine(instruction: Any) -> AffineForm | None:
     if isinstance(instruction, CopyInstruction):
         if instruction.convert is not None:
             return None
-        source = tag_name_from_value(as_authored(instruction.source))
+        source = value_tag_name(instruction.source)
         return (source, 1, 0) if source is not None else None
     if isinstance(instruction, CalcInstruction):
         return extract_affine_expression(instruction.expression)

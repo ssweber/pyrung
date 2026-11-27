@@ -47,14 +47,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, assert_never
 
 from pyrung.core.analysis.write_sites import (
     instruction_write_targets,
     instruction_written_tags,
-    static_write_target_tags,
 )
-from pyrung.core.instruction.operands import as_authored, held
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, Value
 from pyrung.core.tag import ImmediateRef, tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
@@ -70,6 +69,7 @@ from pyrung.core.validation._common import (
     _scope_reach_chains,
     _tag_name,
     iter_rungs,
+    operand_tags,
     site_frame,
     walk_instructions,
 )
@@ -105,18 +105,22 @@ _VARIANT_RESET = "OutVariant(reset)"
 # ---------------------------------------------------------------------------
 
 
-def _classify_copy_source_for_bool(source: Any) -> list[str]:
+def _classify_copy_source_for_bool(source: Value) -> list[str]:
     """Classify a Copy source for Bool-destination stuck-bit analysis.
 
     Returns instruction-type labels for partitioning into latch/reset buckets.
     """
-    if source is True:
-        return [_COPY_LATCH]
-    if source is False:
-        return [_COPY_RESET]
-    if isinstance(source, int) and not isinstance(source, bool):
-        return [_COPY_RESET] if source == 0 else [_COPY_LATCH]
-    return [_COPY_LATCH, _COPY_RESET]
+    match source:
+        case ConstArg(value=True):
+            return [_COPY_LATCH]
+        case ConstArg(value=False):
+            return [_COPY_RESET]
+        case ConstArg(value=int() as number):
+            return [_COPY_RESET] if number == 0 else [_COPY_LATCH]
+        case ConstArg() | TagArg() | PointerArg() | ExprArg():
+            return [_COPY_LATCH, _COPY_RESET]
+        case _:
+            assert_never(source)
 
 
 def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
@@ -139,12 +143,12 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
         itype = type(instr).__name__
-        return [(tag.name, itype) for tag in static_write_target_tags(as_authored(instr.target))]
+        return [(tag.name, itype) for tag in operand_tags(instr.target)]
 
     if isinstance(instr, OutInstruction):
         return [
             (tag.name, itype)
-            for tag in static_write_target_tags(as_authored(instr.target))
+            for tag in operand_tags(instr.target)
             if tag.type == TagType.BOOL
             for itype in (_OUT_LATCH, _OUT_RESET)
         ]
@@ -154,18 +158,14 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
     ):
         return [
             (tag.name, itype)
-            for tag in static_write_target_tags(as_authored(instr.target))
+            for tag in operand_tags(instr.target)
             for itype in (_VARIANT_LATCH, _VARIANT_RESET)
         ]
 
     if isinstance(instr, (CopyInstruction, FillInstruction)):
-        source = (
-            as_authored(instr.source)
-            if isinstance(instr, CopyInstruction)
-            else as_authored(instr.value)
-        )
+        source = instr.source if isinstance(instr, CopyInstruction) else instr.value
         results: list[tuple[str, str]] = []
-        for tag in static_write_target_tags(as_authored(instr.dest)):
+        for tag in operand_tags(instr.dest):
             if tag.type != TagType.BOOL:
                 continue
             for itype in _classify_copy_source_for_bool(source):
@@ -184,9 +184,9 @@ def _store_sides(instr: Any) -> list[str]:
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
     if isinstance(instr, CopyInstruction):
-        return _classify_copy_source_for_bool(as_authored(instr.source))
+        return _classify_copy_source_for_bool(instr.source)
     if isinstance(instr, FillInstruction):
-        return _classify_copy_source_for_bool(as_authored(instr.value))
+        return _classify_copy_source_for_bool(instr.value)
     return [_COPY_LATCH, _COPY_RESET]
 
 
@@ -350,9 +350,15 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
     # Outer loops come first in walk order, so an inner loop's entry wins.
     for site in _collect_write_sites(program, target_extractor=_loop_only):
         loop = site.instruction
-        count = held(loop.count)
         # A constant count always runs the body, because forloop() refuses one below 1.
-        runs = isinstance(count, int) and not isinstance(count, bool) and not loop._oneshot
+        count: Value = loop.count
+        match count:
+            case ConstArg(value=int() as constant) if not isinstance(constant, bool):
+                runs = not loop._oneshot
+            case ConstArg() | TagArg() | PointerArg() | ExprArg():
+                runs = False
+            case _:
+                assert_never(count)
         for instr in _flat(loop):
             outer = run.get(id(loop), ())
             run[id(instr)] = None if outer is None or not runs else site.conditions

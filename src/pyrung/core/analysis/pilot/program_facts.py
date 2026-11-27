@@ -7,14 +7,15 @@ choose a route, execute a scan, or own execution evidence.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.core.analysis import steerable as _steerable
 from pyrung.core.analysis.pdg import ProgramGraph, TagRole, resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import single_calc_source
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _expr_tag_names, _values_match
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, Dest, ExprArg, PointerArg, TagArg, Value
+from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import tag_written_from_outside
 
 
@@ -25,7 +26,7 @@ def compute_reference_constants(
 
     Two structural families qualify:
 
-    * a copy/fill source feeding a lookup-table pointer chain (the generated
+    * a copy source feeding a lookup-table pointer chain (the generated
       state-machine reference idiom); or
     * a tag used as both ``copy(REFERENCE, State)`` and the live RHS of
       ``State == REFERENCE`` (the direct named-state idiom).
@@ -33,14 +34,13 @@ def compute_reference_constants(
     In either family, all four conditions hold:
 
     1. Tag has no writers (initial-value only)
-    2. Used as a copy/fill source feeding some destination D
+    2. Used as a copy source feeding some destination D
     3. D consumes that tag as a static reference, either through a table
        pipeline or an explicit tag-valued comparison
     4. Nothing outside the ladder writes the tag (``tag_written_from_outside``).  So the
        tag is a declared program constant, not an operator or field interface.
     """
-    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.instruction.data_transfer import CopyInstruction
 
     pointer_tags: set[str] = set()
 
@@ -48,15 +48,18 @@ def compute_reference_constants(
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    source = as_authored(instruction.source)
-                    if isinstance(source, IndirectRef):
-                        name = getattr(source.pointer, "name", None)
-                        if name:
-                            pointer_tags.add(name)
-                    elif isinstance(source, IndirectExprRef):
-                        names = _expr_tag_names(source.expr)
-                        if names:
-                            pointer_tags.update(names)
+                    match instruction.source:
+                        case PointerArg(ref=IndirectRef(pointer=pointer)):
+                            if pointer.name:
+                                pointer_tags.add(pointer.name)
+                        case PointerArg(ref=IndirectExprRef(expr=expr)):
+                            names = _expr_tag_names(expr)
+                            if names:
+                                pointer_tags.update(names)
+                        case TagArg() | ConstArg() | ExprArg() | PointerArg():
+                            pass
+                        case _:
+                            assert_never(instruction.source)
             _scan_pointers(getattr(rung, "_branches", ()))
 
     _scan_pointers(program.rungs)
@@ -105,23 +108,8 @@ def compute_reference_constants(
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    source_name = getattr(as_authored(instruction.source), "name", None)
-                    destination_name = getattr(as_authored(instruction.dest), "name", None)
-                    if (
-                        source_name
-                        and destination_name
-                        and (
-                            destination_name in pipeline_tags
-                            or (
-                                (source_name, destination_name) in comparison_reference_pairs
-                                and _is_direct_declaration(source_name)
-                            )
-                        )
-                    ):
-                        candidates.add(source_name)
-                elif isinstance(instruction, FillInstruction):
-                    source_name = getattr(as_authored(instruction.value), "name", None)
-                    destination_name = getattr(as_authored(instruction.dest), "name", None)
+                    source_name = _plain_tag_name(instruction.source)
+                    destination_name = copy_dest_name(instruction.dest)
                     if (
                         source_name
                         and destination_name
@@ -142,20 +130,23 @@ def compute_reference_constants(
 
     from pyrung.core.analysis.pdg import _indirect_expr_tags, _indirect_ref_tags
 
-    def _indirect_read_slots(source: Any) -> list[str]:
-        if isinstance(source, IndirectRef):
-            tags = _indirect_ref_tags(source.block, source.pointer)
-        elif isinstance(source, IndirectExprRef):
-            tags = _indirect_expr_tags(source.block, source.expr)
-        else:
-            return []
+    def _indirect_read_slots(source: Value) -> list[str]:
+        match source:
+            case PointerArg(ref=IndirectRef(block=block, pointer=pointer)):
+                tags = _indirect_ref_tags(block, pointer)
+            case PointerArg(ref=IndirectExprRef(block=block, expr=expr)):
+                tags = _indirect_expr_tags(block, expr)
+            case TagArg() | ConstArg() | ExprArg() | PointerArg():
+                return []
+            case _:
+                assert_never(source)
         return [tag.name for tag in tags] if tags is not None else []
 
     def _scan_indirect_reads(rungs: Any) -> None:
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    candidates.update(_indirect_read_slots(as_authored(instruction.source)))
+                    candidates.update(_indirect_read_slots(instruction.source))
             _scan_indirect_reads(getattr(rung, "_branches", ()))
 
     _scan_indirect_reads(program.rungs)
@@ -171,6 +162,34 @@ def compute_reference_constants(
         return tag is None or not tag_written_from_outside(tag)
 
     return frozenset(name for name in candidates if _is_program_constant(name))
+
+
+def _plain_tag_name(source: Value) -> str | None:
+    """Return the name of the tag that the source of a copy reads, or None.
+
+    A pointer, a constant, an expression and an ``immediate()`` tag give None.
+    """
+    match source:
+        case TagArg(tag=tag, immediate=False):
+            return tag.name
+        case TagArg() | PointerArg() | ConstArg() | ExprArg():
+            return None
+        case _:
+            assert_never(source)
+
+
+def copy_dest_name(dest: Dest) -> str | None:
+    """Return the name of the tag that a copy writes, or None.
+
+    A pointer and an ``immediate()`` tag give None.
+    """
+    match dest:
+        case TagArg(tag=tag, immediate=False):
+            return tag.name
+        case TagArg() | PointerArg():
+            return None
+        case _:
+            assert_never(dest)
 
 
 def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:

@@ -12,10 +12,18 @@ from laddercodec import BlockCopy, Copy, Fill, Pack, Unpack
 from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.click.capabilities import single_register_fill_dest
-from pyrung.core.instruction.operands import ConstArg, held, inner
+from pyrung.core.instruction.operands import ConstArg
 from pyrung.core.tag import TagType
 
-from ..fields import Family, Unbuildable, memory_types, refusals_of, render_operand, split_range
+from ..fields import (
+    Family,
+    Unbuildable,
+    memory_types,
+    refusals_of,
+    render_arg,
+    render_operand,
+    split_range,
+)
 from ..hardware import constant_text_past_bank_advice
 from ..resolve import _ResolutionCache
 
@@ -114,15 +122,15 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
     if (
         code == "bank-not-allowed"
         and kind == "FillInstruction"
-        and memory_types(inner(instruction.dest), resolver) & _BIT_BANKS
+        and memory_types(instruction.dest, resolver) & _BIT_BANKS
     ):
-        if memory_types(inner(instruction.value), resolver):
+        if memory_types(instruction.value, resolver):
             return "Copy the bit into each destination bit with copy()."
         return "Set or clear the bits with latch() or reset() on the range."
     if (
         code == "bank-not-allowed"
         and kind == "BlockCopyInstruction"
-        and "YD" in memory_types(inner(instruction.dest), resolver)
+        and "YD" in memory_types(instruction.dest, resolver)
     ):
         return "Write each YD with copy() or math()."
     return _ADVICE.get(code)
@@ -185,7 +193,7 @@ def _single_register_fill_refusals(instruction: Any, tag: Any, exporter: Any) ->
         # The export refuses some of these Fills as a Copy, and says why.
         exporter._single_register_fill_token(instruction, tag, path="instruction", oneshot_kw={})
         with exporter._hex_constants("copy" if hex_dest(dest) else None):
-            value = render_operand(exporter, held(instruction.value), "value", instruction)
+            value = render_arg(exporter, instruction.value, "value", instruction)
         copy_refusals = refusals_of(lambda: Copy(source=value, dest=dest, oneshot=oneshot))
     except (_RenderError, Unbuildable):
         copy_refusals = None
@@ -193,7 +201,7 @@ def _single_register_fill_refusals(instruction: Any, tag: Any, exporter: Any) ->
         return copy_refusals
     try:
         with exporter._hex_constants("word" if hex_dest(dest) else None):
-            value = render_operand(exporter, held(instruction.value), "value", instruction)
+            value = render_arg(exporter, instruction.value, "value", instruction)
     except Unbuildable:
         if copy_refusals is None:
             raise
@@ -213,30 +221,30 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     hex_dest = exporter._is_hex_bank_operand
 
     def render(value: Any, attribute: str) -> str:
-        return render_operand(exporter, value, attribute, instruction)
+        return render_arg(exporter, value, attribute, instruction)
 
     if kind == "FillInstruction":
         tag = single_register_fill_dest(instruction.dest)
         if tag is not None:
             return _single_register_fill_refusals(instruction, tag, exporter)
-        dest_start, dest_end = split_range(render(held(instruction.dest), "dest"))
+        dest_start, dest_end = split_range(render(instruction.dest, "dest"))
         with exporter._hex_constants("word" if hex_dest(dest_start) else None):
-            value = render(held(instruction.value), "value")
+            value = render(instruction.value, "value")
         return refusals_of(
             lambda: Fill(value=value, dest_start=dest_start, dest_end=dest_end, oneshot=oneshot)
         )
     if kind == "CopyInstruction":
         # The export writes a text Copy's destination as the range that the text fills.
         # laddercodec's Copy takes the first address of it.
-        dest = render(held(instruction.dest), "dest").partition("..")[0]
+        dest = render(instruction.dest, "dest").partition("..")[0]
         with exporter._hex_constants("copy" if hex_dest(dest) else None):
-            source = render(held(instruction.source), "source")
+            source = render(instruction.source, "source")
         kwargs = _copy_kwargs(instruction, instruction.source)
         return refusals_of(lambda: Copy(source=source, dest=dest, oneshot=oneshot, **kwargs))
     if kind == "BlockCopyInstruction":
-        source_start, source_end = split_range(render(held(instruction.source), "source"))
+        source_start, source_end = split_range(render(instruction.source, "source"))
         dest_start, dest_end = _dest_range(
-            render(held(instruction.dest), "dest"), source_start, source_end
+            render(instruction.dest, "dest"), source_start, source_end
         )
         convert = None if instruction.convert is None else f"to_{instruction.convert.mode}"
         return refusals_of(
@@ -252,10 +260,8 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     if kind in _PACK_KINDS:
         # A pack call takes its source first.
         source_attribute = next(iter(_CLASSES[kind]))
-        start, end = split_range(
-            render(held(getattr(instruction, source_attribute)), source_attribute)
-        )
-        dest = render(held(instruction.dest), "dest")
+        start, end = split_range(render(getattr(instruction, source_attribute), source_attribute))
+        dest = render(instruction.dest, "dest")
         return refusals_of(
             lambda: Pack(
                 source_start=start,
@@ -269,8 +275,8 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     if kind in _UNPACK_KINDS:
         # An unpack call takes its destination second.
         _source, dest_attribute = _CLASSES[kind]
-        start, end = split_range(render(held(getattr(instruction, dest_attribute)), dest_attribute))
-        source = render(held(instruction.source), "source")
+        start, end = split_range(render(getattr(instruction, dest_attribute), dest_attribute))
+        source = render(instruction.source, "source")
         return refusals_of(
             lambda: Unpack(
                 source=source,

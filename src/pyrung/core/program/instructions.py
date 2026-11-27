@@ -31,6 +31,7 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
+from pyrung.core.instruction.operands import TagArg, parse_value
 from pyrung.core.memory_block import BlockRange, RangeComparison
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -200,14 +201,16 @@ def copy(
             copy(5, StepNumber)
     """
     if isinstance(source, bool) and convert is None:
-        resolved = target.value if isinstance(target, ImmediateRef) else target
-        if isinstance(resolved, Tag) and resolved.type == TagType.BOOL:
-            alt = "latch" if source else "reset"
-            warnings.warn(
-                f"copy({source}, {resolved.name}) writes a bool literal to a BOOL tag; "
-                f"use {alt}({resolved.name}) instead",
-                stacklevel=2,
-            )
+        match parse_value(target):
+            case TagArg(tag=resolved) if resolved.type == TagType.BOOL:
+                alt = "latch" if source else "reset"
+                warnings.warn(
+                    f"copy({source}, {resolved.name}) writes a bool literal to a BOOL tag; "
+                    f"use {alt}({resolved.name}) instead",
+                    stacklevel=2,
+                )
+            case _:
+                pass
     _add_instruction("copy", CopyInstruction, source, target, convert=convert, oneshot=oneshot)
     return target
 

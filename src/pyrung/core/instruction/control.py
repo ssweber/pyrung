@@ -37,7 +37,6 @@ from .operands import (
     TagArg,
     Value,
     describe,
-    held,
     parse_value,
 )
 from .resolvers import (
@@ -62,7 +61,13 @@ def not_a_char_error(call: str, fn_name: str, key: str, target: Dest) -> tuple[s
     raise this text, as ``TypeError`` for a value that is not a str and as ``ValueError``
     for a str that is not one character.
     """
-    named = describe(held(target))
+    match target:
+        case TagArg(tag=tag, immediate=immediate):
+            named = describe(tag) + (" in immediate()" if immediate else "")
+        case PointerArg(ref=ref):
+            named = describe(ref)
+        case _:
+            assert_never(target)
     return (
         f"{call}: {fn_name!r} returned ",
         f" for {key!r}. {named[0].upper()}{named[1:]} holds {CHAR_HOLDS}. Return one "

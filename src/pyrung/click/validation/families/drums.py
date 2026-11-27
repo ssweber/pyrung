@@ -134,12 +134,18 @@ def _operands(instruction: Any) -> list[Operand]:
 
 
 def _item_text(value: Any) -> str:
-    """Return a step's event or preset as the author wrote it."""
+    """Return a step's event or preset, or the jump's step, as the author wrote it."""
     if value is None:
         return "None"
     if isinstance(value, Condition):
         return render_condition(value)
-    return operand_name(value)
+    match value:
+        case TagArg(tag=tag):
+            return operand_name(tag)
+        case ConstArg(value=constant):
+            return operand_name(constant)
+        case _:
+            return operand_name(value)
 
 
 def _pin_text(condition: Condition) -> str:
@@ -185,7 +191,7 @@ def _call(instruction: Any) -> Call:
         text += condition_text
         if name == "jump":
             text += ", step="
-            step_text = operand_name(instruction.jump_step)
+            step_text = _item_text(instruction.jump_step)
             spans.append(("jump_step", len(text), len(step_text), "chained"))
             text += step_text
         text += ")"

@@ -28,7 +28,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.operands import TagArg, as_authored
+from pyrung.core.instruction.operands import TagArg
+from pyrung.core.instruction.resolvers import operand_object
 from pyrung.core.rung import Rung
 
 if TYPE_CHECKING:
@@ -1050,8 +1051,14 @@ def _none_if_always(condition: Any) -> Any:
 
 
 def _row_target(instruction: Any) -> Any:
-    target = as_authored(getattr(instruction, "target", None))
-    return as_authored(getattr(instruction, "dest", None)) if target is None else target
+    """Return the tag, range or pointer in the target or dest of *instruction*.
+
+    Return None for an instruction that has neither field.
+    """
+    target = getattr(instruction, "target", None)
+    if target is None:
+        target = getattr(instruction, "dest", None)
+    return operand_object(target)
 
 
 def _row_writes(row: Rung) -> str | None:

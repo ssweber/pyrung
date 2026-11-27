@@ -27,8 +27,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.write_sites import operand_leaf
 from pyrung.core.context import RungId
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, TagArg
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal import CausalChain
@@ -44,14 +45,9 @@ def find_tag_object(logic: list[Rung], tag_name: str) -> Tag | None:
 
     for rung in logic:
         for instr in rung._instructions:
-            target = as_authored(getattr(instr, "target", None))
-            if target is None:
-                continue
-            raw = target
-            if isinstance(raw, ImmediateRef):
-                raw = object.__getattribute__(raw, "value")
-            if isinstance(raw, TagClass) and raw.name == tag_name:
-                return raw
+            target = operand_leaf(getattr(instr, "target", None))
+            if isinstance(target, TagClass) and target.name == tag_name:
+                return target
         # Also check conditions for tag references
         for cond in rung._conditions:
             tag_obj = getattr(cond, "tag", None)
@@ -75,7 +71,6 @@ def _persistent_bits(logic: list[Rung]) -> list[Tag]:
     exclusive outs).
     """
     from pyrung.core.instruction.coils import LatchInstruction
-    from pyrung.core.tag import ImmediateRef
     from pyrung.core.tag import Tag as TagClass
 
     seen: set[str] = set()
@@ -84,12 +79,10 @@ def _persistent_bits(logic: list[Rung]) -> list[Tag]:
         for instr in rung._instructions:
             if not isinstance(instr, LatchInstruction):
                 continue
-            target = as_authored(instr.target)
-            if isinstance(target, ImmediateRef):
-                target = object.__getattribute__(target, "value")
-            if isinstance(target, TagClass) and target.name not in seen:
-                seen.add(target.name)
-                result.append(target)
+            match instr.target:
+                case TagArg(tag=target) if target.name not in seen:
+                    seen.add(target.name)
+                    result.append(target)
     return result
 
 
@@ -266,20 +259,18 @@ def _step_write_target(instr: Any) -> str | None:
     from pyrung.core.tag import Tag as TagClass
 
     if isinstance(instr, CopyInstruction):
-        dest = _unwrap_target(as_authored(instr.dest))
-        source = as_authored(instr.source)
-        if isinstance(dest, TagClass) and isinstance(source, int) and not isinstance(source, bool):
-            return dest.name
-        return None
+        match instr.dest, instr.source:
+            case TagArg(tag=dest), ConstArg(value=int() as value) if not isinstance(value, bool):
+                return dest.name
+            case _:
+                return None
 
     if not isinstance(instr, CalcInstruction):
         return None
     expr = instr.expression
     if not (isinstance(expr, BinaryExpr) and expr.symbol == "+"):
         return None
-    dest = as_authored(instr.dest)
-    if not isinstance(dest, TagClass):
-        return None
+    dest = instr.dest.tag
     for operand, other in ((expr.left, expr.right), (expr.right, expr.left)):
         if isinstance(operand, TagExpr) and isinstance(other, LiteralExpr):
             if isinstance(operand.tag, TagClass) and operand.tag.name == dest.name:
@@ -358,20 +349,15 @@ def _condition_tag_names(rung: Rung) -> set[str]:
 def _nonzero_const_writes(rung: Rung) -> list[str]:
     """Target names of ``copy(<nonzero int literal>, target)`` writes in a rung."""
     from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.tag import Tag as TagClass
 
     result: list[str] = []
     for instr in rung._instructions:
         if isinstance(instr, CopyInstruction):
-            source = as_authored(instr.source)
-            target = _unwrap_target(as_authored(instr.target))
-            if (
-                isinstance(target, TagClass)
-                and isinstance(source, int)
-                and not isinstance(source, bool)
-                and source != 0
-            ):
-                result.append(target.name)
+            match instr.dest, instr.source:
+                case TagArg(tag=target), ConstArg(value=int() as value) if (
+                    not isinstance(value, bool) and value != 0
+                ):
+                    result.append(target.name)
     return result
 
 
@@ -406,7 +392,7 @@ def _tag_index(program: Any) -> dict[str, Tag]:
                     note(getattr(node, "value", None))
             for instr in rung._instructions:
                 for attr in ("target", "dest", "source"):
-                    note(as_authored(getattr(instr, attr, None)))
+                    note(operand_leaf(getattr(instr, attr, None)))
     return index
 
 
@@ -432,7 +418,6 @@ def _unguaranteed_names(program: Any) -> set[str]:
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.steerable import compute_steerable
     from pyrung.core.instruction.coils import OutInstruction
-    from pyrung.core.tag import Tag as TagClass
 
     scopes = _all_scopes(program)
     index = _tag_index(program)
@@ -453,10 +438,10 @@ def _unguaranteed_names(program: Any) -> set[str]:
                     continue
                 for instr in rung._instructions:
                     if isinstance(instr, OutInstruction):
-                        target = _unwrap_target(as_authored(instr.target))
-                        if isinstance(target, TagClass) and target.name not in external:
-                            external.add(target.name)
-                            changed = True
+                        match instr.target:
+                            case TagArg(tag=target) if target.name not in external:
+                                external.add(target.name)
+                                changed = True
     return external
 
 

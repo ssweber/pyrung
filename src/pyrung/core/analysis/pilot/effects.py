@@ -18,7 +18,6 @@ from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 from pyrung.core.executor import InstructionRun, LoopIterationRun, RungRun
-from pyrung.core.instruction.operands import as_authored
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import (
@@ -1032,7 +1031,8 @@ def _contacts_read_after_write(
                 continue
             if rung is producer:
                 last_item = position
-                target = as_authored(getattr(item, "target", None))
+                # _resolve_tag_names unwraps a parsed target itself.
+                target = getattr(item, "target", None)
                 if target is not None and tag in _resolve_tag_names(target):
                     last_write = position
             position += 1

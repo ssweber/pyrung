@@ -2,10 +2,15 @@
 
 Instruction classes declare ordinary destinations through ``_writes`` and
 runtime status destinations through ``_status_fields``.  Analysis consumers
-must read both declarations the same way: mappings contribute their values,
-sequences contribute their elements, immediate references retain the wrapped
-destination, and dynamic destinations remain opaque for their specialized
-consumer to resolve.
+must read both declarations the same way:
+
+- a mapping contributes its values, and a sequence its elements;
+- a parsed operand contributes the tag, range or pointer inside it, without
+  its ``immediate()``;
+- a raw ``immediate()`` reference stays wrapped.  No instruction that a builder
+  makes holds one, so only a test double or a hand-built instruction reaches this
+  case;
+- a dynamic destination stays unresolved, for its own consumer to resolve.
 
 The one derived shape is a ``CopyInstruction`` that writes text over several
 elements.  A literal source fixes how many it writes.  A ``to_text()`` copy of a
@@ -35,9 +40,10 @@ from pyrung.core.instruction.operands import (
     ConstArg,
     ExprArg,
     PointerArg,
+    PointerRangeArg,
+    RangeArg,
     TagArg,
     Value,
-    as_authored,
 )
 from pyrung.core.instruction.resolvers import _sequential_tags, _termination_char
 from pyrung.core.memory_block import (
@@ -51,8 +57,32 @@ from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 
+def operand_leaf(value: Any) -> Any:
+    """Return the tag, range, pointer, expression or constant inside a parsed operand.
+
+    Return any other value unchanged.  The analyses that walk every field of an
+    instruction call this on each value, so they reach the tags inside a parsed
+    operand.  The result drops ``immediate()``.  A reader that must tell an immediate
+    operand from a plain one matches on the parsed operand instead.
+    """
+    match value:
+        case TagArg(tag=tag):
+            return tag
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            return span
+        case PointerArg(ref=ref):
+            return ref
+        case ExprArg(expr=expr):
+            return expr
+        case ConstArg(value=constant):
+            return constant
+        case _:
+            return value
+
+
 def _iter_target_leaves(value: Any) -> Iterator[Any]:
     """Yield declared destination leaves without resolving dynamic addresses."""
+    value = operand_leaf(value)
     if value is None:
         return
     if isinstance(value, dict):
@@ -63,8 +93,7 @@ def _iter_target_leaves(value: Any) -> Iterator[Any]:
         for item in value:
             yield from _iter_target_leaves(item)
         return
-    # The values of a function's outs are parsed operands.
-    yield as_authored(value)
+    yield value
 
 
 #: The values of each type whose text is the longest or the shortest that ``to_text()``
@@ -256,7 +285,7 @@ def instruction_write_targets(instr: Any, *, status: bool = True) -> tuple[Any, 
     fields = tuple(dict.fromkeys((*getattr(cls, "_writes", ()), *status_fields)))
     targets: list[Any] = []
     for field_name in fields:
-        targets.extend(_iter_target_leaves(as_authored(getattr(instr, field_name, None))))
+        targets.extend(_iter_target_leaves(getattr(instr, field_name, None)))
     definite, partial = _copy_fanout(instr)
     targets.extend(definite)
     targets.extend(partial)
@@ -289,7 +318,7 @@ def static_write_target_tags(target: Any) -> tuple[Tag, ...]:
     address or a PDG-specific conservative region, and neither is an exact
     instruction occurrence for a named-tag writer lookup.
     """
-    target = as_authored(target)
+    target = operand_leaf(target)
     if isinstance(target, ImmediateRef):
         target = target.value
     if isinstance(target, Tag):
@@ -326,6 +355,7 @@ __all__ = [
     "instruction_write_targets",
     "instruction_writes_tag",
     "instruction_written_tags",
+    "operand_leaf",
     "static_write_target_names",
     "static_write_target_tags",
 ]

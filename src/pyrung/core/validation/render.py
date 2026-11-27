@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.core.condition import (
     AllCondition,
@@ -45,8 +45,18 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
     text_window_of,
 )
-from pyrung.core.instruction.operands import PARSED, held
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+)
 from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.validation.walker import operand_object
 
 _COMPARE_SYMBOLS: dict[type, str] = {
     CompareEq: "==",
@@ -119,8 +129,9 @@ def operand_name(value: Any) -> str:
     )
     from pyrung.core.structure import InstanceView
 
-    if isinstance(value, PARSED):
-        value = held(value)
+    inner = operand_object(value)[0]
+    if inner is not value:  # a parsed operand
+        return operand_name(inner)
     if isinstance(value, ImmediateRef):
         return operand_name(value.value)
     if isinstance(value, Tag):
@@ -330,8 +341,6 @@ def renders_in_full(instr: Any) -> bool:
 
 def _value_text(value: Any) -> ArgumentText:
     """Return the text of an operand, or the text of each item of a list."""
-    if isinstance(value, PARSED):
-        value = held(value)
     if isinstance(value, list):
         return [operand_name(item) for item in value]
     return operand_name(value)
@@ -402,6 +411,30 @@ def _keyword_text(instr: Any, name: str) -> str | None:
     return operand_name(value)
 
 
+def _calc_expression_text(source: Value | Span) -> str:
+    """Return the text that the renderer writes for the source of ``math()``.
+
+    For an expression it is the formula.  For any other source it is the class name that
+    :func:`render_expr` writes, such as ``LiveTag``.  That text is kept as it is until it
+    is fixed on purpose.
+    """
+    match source:
+        case ExprArg(expr=expr):
+            return render_expr(expr)
+        case TagArg(immediate=True) | RangeArg(immediate=True):
+            return ImmediateRef.__name__
+        case (
+            TagArg(tag=inner)
+            | RangeArg(span=inner)
+            | PointerArg(ref=inner)
+            | PointerRangeArg(span=inner)
+            | ConstArg(value=inner)
+        ):
+            return render_expr(inner)
+        case _:
+            assert_never(source)
+
+
 def _special_arguments(instr: Any) -> tuple[str, list[tuple[str, ArgumentText, str]]] | None:
     """Return the call of an instruction that the renderer writes in its own way, or None.
 
@@ -415,9 +448,8 @@ def _special_arguments(instr: Any) -> tuple[str, list[tuple[str, ArgumentText, s
     if itype in ("OutInstruction", "LatchInstruction", "ResetInstruction"):
         return verb, [("target", operand_name(instr.target), "positional")]
     if itype == "CalcInstruction":
-        written = held(instr.source_expression)
         return verb, [
-            ("expression", render_expr(written), "positional"),
+            ("expression", _calc_expression_text(instr.source_expression), "positional"),
             ("dest", operand_name(instr.dest), "positional"),
         ]
     if itype in (

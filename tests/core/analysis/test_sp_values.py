@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, copy, math, rung
+from enum import IntEnum
+
+from pyrung import Block, Bool, Int, Program, TagType, copy, fill, math, rung, sqrt
+from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.simplified import And, Atom, Const, Or
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,
     _extract_required_values,
     _written_value_for_tag,
+    writer_value_facts,
 )
 from pyrung.core.crossing import UNKNOWN, Affine, Literal
 
@@ -144,3 +148,32 @@ class TestWrittenValueArithmetic:
         assert isinstance(wv, Affine)
         assert wv.source == "Step"
         assert wv.offset == -1
+
+
+class _Mode(IntEnum):
+    STOP = 0
+    RUN = 3
+
+
+class TestWriterFactsOfANamedConstant:
+    """An IntEnum member and sqrt() have a .name, but neither one is a tag."""
+
+    def test_copy_and_fill_of_an_intenum_member_store_its_value(self):
+        state, slots = Int("State"), Block("Slots", TagType.INT, 1, 2)
+        with Program(strict=False) as prog:
+            with rung(Bool("Go", external=True)):
+                copy(_Mode.RUN, state)
+            with rung(Bool("Load", external=True)):
+                fill(_Mode.RUN, slots.select(1, 2))
+
+        facts = writer_value_facts(prog, build_program_graph(prog))
+        for name in ("State", "Slots1", "Slots2"):
+            assert [(f.written_value, f.is_ote_bit) for f in facts[name]] == [(3, False)]
+
+    def test_copy_of_sqrt_is_no_fact(self):
+        level, root = Int("Level", external=True), Int("Root")
+        with Program(strict=False) as prog:
+            with rung(Bool("Go", external=True)):
+                copy(sqrt(level), root)
+
+        assert "Root" not in writer_value_facts(prog, build_program_graph(prog))

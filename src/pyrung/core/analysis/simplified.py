@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.sp_tree import SPLeaf, SPNode, SPSeries
+from pyrung.core.analysis.write_sites import static_write_target_names
 from pyrung.core.expression import Expression
-from pyrung.core.instruction.operands import as_authored
 from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 if TYPE_CHECKING:
@@ -465,7 +465,6 @@ def _build_solve_order(program: Program) -> _SolveOrder:
     The node order mirrors build_program_graph.
     """
     from pyrung.core.rung import Rung as _Rung
-    from pyrung.core.validation._common import _resolve_tag_names
 
     reads: dict[int, int] = {}
     writes: dict[int, int] = {}
@@ -486,10 +485,8 @@ def _build_solve_order(program: Program) -> _SolveOrder:
                 walk(item, node)
                 continue
             writes[node] = position
-            target = as_authored(getattr(item, "target", None))
-            if target is not None:
-                for name in _resolve_tag_names(target):
-                    tag_writes[(node, name)] = position
+            for name in static_write_target_names(getattr(item, "target", None)):
+                tag_writes[(node, name)] = position
             position += 1
 
     for rung in program.rungs:
@@ -605,13 +602,11 @@ def _resets_only(rung: Rung, tag: str) -> bool:
     writers do drive it true and are kept.
     """
     from pyrung.core.instruction.coils import ResetInstruction
-    from pyrung.core.validation._common import _resolve_tag_names
 
     has_reset = False
     has_driver = False
     for instr in rung._instructions:
-        target = as_authored(getattr(instr, "target", None))
-        if target is None or tag not in _resolve_tag_names(target):
+        if tag not in static_write_target_names(getattr(instr, "target", None)):
             continue
         if isinstance(instr, ResetInstruction):
             has_reset = True
