@@ -735,7 +735,7 @@ def _in_f_string(text: str) -> str:
     return _in_quotes(text).replace("{", "{{").replace("}", "}}")
 
 
-def _compile_function_kwargs(ins: dict[str, Value | Span], ctx: CodegenContext) -> str:
+def _compile_function_kwargs(ins: dict[Any, Value | Span], ctx: CodegenContext) -> str:
     """Return a function call's keyword arguments, in the order that stepping passes them.
 
     Some names cannot be written as Python keyword arguments. Examples are ``class``,

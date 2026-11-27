@@ -15,8 +15,7 @@
 
 ### Fixes
 
-- A `forloop()` over `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on every runner (`CompiledPLC` and the generated CircuitPython code raised `OverflowError`).
-- `run_function()` and `run_enabled_function()` with `ins` or `outs` in a mapping that is not a `dict`, such as a `MappingProxyType`, now run on `CompiledPLC` (it raised `RuntimeError`).
+- A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on `CompiledPLC` and in the generated CircuitPython code. 0.19.0 raised an error there.
 
 ## v0.19.0 (2026-11-26)
 

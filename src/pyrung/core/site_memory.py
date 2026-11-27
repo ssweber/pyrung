@@ -244,6 +244,8 @@ def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
 def _operand_text(value: Any) -> str:
     from pyrung.core.validation.render import operand_name
 
+    # The ins of a function hold parsed values.  The text names what the author wrote.
+    value = as_authored(value)
     if isinstance(value, (list, tuple)):
         return "(" + ", ".join(_operand_text(v) for v in value) + ")"
     if isinstance(value, dict):

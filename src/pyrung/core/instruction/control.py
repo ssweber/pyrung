@@ -87,8 +87,9 @@ _OUTS = EachOperand(arg="outs")
 def parse_ins(call: str, ins: Any) -> dict[Any, Value | Span]:
     """Return the ``ins`` of a function call with each value parsed.
 
-    The parse refuses no value.  The scan hands a constant, a range or any other object
-    to the function as it is.  The parse refuses *ins* only if it is not a mapping.
+    The parse refuses no value.  The scan reads a tag, a pointer or an expression.  It
+    passes any other value, such as a constant or a range, to the function as it is.
+    The parse refuses *ins* only if it is not a mapping.
     """
     if not isinstance(ins, Mapping):
         raise TypeError(f"{call} ins must be a dict, got {type(ins).__name__}")

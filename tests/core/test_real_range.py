@@ -351,7 +351,7 @@ def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, v
 def test_a_non_finite_immediate_forloop_count_runs_no_iteration_and_sc43(runner_factory, value):
     """An ``immediate()`` REAL count reads as the plain one does.
 
-    The compiled kernel raised OverflowError on this count.
+    The compiled kernel raised an error on this count.
     """
     r = Real("R", default=3.0)
     hits = Int("Hits")

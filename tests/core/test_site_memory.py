@@ -19,6 +19,7 @@ from pyrung.core import (
     math,
     out,
     rise,
+    run_function,
     rung,
     subroutine,
 )
@@ -1134,3 +1135,26 @@ class TestEdgeFrames:
             "_edge:e1": True,
             "_edge:e7": True,
         }
+
+
+def capture(a, b):
+    return {"o": 1}
+
+
+def test_a_function_site_fingerprint_names_its_ins_as_written():
+    """The fingerprint of a function's ins holds the text the author wrote.
+
+    A callable in the text must not hold its address, because reload matches sites by
+    this text.
+    """
+    A = Bool("A")
+    P = Int("P")
+    result = Int("Result")
+    with Program(strict=False) as logic:
+        with rung(rise(A)):
+            run_function(capture, ins={"a": capture, "b": [1, P]}, outs={"o": result}, oneshot=True)
+
+    (site,) = [
+        s for s in site_table_of(logic).sites if s.fingerprint[2] == "FunctionCallInstruction"
+    ]
+    assert site.fingerprint[3] == ("{a: capture, b: (1, P)}", "{o: Result}")
