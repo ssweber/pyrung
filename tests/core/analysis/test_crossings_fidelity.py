@@ -149,7 +149,7 @@ def _receive():
         bank="DS",
         start=1,
         addresses=(1,),
-        dest=Int("RemoteValue"),
+        dest=TagArg(Int("RemoteValue")),
         receiving=Bool("RequestActive"),
         success=Bool("RequestSucceeded"),
         error=Bool("RequestFailed"),

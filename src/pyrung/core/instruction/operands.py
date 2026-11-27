@@ -40,6 +40,7 @@ These instructions parse their operands instead:
 - ``forloop()``.  It parses only its count;
 - ``run_function()`` and ``run_enabled_function()``.  Each parses the values of its
   ``outs``, and passes each value of its ``ins`` to :func:`parse_value`;
+- ``send()`` and ``receive()``.  Each parses only its ``source`` or its ``dest``;
 - the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
   ``flasher()`` and ``timed()``.  Each coil parses only its target.
 
@@ -668,6 +669,23 @@ class CoilBitOperand(Operand):
         self._refuse(call, arg, value)
         bare, wrapper = _split(value)
         return TagArg(bare, wrapper is not None, wrapper)
+
+
+@dataclass(frozen=True)
+class PayloadOperand(CoilOperand):
+    """The tags that ``send()`` sends or ``receive()`` stores: one tag, or a range with fixed ends.
+
+    The field refuses ``immediate()``, a pointer and a range with pointers.  Like
+    :class:`CoilOperand`, its refusals have words of their own.
+    """
+
+    immediate: bool = False
+
+    def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
+        """Return the error that refuses *value*, or None if it fits."""
+        if self.accepts(value):
+            return None
+        return TypeError(f"{arg} must be Tag or BlockRange, got {type(value).__name__}")
 
 
 TAG = TagOperand()

@@ -19,6 +19,7 @@ from pyrung.click.validation import CLK_BANK_UNRESOLVED, families
 from pyrung.click.validation.fields import Family, Operand, Place, default_place, evaluate_family
 from pyrung.click.validation.resolve import _ResolutionCache
 from pyrung.core import Int, ModbusTcpTarget, send
+from pyrung.core.instruction.operands import held
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.program import Program, rung
 from pyrung.core.validation.render import Call, call_of, operand_name
@@ -31,7 +32,7 @@ _STATUS_BITS = ("sending", "success", "error", "exception_response")
 
 def _send_operands(instruction: Any) -> list[Operand]:
     """Return each argument of send() that holds a tag the author wrote."""
-    operands = [Operand("source", "source", (("source", instruction.source),))]
+    operands = [Operand("source", "source", (("source", held(instruction.source)),))]
     for name in _STATUS_BITS:
         bit = getattr(instruction, name)
         # A status bit that the author left off holds a hidden tag, which CLICK never sees.

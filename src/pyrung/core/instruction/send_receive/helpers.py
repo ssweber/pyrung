@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyclickplc.banks import BANKS
 
-from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
-from ..resolvers import resolve_block_range_tags_ctx, resolve_tag_ctx
+from ..operands import RangeArg, TagArg
+from ..resolvers import resolve_block_range_tags_ctx
 from .types import RegisterType, WordOrder
 
 if TYPE_CHECKING:
@@ -83,14 +83,29 @@ def _contiguous_runs(addresses: tuple[int, ...]) -> list[tuple[int, int, int]]:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_operand_tags(operand: Tag | BlockRange, ctx: ScanContext) -> list[Tag]:
-    if isinstance(operand, Tag):
-        return [resolve_tag_ctx(operand, ctx)]
-    return resolve_block_range_tags_ctx(operand, ctx)
+def _normalize_operand_tags(operand: TagArg | RangeArg, ctx: ScanContext) -> list[Tag]:
+    match operand:
+        case TagArg(tag=tag):
+            return [tag]
+        case RangeArg(span=span):
+            return resolve_block_range_tags_ctx(span, ctx)
+        case _:
+            assert_never(operand)
 
 
-def _normalize_operand_count(operand: Tag | BlockRange, count: int | None) -> int:
-    expected = 1 if isinstance(operand, Tag) else len(tuple(operand.addresses))
+def _operand_length(operand: TagArg | RangeArg) -> int:
+    """Return how many tags *operand* names."""
+    match operand:
+        case TagArg():
+            return 1
+        case RangeArg(span=span):
+            return len(tuple(span.addresses))
+        case _:
+            assert_never(operand)
+
+
+def _normalize_operand_count(operand: TagArg | RangeArg, count: int | None) -> int:
+    expected = _operand_length(operand)
     effective = expected if count is None else count
     if effective != expected:
         raise ValueError(
@@ -164,11 +179,15 @@ def _all_char(tag_types: list[TagType]) -> bool:
     return bool(tag_types) and all(tag_type is TagType.CHAR for tag_type in tag_types)
 
 
-def _preview_operand_tag_types(operand: Tag | BlockRange, count: int) -> list[TagType]:
+def _preview_operand_tag_types(operand: TagArg | RangeArg, count: int) -> list[TagType]:
     """Get tag types from an operand without needing a ScanContext."""
-    if isinstance(operand, Tag):
-        return [operand.type]
-    return [operand.block.type] * count
+    match operand:
+        case TagArg(tag=tag):
+            return [tag.type]
+        case RangeArg(span=span):
+            return [span.block.type] * count
+        case _:
+            assert_never(operand)
 
 
 def _pack_values_to_registers(

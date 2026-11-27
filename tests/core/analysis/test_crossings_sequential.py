@@ -17,6 +17,7 @@ from pyrung.core.crossing import (
 )
 from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
 from pyrung.core.instruction.drums import EventDrumInstruction
+from pyrung.core.instruction.operands import TagArg
 from pyrung.core.instruction.send_receive._core import ModbusReceiveInstruction
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
@@ -107,7 +108,7 @@ def _receive() -> ModbusReceiveInstruction:
         bank="DS",
         start=1,
         addresses=(1,),
-        dest=Int("RemoteValue"),
+        dest=TagArg(Int("RemoteValue")),
         receiving=Bool("RequestActive"),
         success=Bool("RequestSucceeded"),
         error=Bool("RequestFailed"),

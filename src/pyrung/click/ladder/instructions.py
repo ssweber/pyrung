@@ -772,7 +772,7 @@ class _InstructionMixin:
                 target=target_expr,
                 remote_start=remote_start_expr,
                 source=self._render_run(
-                    instruction.source, path=f"{path}.source", instruction=instruction
+                    held(instruction.source), path=f"{path}.source", instruction=instruction
                 ),
             )
             kwargs.update(self._render_status_bits(instruction, "sending", path))
@@ -786,7 +786,7 @@ class _InstructionMixin:
                 target=target_expr,
                 remote_start=remote_start_expr,
                 dest=self._render_run(
-                    instruction.dest, path=f"{path}.dest", instruction=instruction
+                    held(instruction.dest), path=f"{path}.dest", instruction=instruction
                 ),
             )
             kwargs.update(self._render_status_bits(instruction, "receiving", path))
