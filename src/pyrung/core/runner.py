@@ -27,7 +27,7 @@ from itertools import count
 
 logger = logging.getLogger(__name__)
 from types import CodeType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, TypeGuard, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, TypeVar, assert_never, cast
 
 from pyrsistent import PMap, pmap
 
@@ -51,6 +51,16 @@ from pyrung.core.input_overrides import (
     InputOverrideManager,
     TagsKnownOrReached,
     TagsRungsReach,
+)
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
 )
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
@@ -667,19 +677,26 @@ def _may_be_called_again(fn: Any) -> bool:
     return True
 
 
-def _hands_over_nothing_it_could_keep(value: Any) -> bool:
+def _hands_over_nothing_it_could_keep(value: Value | Span) -> bool:
     """Return whether an ``ins`` value reaches the function fresh, or as one nothing can change.
 
     A list that a function appends to is state, like a mutable default. So is any object
     that the function can call.
     """
-    from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-    from pyrung.core.tag import ImmediateRef, Tag
-
-    return isinstance(
-        value, Tag | IndirectRef | IndirectExprRef | Expression | ImmediateRef
-    ) or _is_immutable_constant(value)
+    match value:
+        case TagArg() | PointerArg() | ExprArg():
+            return True
+        case RangeArg(immediate=True):
+            # A range in immediate() passes, and a plain range does not.  The function gets
+            # the same range object from both, so this case may be too lenient.
+            return True
+        case RangeArg() | PointerRangeArg():
+            # The function gets the range object, and it can keep that.
+            return False
+        case ConstArg(value=constant):
+            return _is_immutable_constant(constant)
+        case _:
+            assert_never(value)
 
 
 def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any, str]]:
@@ -692,7 +709,6 @@ def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any,
         EnabledFunctionCallInstruction,
         FunctionCallInstruction,
     )
-    from pyrung.core.instruction.operands import held
     from pyrung.core.program import Program
 
     if not isinstance(program, Program):
@@ -711,7 +727,7 @@ def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any,
             )
             continue
         for key, value in instruction._ins.items():
-            if not _hands_over_nothing_it_could_keep(held(value)):
+            if not _hands_over_nothing_it_could_keep(value):
                 found.append((instruction, f"ins[{key!r}] is an object it could change or keep"))
                 break
     return found

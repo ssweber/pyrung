@@ -48,7 +48,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import TagArg
+from pyrung.core.instruction.resolvers import operand_object
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
@@ -224,10 +225,23 @@ def _timer_carries(instr: Instruction) -> tuple[tuple[str, int], ...]:
     if not isinstance(unit, TimeUnit):
         return ()
     accumulators = (
-        as_authored(getattr(instr, f, None))
+        _accumulator_tag(getattr(instr, f, None))
         for f in ("accumulator", "on_acc", "off_acc", "timer_acc")
     )
     return tuple((f"_frac:{acc.name}", unit.ns) for acc in accumulators if acc is not None)
+
+
+def _accumulator_tag(value: Any) -> Any:
+    """Return the tag in an accumulator field, or None for a field the instruction lacks.
+
+    A timer or a counter holds its accumulator parsed.  ``debounce()``, ``flasher()``
+    and ``timed()`` hold theirs as a plain tag.
+    """
+    match value:
+        case TagArg(tag=tag):
+            return tag
+        case _:
+            return value
 
 
 def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
@@ -245,8 +259,9 @@ def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:
 def _operand_text(value: Any) -> str:
     from pyrung.core.validation.render import operand_name
 
-    # The ins of a function hold parsed values.  The text names what the author wrote.
-    value = as_authored(value)
+    # A drum's outputs and the ins of a function hold parsed values.  operand_name() prints
+    # a tag in immediate() as the plain tag, so the object inside each one names it.
+    value = operand_object(value)
     if isinstance(value, (list, tuple)):
         return "(" + ", ".join(_operand_text(v) for v in value) + ")"
     if isinstance(value, dict):
@@ -262,7 +277,7 @@ def _operand_text(value: Any) -> str:
 def _operand_texts(instr: Instruction) -> dict[str, str]:
     """Map each operand field of *instr*, reads then writes, to its source text."""
     fields = dict.fromkeys(type(instr)._reads + type(instr)._writes)
-    return {name: _operand_text(as_authored(getattr(instr, name, None))) for name in fields}
+    return {name: _operand_text(getattr(instr, name, None)) for name in fields}
 
 
 def _instruction_operands(instr: Instruction) -> tuple[str, ...]:
@@ -315,9 +330,12 @@ def _first_tag_name(instr: Instruction) -> str | None:
     from pyrung.core.tag import Tag
 
     for name in type(instr)._writes + type(instr)._reads:
-        value = as_authored(getattr(instr, name, None))
-        if isinstance(value, Tag):
-            return value.name
+        match getattr(instr, name, None):
+            case TagArg(tag=tag, immediate=False) | (Tag() as tag):
+                return tag.name
+            case _:
+                # A field that holds a tag in immediate() names no tag here.
+                pass
     return None
 
 
