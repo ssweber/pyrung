@@ -38,6 +38,7 @@ from ._emit import (
 )
 from ._primitives import (
     _compile_lvalue,
+    _compile_preset,
     _compile_target_write_lines,
     _compile_value,
 )
@@ -106,7 +107,7 @@ def _compile_debounce_instruction(
         f"{sp4}{emit_frac(instr.off_acc, '0')}",
         f"{sp4}{on_write} = _acc",
         f"{sp4}{off_write} = 0",
-        f"{sp4}if {emit_reached('_acc', f'int({_compile_value(instr.on_preset, ctx)})')}:",
+        f"{sp4}if {emit_reached('_acc', f'int({_compile_preset(instr.on_preset, ctx)})')}:",
         f"{sp8}{target_write} = True",
         f"{sp}else:",
         f"{sp4}{emit_frac_keep(instr.on_acc)}",
@@ -118,7 +119,7 @@ def _compile_debounce_instruction(
         f"{sp8}_timed_out = not _was and "
         + emit_reached(
             f"int({_compile_value(instr.off_acc, ctx)})",
-            f"int({_compile_value(instr.off_preset, ctx)})",
+            f"int({_compile_preset(instr.off_preset, ctx)})",
         ),
         *_tick_lines(instr.off_acc, instr.unit, ctx, sp8),
         f"{sp8}{emit_frac(instr.off_acc, '_new_frac')}",
@@ -190,8 +191,8 @@ def _compile_flasher_instruction(
         f"{sp4}{emit_mem_set(phase_key, str(_FLASH_IDLE), quote='double')}",
         f"{sp4}{target_write} = False",
         f"{sp}else:",
-        f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
-        f"{sp4}_off_preset = int({_compile_value(instr.off_preset, ctx)})",
+        f"{sp4}_on_preset = int({_compile_preset(instr.on_preset, ctx)})",
+        f"{sp4}_off_preset = int({_compile_preset(instr.off_preset, ctx)})",
         f"{sp4}if {no_preset}:",
         # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
         f"{sp8}{emit_mem_set(phase_key, str(_FLASH_IDLE), quote='double')}",
@@ -242,7 +243,7 @@ def _compile_timed_instruction(
         f"{sp}_en = bool({enabled_expr})",
         f"{sp}_rose = {emit_rise('_en', rung_key)}",
         f"{sp}{emit_mem_set(rung_key, '_en')}",
-        f"{sp}_t_preset = int({_compile_value(instr.on_preset, ctx)})",
+        f"{sp}_t_preset = int({_compile_preset(instr.on_preset, ctx)})",
         f"{sp}_timing = {emit_truth(_compile_value(instr.target.tag, ctx))} and (",
         f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc, ctx)})', '<', '_t_preset', paren=False)}",
         f"{sp})",

@@ -5,15 +5,22 @@ laddercodec's OutVariant checks them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never
 
 from laddercodec import OutVariant, OutVariantKind
 
-from pyrung.core.instruction.operands import TagArg
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.render import Call, operand_name
 
-from ..fields import Family, Operand, declared_operands, refusals_of, render_operand
+from ..fields import (
+    Family,
+    Operand,
+    declared_operands,
+    refusals_of,
+    render_operand,
+    render_preset,
+)
 from ..resolve import _ResolutionCache
 from .coils import immediate_call
 
@@ -65,10 +72,21 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
         choices = _UNIT_CHOICES[_KINDS[type(instruction).__name__]]
         return f"Use unit= one of {choices} and scale the preset."
     if code == "constant-out-of-range" and field in _PRESET_FIELDS:
-        preset = getattr(instruction, _PRESET_FIELDS[field])
-        if isinstance(preset, int) and preset <= 0:
+        preset: Preset = getattr(instruction, _PRESET_FIELDS[field])
+        if isinstance(preset, ConstArg) and isinstance(preset.value, int) and preset.value <= 0:
             return "Pass a DS tag as the preset. A register preset takes any value."
     return None
+
+
+def _preset_value(preset: Preset) -> Any:
+    """Return the tag or the constant that *preset* holds, as the author passed it."""
+    match preset:
+        case TagArg(tag=tag):
+            return tag
+        case ConstArg(value=value):
+            return value
+        case _:
+            assert_never(preset)
 
 
 def _operands(instruction: Any) -> list[Operand]:
@@ -80,7 +98,11 @@ def _operands(instruction: Any) -> list[Operand]:
     for side, acc, preset in _SIDES[name]:
         found.append(Operand(f"{side}_acc", f"{side} timer", ((acc, getattr(instruction, acc)),)))
         found.append(
-            Operand(f"{side}_preset", f"{side} preset", ((preset, getattr(instruction, preset)),))
+            Operand(
+                f"{side}_preset",
+                f"{side} preset",
+                ((preset, _preset_value(getattr(instruction, preset))),),
+            )
         )
     return found
 
@@ -149,7 +171,7 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
         values[f"{side}_acc"] = render_operand(
             exporter, getattr(instruction, acc), acc, instruction
         )
-        values[f"{side}_preset"] = render_operand(
+        values[f"{side}_preset"] = render_preset(
             exporter, getattr(instruction, preset), preset, instruction
         )
     unit = instruction.unit.name

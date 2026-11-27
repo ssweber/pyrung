@@ -504,7 +504,7 @@ class TestDelaysPastTheMillisecondRange:
     def test_a_delay_in_the_millisecond_range_keeps_its_timer(self):
         plc, _Cmd, _Fb = _long_delay_plc(Physical("Fast", on_delay="32s500ms"))
         coil = plc._synthesis.plant[0]._instructions[0]
-        assert (coil.on_preset, coil.unit.name) == (32_500, "Tms")
+        assert (coil.on_preset.value, coil.unit.name) == (32_500, "Tms")
 
     @pytest.mark.parametrize(
         ("on_ms", "off_ms", "expected"),

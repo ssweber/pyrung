@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from functools import wraps
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, assert_never, cast
 
 from pyrung.core.time_mode import dt_to_ns
+
+from .operands import ConstArg, Preset, TagArg
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -119,20 +121,28 @@ def instruction_condition_view(ctx: ScanContext, instr: Any) -> ConditionView:
     return view
 
 
-def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:
-    """Resolve preset to int value (supports Tag or literal)."""
-    from pyrung.core.tag import Tag as TagClass
+def resolve_preset_ctx(preset: Preset, ctx: ScanContext) -> int:
+    """Return the value of *preset* on this scan."""
+    match preset:
+        case TagArg(tag=tag):
+            return ctx.get_tag(tag.name, tag.default)
+        case ConstArg(value=value):
+            return cast(int, value)
+        case _:
+            assert_never(preset)
 
-    if isinstance(preset, TagClass):
-        return ctx.get_tag(preset.name, preset.default)
-    return preset
+
+def status_arg(tag: Tag | None) -> TagArg | None:
+    """Return the status bit *tag*, such as a timer's ``TT``, as a ``TagArg``, or None."""
+    return None if tag is None else TagArg(tag)
 
 
-def validate_preset(preset: object, *, label: str) -> None:
-    """Reject presets that are not an int literal or an INT, DINT or WORD tag.
+def parse_preset(preset: object, *, label: str) -> Preset:
+    """Return *preset* as a tag or a constant, or raise the error that refuses it.
 
-    A REAL preset has no single comparison every backend agrees on, and CLICK
-    refuses one anyway (DS timer presets, DS/DD counter presets).
+    The preset must be an int or an INT, DINT or WORD tag.  A REAL preset has no single
+    comparison every backend agrees on, and CLICK refuses one anyway (DS timer presets,
+    DS/DD counter presets).
     """
     from pyrung.core.tag import Tag as TagClass
     from pyrung.core.tag import TagType
@@ -140,12 +150,13 @@ def validate_preset(preset: object, *, label: str) -> None:
     allowed = (TagType.INT, TagType.DINT, TagType.WORD)
     if isinstance(preset, TagClass):
         assert_tag_type(preset, allowed, label=label, include_tag_name=True)
-        return
+        return TagArg(preset)
     if isinstance(preset, bool) or not isinstance(preset, int):
         raise TypeError(
             f"{label} must be an int or an {_allowed_type_text(allowed)} tag; "
             f"got {type(preset).__name__}"
         )
+    return ConstArg(preset)
 
 
 def _allowed_type_text(allowed_types: Iterable[TagType]) -> str:

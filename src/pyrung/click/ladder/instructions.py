@@ -20,7 +20,15 @@ from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
-from pyrung.core.instruction.operands import Coil, ConstArg, RangeArg, TagArg, Value, held
+from pyrung.core.instruction.operands import (
+    Coil,
+    ConstArg,
+    Preset,
+    RangeArg,
+    TagArg,
+    Value,
+    held,
+)
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.render import operand_name
@@ -242,7 +250,7 @@ class _InstructionMixin:
             kwargs[f"{side}_acc"] = self._render_operand(
                 acc, path=f"{path}.{side}_acc", source=instruction
             )
-            kwargs[f"{side}_preset"] = self._render_operand(
+            kwargs[f"{side}_preset"] = self._render_preset(
                 preset, path=f"{path}.{side}_preset", source=instruction
             )
         kwargs["unit"] = self._render_operand(
@@ -260,6 +268,26 @@ class _InstructionMixin:
             self._render_operand(instruction.target.tag, path=f"{path}.target", source=instruction),
             **kwargs,
         )
+
+    def _render_preset(self, preset: Preset, *, path: str, source: Any) -> str:
+        """Return a preset or a jump's step: a tag's address or the constant."""
+        match preset:
+            case TagArg(tag=tag):
+                return self._render_operand(tag, path=path, source=source)
+            case ConstArg(value=value):
+                return self._render_operand(value, path=path, source=source)
+            case _:
+                assert_never(preset)
+
+    def _render_presets(self, presets: tuple[Preset | None, ...], *, path: str, source: Any) -> str:
+        """Return a drum's presets as a list, with ``None`` for a step that has none."""
+        rendered = [
+            "None"
+            if preset is None
+            else self._render_preset(preset, path=f"{path}[{index}]", source=source)
+            for index, preset in enumerate(presets)
+        ]
+        return f"[{','.join(rendered)}]"
 
     def _single_register_fill_token(
         self, instruction: Any, tag: Any, *, path: str, oneshot_kw: dict[str, str]
@@ -589,16 +617,16 @@ class _InstructionMixin:
             return self._fn(
                 "on_delay",
                 self._render_operand(
-                    instruction.done_bit,
+                    instruction.done_bit.tag,
                     path=f"{path}.done_bit",
                     source=instruction,
                 ),
                 self._render_operand(
-                    instruction.accumulator,
+                    instruction.accumulator.tag,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                preset=self._render_operand(
+                preset=self._render_preset(
                     instruction.preset, path=f"{path}.preset", source=instruction
                 ),
                 unit=self._render_operand(
@@ -609,16 +637,16 @@ class _InstructionMixin:
             return self._fn(
                 "off_delay",
                 self._render_operand(
-                    instruction.done_bit,
+                    instruction.done_bit.tag,
                     path=f"{path}.done_bit",
                     source=instruction,
                 ),
                 self._render_operand(
-                    instruction.accumulator,
+                    instruction.accumulator.tag,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                preset=self._render_operand(
+                preset=self._render_preset(
                     instruction.preset, path=f"{path}.preset", source=instruction
                 ),
                 unit=self._render_operand(
@@ -629,16 +657,16 @@ class _InstructionMixin:
             return self._fn(
                 "count_up",
                 self._render_operand(
-                    instruction.done_bit,
+                    instruction.done_bit.tag,
                     path=f"{path}.done_bit",
                     source=instruction,
                 ),
                 self._render_operand(
-                    instruction.accumulator,
+                    instruction.accumulator.tag,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                preset=self._render_operand(
+                preset=self._render_preset(
                     instruction.preset, path=f"{path}.preset", source=instruction
                 ),
             )
@@ -646,16 +674,16 @@ class _InstructionMixin:
             return self._fn(
                 "count_down",
                 self._render_operand(
-                    instruction.done_bit,
+                    instruction.done_bit.tag,
                     path=f"{path}.done_bit",
                     source=instruction,
                 ),
                 self._render_operand(
-                    instruction.accumulator,
+                    instruction.accumulator.tag,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                preset=self._render_operand(
+                preset=self._render_preset(
                     instruction.preset, path=f"{path}.preset", source=instruction
                 ),
             )

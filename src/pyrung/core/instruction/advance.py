@@ -400,8 +400,9 @@ def recorded_prepare(instr: Any) -> Callable[[Snapshot], AdvanceStep | None] | N
     gates = () if relations is None else relations.motion_gates
     if relations is None or not gates:
         return None
+    # A field with a stand-in that is not a condition holds a TagArg (relations._standin).
     tags = {
-        field: getattr(instr, field)
+        field: getattr(instr, field).tag
         for field in relations.fields.values()
         if not field.endswith("_condition")
     }

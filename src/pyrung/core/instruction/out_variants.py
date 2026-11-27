@@ -16,6 +16,7 @@ checks.
 
 Each variant holds its target as a ``TagArg``.  Its builder, such as ``toggle()``, parses
 the target before it builds the instruction (:mod:`pyrung.core.instruction.operands`).
+Each variant with a timer parses its presets into a ``Preset`` itself.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ from pyrung.core.time_mode import _parse_time_unit
 
 from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, constraint_holds
 from .base import Instruction
-from .operands import TagArg
-from .utils import elapsed_units, resolve_preset_ctx, to_condition, validate_preset
+from .operands import Preset, TagArg
+from .utils import elapsed_units, parse_preset, resolve_preset_ctx, to_condition
 
 if TYPE_CHECKING:
     from fractions import Fraction
@@ -156,15 +157,15 @@ class DebounceInstruction(Instruction):
         unit: str = "Tms",
         enable_condition: Any = None,
     ):
-        validate_preset(on_preset, label="debounce() on preset")
-        validate_preset(off_preset, label="debounce() off preset")
+        on: Preset = parse_preset(on_preset, label="debounce() on preset")
+        off: Preset = parse_preset(off_preset, label="debounce() off preset")
         self.target = target
         self.on_done = on_done
         self.on_acc = on_acc
-        self.on_preset = on_preset
+        self.on_preset = on
         self.off_done = off_done
         self.off_acc = off_acc
-        self.off_preset = off_preset
+        self.off_preset = off
         self.unit = _parse_time_unit(unit)
         self.enable_condition = to_condition(enable_condition)
 
@@ -264,15 +265,15 @@ class FlasherInstruction(Instruction):
         unit: str = "Tms",
         enable_condition: Any = None,
     ):
-        validate_preset(on_preset, label="flasher() on preset")
-        validate_preset(off_preset, label="flasher() off preset")
+        on: Preset = parse_preset(on_preset, label="flasher() on preset")
+        off: Preset = parse_preset(off_preset, label="flasher() off preset")
         self.target = target
         self.on_done = on_done
         self.on_acc = on_acc
-        self.on_preset = on_preset
+        self.on_preset = on
         self.off_done = off_done
         self.off_acc = off_acc
-        self.off_preset = off_preset
+        self.off_preset = off
         self.unit = _parse_time_unit(unit)
         self.enable_condition = to_condition(enable_condition)
 
@@ -367,11 +368,11 @@ class TimedInstruction(Instruction):
         maintained: bool = False,
         enable_condition: Any = None,
     ):
-        validate_preset(on_preset, label="timed() on preset")
+        preset: Preset = parse_preset(on_preset, label="timed() on preset")
         self.target = target
         self.timer_done = timer_done
         self.timer_acc = timer_acc
-        self.on_preset = on_preset
+        self.on_preset = preset
         self.unit = _parse_time_unit(unit)
         self.maintained = maintained
         self.enable_condition = to_condition(enable_condition)

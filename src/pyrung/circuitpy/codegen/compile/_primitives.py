@@ -48,7 +48,7 @@ from pyrung.core.expression import (
     _op_pow,
     may_be_float,
 )
-from pyrung.core.instruction.operands import Coil, RangeArg, TagArg
+from pyrung.core.instruction.operands import Coil, ConstArg, Preset, RangeArg, TagArg
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -1730,6 +1730,17 @@ def _compile_value(
             strict=strict,
         )
     return _compile_constant(value)
+
+
+def _compile_preset(preset: Preset, ctx: CodegenContext) -> str:
+    """Return a preset or a step number as a Python expression: the tag's symbol or the constant."""
+    match preset:
+        case TagArg(tag=tag):
+            return _compile_value(tag, ctx)
+        case ConstArg(value=value):
+            return _compile_constant(value)
+        case _:
+            assert_never(preset)
 
 
 class UnsupportedValue(NotImplementedError):

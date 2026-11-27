@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, TagArg
 from pyrung.core.relations.records import Record, Recorder
-from pyrung.core.tag import LiveTag, Tag, TagType
+from pyrung.core.tag import LiveTag, TagType
 
 PREFIX = "pb_"
 
@@ -79,19 +79,22 @@ def shape_key(instr: Any) -> tuple[Any, ...] | None:
     fields, conditions, structural, skip = _fields(cls)
     key: list[Any] = [cls]
     for field in fields:
-        value = as_authored(getattr(instr, field, None))
+        value = getattr(instr, field)
         if value is None:
             key.append((field, None))
         elif field in conditions:
             key.append((field, "condition"))
-        elif isinstance(value, Tag):
-            key.append((field, "tag", value.type))
-        elif type(value) is int:
-            key.append((field, "int"))
-        elif isinstance(value, (bool, float)) or (field in structural and _plain(value)):
-            key.append((field, type(value).__name__, value))
         else:
-            return None
+            match value:
+                case TagArg(tag=tag):
+                    key.append((field, "tag", tag.type))
+                case ConstArg():
+                    # The parse keeps only an int preset.
+                    key.append((field, "int"))
+                case _ if field in structural and _plain(value):
+                    key.append((field, type(value).__name__, value))
+                case _:
+                    return None
     # Attributes keep the order the class sets them in.  Another order costs a render.
     for attr, value in vars(instr).items():
         if attr in skip:
@@ -129,16 +132,16 @@ def _standin(instr: Any) -> tuple[Any, dict[str, str]]:
         delattr(new, attr)
     fields: dict[str, str] = {}
     for field in cls.walker_fields():
-        value = as_authored(getattr(instr, field, None))
+        value = getattr(instr, field)
         if value is None:
             continue
         name = PREFIX + field
         if field in cls._conditions:
             fields[name] = field
             setattr(new, field, to_condition(LiveTag(name, TagType.BOOL)))
-        elif isinstance(value, Tag):
+        elif isinstance(value, TagArg):
             fields[name] = field
-            setattr(new, field, LiveTag(name, value.type))
+            setattr(new, field, TagArg(LiveTag(name, value.tag.type)))
     return new, fields
 
 

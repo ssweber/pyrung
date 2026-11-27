@@ -16,6 +16,7 @@ from pyrung.core.analysis.sp_values import (
 )
 from pyrung.core.context import ScanContext
 from pyrung.core.crossing import CrossingContext, Eq, eq_target
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.site_memory import edge_memory_seeding
 from pyrung.core.state import nan_bits, value_changed
 
@@ -397,7 +398,7 @@ def _rung_produces_value(
     # projected_cause classifies its enabling conditions correctly.
     if value is True and tag_name in writes:
         if any(
-            (db := getattr(i, "done_bit", None)) is not None
+            (db := as_authored(getattr(i, "done_bit", None))) is not None
             and getattr(db, "name", None) == tag_name
             for i in rung._instructions
         ):

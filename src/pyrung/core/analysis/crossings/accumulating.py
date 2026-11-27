@@ -22,7 +22,7 @@ single useful sound bound.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never, cast
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.crossing import (
@@ -36,17 +36,8 @@ from pyrung.core.crossing import (
     single,
 )
 from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg
 from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
-
-
-def _preset_bound(preset: Any) -> tuple[Any, bool] | None:
-    """``(bound, bound_is_tag)`` for a preset literal or tag, else ``None``."""
-    if isinstance(preset, bool):
-        return None
-    if isinstance(preset, (int, float)):
-        return preset, False
-    name = getattr(preset, "name", None)
-    return (name, True) if name is not None else None
 
 
 class _CounterDoneCrossing(BaseCrossing):
@@ -62,28 +53,19 @@ class _CounterDoneCrossing(BaseCrossing):
             return REVERSE_FALLTHROUGH
         tag = target.tag
         value = next(iter(target.values))
-        if tag != instr.done_bit.name or value is not True:
+        if tag != instr.done_bit.tag.name or value is not True:
             return REVERSE_FALLTHROUGH  # only the active-true done-bit direction
-        bound = _preset_bound(instr.preset)
-        if bound is None:
-            return REVERSE_FALLTHROUGH
-        bound_value, is_tag = bound
-        if is_tag:
-            return single(
-                AffineCmp(
-                    instr.accumulator.name,
-                    self._op,
-                    bound_value,
-                    offset=self._frontier_offset,
+        acc = instr.accumulator.tag.name
+        preset: Preset = instr.preset
+        match preset:
+            case TagArg(tag=preset_tag):
+                return single(
+                    AffineCmp(acc, self._op, preset_tag.name, offset=self._frontier_offset)
                 )
-            )
-        return single(
-            Cmp(
-                instr.accumulator.name,
-                self._op,
-                bound_value + self._frontier_offset,
-            )
-        )
+            case ConstArg(value=bound):
+                return single(Cmp(acc, self._op, cast(int, bound) + self._frontier_offset))
+            case _:
+                assert_never(preset)
 
 
 class CountUpDoneCrossing(_CounterDoneCrossing):

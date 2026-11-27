@@ -169,6 +169,9 @@ Span = RangeArg | PointerRangeArg
 """What a field that takes a range holds, such as the destination of ``fill()``."""
 Coil = TagArg | RangeArg
 """What a coil writes, such as the target of ``out()``: one tag, or a range with fixed ends."""
+Preset = TagArg | ConstArg
+"""What a preset or a step number holds, such as the preset of ``on_delay()``: a tag or an
+integer constant."""
 
 
 def held(arg: Value | Span) -> Any:
