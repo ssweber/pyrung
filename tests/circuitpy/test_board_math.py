@@ -14,7 +14,7 @@ from tests.circuitpy.test_scan_time_and_stop import _circuitpython_float, _hw
 from tests.circuitpy.test_system_points import _StubBase
 
 #: Defines ``_board_float``, which code.py calls in place of ``float()``. A value past
-#: the float32 range, or NaN, has no float32 bits, so it stays as it is.
+#: the range of the board's float, or NaN, stays as it is.
 _BOARD_FLOAT = """\
 from tests.circuitpy.test_scan_time_and_stop import _circuitpython_float as _board_round
 

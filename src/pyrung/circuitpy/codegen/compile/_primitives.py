@@ -565,7 +565,11 @@ def _int_bound(expr: Any) -> float:
 
     In a Math, a step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl``,
     as in the core's ``_calc_step``.  A float result needs no bound, so its bound is 0.
+    That 0 is no bound on ``int()`` of the float, so a bit op reads it as no bound
+    (:func:`_reads_int_of_float`).
     """
+    if _reads_int_of_float(expr):
+        return math.inf
     if isinstance(expr, bool):
         return 1
     if isinstance(expr, int):
@@ -595,7 +599,7 @@ def _int_bound(expr: Any) -> float:
         if symbol in ("&", "|", "^"):
             return 2 * max(left, right) + 1
         if symbol == "<<" and _small_count_literal(expr.right):
-            return _shifted_bound(expr.left, left, expr.right.value)
+            return left * (1 << expr.right.value)
         if symbol == "**" and _small_count_literal(expr.right):
             return left**expr.right.value
         return math.inf
@@ -609,7 +613,7 @@ def _int_bound(expr: Any) -> float:
         if expr.name == "rsh":
             return _int_bound(expr.value)
         if _small_count_literal(expr.count):
-            return _shifted_bound(expr.value, _int_bound(expr.value), expr.count.value)
+            return _int_bound(expr.value) * (1 << expr.count.value)
         return math.inf
     if isinstance(expr, RandIntExpr):
         return 1 << 31
@@ -620,16 +624,23 @@ def _int_bound(expr: Any) -> float:
     return math.inf
 
 
-def _shifted_bound(value: Any, bound: float, count: int) -> float:
-    """Return the bound of *value*, whose bound is *bound*, shifted left by *count* bits.
+def _reads_int_of_float(expr: Any) -> bool:
+    """Return whether *expr* is a bit op or a shift that reads ``int()`` of a float.
 
-    A float operand has a bound of 0, but ``int()`` of a float can be near 2 ** 1024.
-    Shifted left, it can pass the float range, so the shift has no bound and goes
-    through ``_dbl``.
+    ``int()`` of a double can be near 2 ** 1024, so such a step has no bound and goes
+    through ``_dbl``.  The core's ``_calc_step`` rounds the step to a double too, so a
+    later bit op reads the same low bits on every engine.  ``lro()`` and ``rro()`` keep
+    16 bits, so they need no rule.
     """
-    if _may_be_float(value):
-        return math.inf
-    return bound * (1 << count)
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in _BITWISE_SYMBOLS and (
+            _may_be_float(expr.left) or _may_be_float(expr.right)
+        )
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol == "~" and _may_be_float(expr.operand)
+    if isinstance(expr, ShiftFuncExpr):
+        return expr.name in ("lsh", "rsh") and _may_be_float(expr.value)
+    return False
 
 
 def _small_count_literal(expr: Any) -> bool:

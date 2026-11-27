@@ -132,6 +132,17 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "double_shifted_into_and": (lambda: ((DINT_TOP**32) << 60) & 1, Real, 0.0, {43}),
     "real_lsh_past_floats": (lambda: lsh(BIG**8, 64) + 1, Real, float("inf"), {43}),
     "real_lsh_past_floats_into_and": (lambda: (lsh(BIG**8, 64) & 1) + 2, Int, 2, {43}),
+    # A bit op on a double reads int() of it, which can be wider than 53 bits. The Math
+    # rounds that step to a double, so a later & 1 reads the rounded low bits. An & of
+    # two such integers keeps only their bits, so its row passes even without the rule.
+    "double_or_low_bits": (lambda: ((DINT_TOP * DINT_TOP) | 5) & 7, Real, 0.0, set()),
+    "double_xor_low_bits": (lambda: ((DINT_TOP * DINT_TOP) ^ 5) & 1, Real, 0.0, set()),
+    "double_inverted_low_bits": (lambda: (~(DINT_TOP * DINT_TOP)) & 1, Real, 0.0, set()),
+    "double_and_low_bits": (lambda: ((DINT_TOP * DINT_TOP) & -1) & 1, Real, 0.0, set()),
+    "real_or_low_bits": (lambda: (BIG | 5) & 7, Real, 0.0, set()),
+    "real_xor_low_bits": (lambda: (BIG ^ 5) & 1, Real, 0.0, set()),
+    "real_inverted_low_bits": (lambda: (~BIG) & 1, Real, 0.0, set()),
+    "real_and_low_bits": (lambda: (BIG & -1) & 1, Real, 0.0, set()),
     "no_error": (lambda: SEVEN / 2 + 5, Real, 8.5, set()),
 }
 
