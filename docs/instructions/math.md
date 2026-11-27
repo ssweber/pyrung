@@ -14,6 +14,32 @@ The expression comes first and the destination second, as in every pyrung instru
 
 `math()` refuses a TXT as the destination. A TXT holds only text. Write into a number tag, then `copy()` that tag into the TXT. The copy writes the number's text.
 
+## CLICK's order of operations
+
+```python
+math((DH[1] | DH[2]) & 0x8, DH[3])   # CLICK's DH1 OR DH2 AND 8h
+math((2 ** 3) ** 2, DF[1])           # CLICK's 2 ^ 3 ^ 2, which is 64
+math((-DS[1]) ** 2, DF[2])           # CLICK's - DS1 ^ 2, which is 4 for DS1 = 2
+```
+
+Python groups a pyrung formula in Python's order. CLICK reads a formula in its own order, tightest first:
+
+1. a minus sign before a constant, an address, a bracket or a function
+2. `^`
+3. `*`, `/`, MOD, AND, OR and XOR, all at one level
+4. `+` and `-`
+
+CLICK works from the left within each level. The importer writes the brackets that keep CLICK's grouping, and the export to CLICK brackets every operation. Add the brackets yourself when you copy a CLICK formula by hand. `^` is power in CLICK and XOR in Python, so write CLICK's `^` as `**`.
+
+## An operation between two constants
+
+```python
+math(LiteralExpr(5) / 0, DS[1])        # stores 0 and sets the division-error flag
+math((LiteralExpr(2) - 9) % 3, DS[2])  # stores -1, as a CLICK does
+```
+
+Python computes an operation between two plain numbers when it loads the file, in Python's arithmetic. `math(5 / 0, DS[1])` raises `ZeroDivisionError` then, and `(2 - 9) % 3` is 2. Wrap the first constant in `LiteralExpr` and `math()` runs the operation at scan time. The importer writes such a constant this way.
+
 ## Overflow behavior
 
 **Math wraps.** Overflow truncates to the destination type's bit width (modular arithmetic). This differs from `copy()`, which clamps.

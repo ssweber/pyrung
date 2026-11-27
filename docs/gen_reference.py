@@ -213,6 +213,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.to_ascii",
             "pyrung.to_text",
             "pyrung.to_binary",
+            "pyrung.LiteralExpr",
             "pyrung.PI",
             "pyrung.sqrt",
             "pyrung.sin",

@@ -25,7 +25,7 @@ from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.translator import click_real_literal
 from pyrung.click.ladder.types import LadderBundle, LadderExportError
 from pyrung.core import Program, rung, to_value
-from pyrung.core.expression import lsh
+from pyrung.core.expression import LiteralExpr, lsh
 from pyrung.core.program import copy, fill, math, out, search
 from tests.click.helpers import exec_with_source, round_trip_logic, strip_pyrung_boilerplate
 
@@ -270,6 +270,39 @@ def test_negative_operands_round_trip():
             math(ds[1] - -(ds[2] + 1), ds[7])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
+
+
+def test_sign_before_a_power_exports_and_imports_its_grouping():
+    """A CLICK Math applies a leading minus sign before ``^``, and Python applies ``**`` first.
+
+    The export and the import each keep the grouping that the program had. The imported
+    program stores what the original stores.
+    """
+    with Program() as logic:
+        with rung():
+            copy(2, ds[1])
+            math((-ds[1]) ** 2, ds[2])
+            math(LiteralExpr(-2) ** 2, ds[3])
+            math(-(ds[1] ** 2), ds[4])
+            math(ds[5] + LiteralExpr(-2) ** 2, ds[6])
+    assert _tokens(logic) == [
+        "copy(2,DS1)",
+        "math(( 0 - DS1 ) ^ 2,DS2,mode=decimal)",
+        "math(-2 ^ 2,DS3,mode=decimal)",
+        "math(- ( DS1 ^ 2 ),DS4,mode=decimal)",
+        "math(DS5 + ( -2 ^ 2 ),DS6,mode=decimal)",
+    ]
+    code, before, after = round_trip_logic(logic, TagMap())
+    assert after == before, code
+
+    ns: dict[str, object] = {}
+    exec_with_source(code, ns)
+    stored = []
+    for program in (logic, ns["logic"]):
+        plc = PLC(program)
+        plc.step()
+        stored.append([plc.current_state.tags[f"DS{n}"] for n in (2, 3, 4, 6)])
+    assert stored == [[4, 4, -4, 4], [4, 4, -4, 4]], code
 
 
 def test_real_exponent_round_trips():

@@ -535,6 +535,16 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "td_count_on": {"T": range(321, 324)},
     # The follow5_reads part.
     "fill_binary": {"TXT": range(451, 455), "DD": range(451, 455), "DF": range(451, 454)},
+    "math_range": {"DF": range(176, 244), "DD": range(461, 494), "DS": range(4471, 4476)},
+    # The follow5_order part.  Each order case takes a run of 10.  The WIDTHS cases take
+    # DS4461..DS4464, DD173..DD177 and DH34..DH43.  The doubles case takes DD178..DD185 and
+    # DF170..DF175.
+    "math_order": {
+        "DS": (range(4101, 4191), range(4231, 4281), range(4441, 4451), range(4461, 4465)),
+        "DD": range(173, 186),
+        "DF": range(170, 176),
+        "DH": (range(34, 44), range(201, 401)),
+    },
     # The follow6_reads part.
     "hex_divmod": {"DH": range(141, 168)},
     "math_flags": {"DH": range(168, 195), "DS": range(4301, 4308), "C": range(741, 748)},

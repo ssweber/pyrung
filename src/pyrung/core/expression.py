@@ -503,7 +503,13 @@ class TagExpr(Expression):
 
 
 class LiteralExpr(Expression):
-    """Expression that holds a constant value."""
+    """A constant that ``math()`` keeps in its formula, so the operation on it runs at scan time.
+
+    Python computes an operation between two numbers when it loads the source, before
+    pyrung sees the operation. ``math(5 / 0, DS1)`` raises ``ZeroDivisionError`` then.
+    ``math(LiteralExpr(5) / 0, DS1)`` stores 0 and sets the division-error flag, as a
+    CLICK does.
+    """
 
     def __init__(self, value: Numeric):
         self.value = value
@@ -1364,7 +1370,10 @@ def format_expr(expr: Expression) -> str:
     if isinstance(expr, BinaryExpr):
         left_str = format_expr(expr.left)
         right_str = format_expr(expr.right)
-        if isinstance(expr.left, BinaryExpr):
+        if isinstance(expr.left, BinaryExpr) or (
+            expr.symbol == "**" and left_str.startswith(("-", "+", "~"))
+        ):
+            # Python applies ** before a sign on its left, so -A ** 2 reads as -(A ** 2).
             left_str = f"({left_str})"
         if isinstance(expr.right, BinaryExpr):
             right_str = f"({right_str})"

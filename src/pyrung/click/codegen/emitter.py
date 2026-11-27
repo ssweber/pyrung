@@ -50,12 +50,13 @@ from pyrung.click.codegen.utils import (
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _check_to_text_source,
-    _hex_math_bare_numbers,
     _parse_af_args,
     _parse_operand_prefix,
+    _render_math_formula,
     _sub_operand,
     _sub_operand_kwarg,
     _text_code_value,
+    _token_needs_literal_expr,
 )
 from pyrung.core._messages import internal_error
 from pyrung.core.structure import AutoDefault
@@ -95,6 +96,8 @@ def _prescan_expr_funcs(
                 collection.used_expr_funcs.add(py_name)
         if _CLICK_PI_RE.search(token):
             collection.used_expr_funcs.add("PI")
+        if _token_needs_literal_expr(token):
+            collection.used_expr_funcs.add("LiteralExpr")
 
     for rung in rungs:
         for instr in rung.instructions:
@@ -1417,9 +1420,6 @@ def _render_af_token(
             if key == "convert":
                 _check_to_text_source(args[0], value)
 
-    if func_name == "math" and args and ("mode", "hex") in kwargs:
-        args = [_hex_math_bare_numbers(args[0]), *args[1:]]
-
     # search("cond",value=V,search_range=R,...) → search(R <op> V, ...)
     if func_name == "search":
         return _render_search_token(args, kwargs, collection, nicknames, structured_map)
@@ -1445,14 +1445,20 @@ def _render_af_token(
             return rendered_out_variant
 
     rendered_parts = []
-    choice_source = None
+    first_arg = None
     if func_name == "copy" and len(args) >= 2 and not any(k == "convert" for k, _ in kwargs):
-        choice_source = _render_choice_literal(
-            args[0], args[1], collection, nicknames, structured_map
+        first_arg = _render_choice_literal(args[0], args[1], collection, nicknames, structured_map)
+    if func_name == "math" and args:
+        first_arg = _render_math_formula(
+            args[0],
+            hex_mode=("mode", "hex") in kwargs,
+            collection=collection,
+            nicknames=nicknames,
+            structured_map=structured_map,
         )
     for index, arg in enumerate(args):
-        if index == 0 and choice_source is not None:
-            rendered_parts.append(choice_source)
+        if index == 0 and first_arg is not None:
+            rendered_parts.append(first_arg)
         else:
             rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))
     for key, value in kwargs:

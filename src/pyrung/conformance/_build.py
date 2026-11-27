@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from pyclickplc.validation import NICKNAME_MAX_LENGTH
 
 from pyrung.conformance._case import Case, Group
+from pyrung.conformance._formula import draw_formulas
 from pyrung.conformance._ladder import check_disjoint, emit_case
 from pyrung.conformance._manifest import GroupLayout, Manifest
 from pyrung.conformance._slot import (
@@ -134,8 +135,9 @@ class ConformanceProgram:
 
         The project is ``main.csv``, one CSV per subroutine under ``subroutines/``, and
         ``nicknames.csv``. Cases with a ``tee`` are drawn with their pins teeing off
-        the box's input wire. With ``drawn=False``, the exporter's rail drawing is
-        written for them instead.
+        the box's input wire, and cases with ``formulas`` get their Math formulas typed
+        as given. With ``drawn=False``, the exporter's own rows are written for them
+        instead.
 
         Load the project once. Afterwards, replace one group's subroutine at a time.
         """
@@ -148,7 +150,7 @@ class ConformanceProgram:
             stale.unlink()
         bundle = pyrung_to_ladder(self.program, self.tag_map, allow=PASTE_PROBE_FINDINGS)
         if drawn:
-            bundle = _draw_tees(bundle, self.groups)
+            bundle = _draw_formulas(_draw_tees(bundle, self.groups), self.groups)
         bundle.write(out)
         self.tag_map.to_nickname_file(out / "nicknames.csv")
         return out
@@ -312,8 +314,10 @@ def build_program(
                     _case_rungs(g.name, every, slot)
         # Validated export: a case that the CLICK exporter rejects fails here, before
         # any wire traffic. Mark such a case ``in_process_only``.
-        bundle = _draw_tees(
-            pyrung_to_ladder(body, tag_map, allow=PASTE_PROBE_FINDINGS), [_Drawn(g, every)]
+        drawn = [_Drawn(g, every)]
+        bundle = _draw_formulas(
+            _draw_tees(pyrung_to_ladder(body, tag_map, allow=PASTE_PROBE_FINDINGS), drawn),
+            drawn,
         )
         if g.in_main:
             # The rungs are main's, and the helper subroutines they call.
@@ -420,6 +424,33 @@ def _draw_tees(bundle, groups):
             if at is None:
                 raise ValueError(f"Case {marker} has tee= but no subroutine {group.subroutine}")
             subroutines[at] = (group.subroutine, draw_tees(subroutines[at][1], marker, c.tee))
+    return dataclasses.replace(bundle, main_rows=main_rows, subroutine_rows=tuple(subroutines))
+
+
+def _draw_formulas(bundle, groups):
+    """Return *bundle* with each ``formulas`` case's Math formulas typed as the case gives them."""
+    main_rows = bundle.main_rows
+    subroutines = list(bundle.subroutine_rows)
+    for g in groups:
+        group = g.group
+        for _index, c in g.cases:
+            if not c.formulas:
+                continue
+            marker = f"{group.name}/{c.id}"
+            if group.in_main:
+                main_rows = draw_formulas(main_rows, marker, c.formulas)
+                continue
+            at = next(
+                (i for i, (name, _) in enumerate(subroutines) if name == group.subroutine), None
+            )
+            if at is None:
+                raise ValueError(
+                    f"Case {marker} has formulas= but no subroutine {group.subroutine}"
+                )
+            subroutines[at] = (
+                group.subroutine,
+                draw_formulas(subroutines[at][1], marker, c.formulas),
+            )
     return dataclasses.replace(bundle, main_rows=main_rows, subroutine_rows=tuple(subroutines))
 
 

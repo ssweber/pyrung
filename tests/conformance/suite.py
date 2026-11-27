@@ -105,6 +105,8 @@ from tests.conformance.math import (
     test_math_error,
     test_math_flags,
     test_math_more,
+    test_math_order,
+    test_math_range,
     test_math_terms,
     test_numeric,
     test_real_sum,
@@ -363,6 +365,11 @@ APART_GROUPS = [
     test_td_count_on.group,
     # Stores that a CLICK was read making in programs of their own.
     test_fill_binary.group,
+    # A Math step past the largest double or below the smallest normal one, a minus sign before
+    # Inf, NaN or 0, and the sign of the 0 of a division by zero and of a sum.
+    test_math_range.group,
+    # The order in which a CLICK reads a Math formula typed without brackets.
+    test_math_order.group,
     # Hex Math stores that a CLICK was read making in a program of its own.
     test_hex_divmod.group,
     # Which fault flags a Math sets, read on a CLICK in a program of its own.
@@ -419,8 +426,13 @@ APART_PARTS: dict[str, ApartPart] = {
     # mid-count.  A CLICK was read making each in a program of its own.
     "follow4_reads": ApartPart(("plc_stores", "td_count_on")),
     # A Fill of a number into TXT registers, and Copy Binary into a DD or a DF.  A CLICK was
-    # read making each in a program of its own.
-    "follow5_reads": ApartPart(("fill_binary",)),
+    # read making each in a program of its own.  It also asks what a Math formula does with a
+    # step past the largest double or below the smallest normal one, with a minus sign before
+    # Inf, NaN or 0, and with the sign of a 0, because follow5_order has no rung left. This
+    # part has one rung left.
+    "follow5_reads": ApartPart(("fill_binary", "math_range")),
+    # Math formulas typed without brackets, read in CLICK's order.
+    "follow5_order": ApartPart(("math_order",)),
     # What a hex Math's division and MOD store, and which fault flags a Math sets.  A CLICK
     # was read making each in a program of its own.
     "follow6_reads": ApartPart(("hex_divmod", "math_flags")),

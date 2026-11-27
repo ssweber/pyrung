@@ -40,6 +40,62 @@ def test_render_expr_spells_functions_and_range_aggregates_as_source() -> None:
     assert render_expr(ds.select(1, 5).max() + 1) == "(DS.select(1, 5).max() + 1)"
 
 
+class TestRenderExprSignBeforePower:
+    """A sign on the left of ``**`` keeps its brackets, because Python reads -A ** 2 as -(A ** 2)."""
+
+    @staticmethod
+    def _a():
+        from pyrung import Int
+
+        return Int("RenderTest_A")
+
+    def test_negated_tag_to_a_power(self) -> None:
+        from pyrung.core.validation.render import render_expr
+
+        assert render_expr((-self._a()) ** 2) == "((-RenderTest_A) ** 2)"
+
+    def test_negative_constant_to_a_power(self) -> None:
+        from pyrung.core.expression import LiteralExpr
+        from pyrung.core.validation.render import render_expr
+
+        assert render_expr(LiteralExpr(-2) ** 2) == "((-2) ** 2)"
+        assert render_expr(LiteralExpr(-2.5) ** 2) == "((-2.5) ** 2)"
+
+    def test_plus_and_invert_to_a_power(self) -> None:
+        from pyrung.core.validation.render import render_expr
+
+        a = self._a()
+        assert render_expr((+a) ** 2) == "((+RenderTest_A) ** 2)"
+        assert render_expr((~a) ** 2) == "((~RenderTest_A) ** 2)"
+
+    def test_negated_power_keeps_its_own_brackets(self) -> None:
+        from pyrung.core.validation.render import render_expr
+
+        assert render_expr(-(self._a() ** 2)) == "-(RenderTest_A ** 2)"
+
+    def test_sign_on_the_right_or_before_another_operator(self) -> None:
+        from pyrung.core.expression import LiteralExpr
+        from pyrung.core.validation.render import render_expr
+
+        a = self._a()
+        assert render_expr(a ** LiteralExpr(-2)) == "(RenderTest_A ** -2)"
+        assert render_expr(a ** (-a)) == "(RenderTest_A ** -RenderTest_A)"
+        assert render_expr((-a) * 2) == "(-RenderTest_A * 2)"
+
+    def test_text_reads_back_to_the_same_value(self) -> None:
+        """Python evaluates each text to the value of its expression."""
+        from pyrung.core.expression import LiteralExpr
+        from pyrung.core.validation.render import render_expr
+
+        for expr, text in [
+            (LiteralExpr(-2) ** 2, "((-2) ** 2)"),
+            (LiteralExpr(-2) ** LiteralExpr(3), "((-2) ** 3)"),
+            (-(LiteralExpr(2) ** 2), "-(2 ** 2)"),
+        ]:
+            assert render_expr(expr) == text
+            assert eval(text) == expr.evaluate(None)
+
+
 def test_argument_span_marks_an_argument_by_position_or_by_name() -> None:
     from pyrung import Int
     from pyrung.core.instruction import CopyInstruction

@@ -1134,6 +1134,32 @@ class TestMathFormulaImports:
         ns = _exec_project(files, tmp_path)
         assert list(pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows) == original_rows
 
+    def test_a_constant_operation_imports_literal_expr_where_used(self, tmp_path: Path):
+        """A LiteralExpr keeps an operation between two constants for the scan."""
+        from pyrung import LiteralExpr
+        from pyrung.core.program import math
+
+        with Program() as logic:
+            with rung(x[1]):
+                math(LiteralExpr(5) / 0 + ds[1], ds[100])
+                call("calc_sub")
+            with subroutine("calc_sub"):
+                with rung(x[2]):
+                    math((LiteralExpr(2) - 9) % 3, ds[101])
+        mapping = TagMap({}, include_system=False)
+
+        files = _project_from_program(logic, mapping, tmp_path)
+        main_py = files[_MAIN_PATH]
+        sub_py = files[f"{_SUBROUTINES_DIR}/_sub_calc_sub.py"]
+        assert "LiteralExpr(5) / 0" in main_py
+        assert "LiteralExpr" in pyrung_import_names(main_py)
+        assert "(LiteralExpr(2) - 9) % 3" in sub_py
+        assert "LiteralExpr" in pyrung_import_names(sub_py)
+
+        original_rows = list(pyrung_to_ladder(logic, mapping).main_rows)
+        ns = _exec_project(files, tmp_path)
+        assert list(pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows) == original_rows
+
 
 class TestRunFile:
     def test_a_debug_session_starts_before_the_first_scan(self, tmp_path: Path, monkeypatch):

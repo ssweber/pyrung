@@ -49,6 +49,7 @@ from pyrung.core import (
     fill,
     flasher,
     forloop,
+    jit_stats,
     lro,
     lsh,
     math,
@@ -1750,6 +1751,37 @@ class TestBoardPeripheralsAndRunStop:
             prog, monkeypatch, (dest, system.fault.out_of_range, after), scans=2
         )
         assert results == {name: (0, True, True) for name in results}, label
+
+    def test_negative_constant_to_a_power_on_every_backend(self, monkeypatch):
+        """``LiteralExpr(-2) ** 2`` is 4 on every backend and in the jit.
+
+        Python reads the source ``-2 ** 2`` as ``-(2 ** 2)``, which is -4.
+        """
+        count = Int("Count")
+        square = Int("Square")
+        real_square = Real("RealSquare")
+        cube = Int("Cube")
+        matched = Bool("Matched")
+        with Program(strict=False) as prog:
+            with rung():
+                # The count changes every scan, so a long run_for() goes through the jit.
+                math(count + 1, count)
+                math(LiteralExpr(-2) ** 2, square)
+                math(LiteralExpr(-3) ** 2, real_square)
+                math(LiteralExpr(-2) ** 3, cube)
+            with rung(LiteralExpr(-2) ** 2 == 4):
+                out(matched)
+        watch = (square, real_square, cube, matched)
+        expected = (4, 9.0, -8, True)
+
+        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
+        assert results == {name: expected for name in results}
+
+        plc = PLC(prog)
+        with jit_stats.collect() as stats:
+            plc.run_for(30.0)
+        assert stats.scans["loop"] > 0
+        assert tuple(plc.current_state.tags[tag.name] for tag in watch) == expected
 
     @staticmethod
     def _non_finite_real(operand: str) -> tuple[Real, list]:

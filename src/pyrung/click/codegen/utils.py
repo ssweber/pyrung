@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import keyword
 import re
+import warnings
 from typing import TYPE_CHECKING
 
 from pyrung.click.codegen._syntax import (
@@ -20,6 +21,22 @@ from pyrung.click.codegen.constants import (
     _STRING_KWARGS,
     _sub_operands,
 )
+from pyrung.click.codegen.formula import (
+    _CLICK_FUNC_TO_PYTHON,
+    _RANGE_AGG_TO_METHOD,
+    _TIER_OF,
+    _WORD_OPS,
+    Address,
+    BinaryOp,
+    Call,
+    Formula,
+    Negate,
+    Number,
+    Pi,
+    Pointer,
+    RangeCall,
+    parse_with_unconfirmed_pairs,
+)
 from pyrung.click.codegen.models import _OperandCollection
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 
@@ -31,29 +48,7 @@ if TYPE_CHECKING:
 # Click-native expression → Python operator conversion
 # ---------------------------------------------------------------------------
 
-# Click function names → Python equivalents (must NOT be treated as operand addresses)
-_CLICK_FUNC_TO_PYTHON: dict[str, str] = {
-    "SQRT": "sqrt",
-    "SIN": "sin",
-    "COS": "cos",
-    "TAN": "tan",
-    "ASIN": "asin",
-    "ACOS": "acos",
-    "ATAN": "atan",
-    "RAD": "radians",
-    "DEG": "degrees",
-    "LOG": "log10",
-    "LN": "log",
-    "LSH": "lsh",
-    "RSH": "rsh",
-    "LRO": "lro",
-    "RRO": "rro",
-    "RAND": "randint",
-    # ABS maps to the Python builtin, which is never imported (see _EXPR_FUNC_IMPORT_NAMES).
-    "ABS": "abs",
-}
-
-# Python builtins in the table above.  They need no import.
+# Python builtins in _CLICK_FUNC_TO_PYTHON.  They need no import.
 _BUILTIN_EXPR_FUNCS = frozenset({"abs"})
 
 # Regex matching Click function calls like SQRT(, LSH ( , etc.
@@ -66,23 +61,12 @@ _CLICK_PI_RE = re.compile(r"\bPI\b")
 
 # Click hex literal: hex digits followed by lowercase 'h' (e.g. 0000h, FFFFh).
 # Safe on raw Click text because operand prefixes use uppercase H (DH, TH).
-# Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
 _CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
 _MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
-# A bare digit run that is not part of an address, a hex literal or a decimal.
-_BARE_DIGITS_RE = re.compile(r"(?<![0-9A-Za-z_.])(\d+)(?![0-9A-Za-z_.])")
 
-
-def _hex_math_bare_numbers(formula: str) -> str:
-    """Read bare digits in a hex-mode Math formula as hex, as CLICK does.
-
-    CLICK's Math dialog in hex mode treats typed digits as hex and appends
-    ``h`` (``DH1 + 255`` is stored as ``255h`` = 0x255).  Its own exports
-    always carry the ``h``.  This function covers hand-written or legacy CSV.
-    """
-    if '"' in formula:
-        return formula
-    return _BARE_DIGITS_RE.sub(lambda m: f"{m.group(1)}h", formula)
+# CLICK's operators that Python spells differently.  Python would read ^ as XOR, so the
+# importer refuses these operators in any operand that is not a formula.
+_CLICK_ONLY_OPERATOR_RE = re.compile(r"\^|\b(?:" + "|".join(sorted(_WORD_OPS)) + r")\b")
 
 
 _MODBUS_984_RE = re.compile(r"\d+")
@@ -110,36 +94,11 @@ _REGISTER_TYPE_MEMBERS = {
     "input": "INPUT",
 }
 
-# Click range aggregates (colon-range argument) -> BlockRange method name.
-_RANGE_AGG_TO_METHOD: dict[str, str] = {
-    "SUM": "sum",
-    "MAX": "max",
-    "MIN": "min",
-    "MDN": "median",
-    "AVG": "mean",
-}
-
 # Regex matching a range aggregate with colon-range: SUM ( DS1 : DS10 ), MAX(DS1:DS10), ...
 # Groups: 1 = function, 2/3 = first operand prefix/number, 4/5 = last operand prefix/number.
 _RANGE_AGG_RE = re.compile(
     r"\b(" + "|".join(_RANGE_AGG_TO_METHOD) + r")\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)"
 )
-
-# Placeholder call names used while validating range aggregates as Python syntax.
-_RANGE_AGG_PLACEHOLDERS: dict[str, str] = {
-    name: f"_range_{name.lower()}" for name in _RANGE_AGG_TO_METHOD
-}
-
-# CLICK spells formulas NAME ( a , b ) and ( a + b ), with spaces inside each paren and
-# before each separator. Import compacts them, so CLICK's spelling and the bare ABS(x)
-# spelling generate the same code. A space before a call's paren is removed only after a
-# function name. A space before a group's paren is removed only after a unary sign. So
-# DS1 MOD ( DS2 + 1 ) and DS1 - ( DS2 ) keep theirs.
-_SPACED_CALL_RE = re.compile(
-    r"\b(" + "|".join([*_CLICK_FUNC_TO_PYTHON, *_RANGE_AGG_TO_METHOD]) + r")\s+\("
-)
-_SPACED_UNARY_RE = re.compile(r"(^|\(|[-+*/^] |\b(?:MOD|AND|OR|XOR) )([-+~])\s+\(")
-_PAREN_INNER_SPACE_RE = re.compile(r"(?<=\()\s+|\s+(?=\))|\s+(?=,)")
 
 # Pointer/indirect addressing: DH[DS134] means "DH at index stored in DS134"
 _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
@@ -148,36 +107,10 @@ _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
 _PREFIX_TO_BLOCK: dict[str, str] = {p: bv for p, _, bv in _OPERAND_PREFIXES}
 
 # The expression function names that generated code imports from pyrung
-_EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {"PI"}
-
-# Regex matching Python expression-function calls (lowercase) in generated code
-_PYTHON_EXPR_FUNC_RE = re.compile(
-    r"\b(" + "|".join(re.escape(n) for n in sorted(_EXPR_FUNC_IMPORT_NAMES) if n != "PI") + r")\("
-)
-
-
-def _click_expr_to_python(expr: str) -> str:
-    """Convert a Click-native expression string to Python operator syntax.
-
-    Handles infix operators (^ → **, MOD → %, AND → &, OR → |, XOR → ^)
-    and function names (SQRT → sqrt, LSH → lsh, etc.).
-    """
-    result = expr
-
-    # Infix operators — order matters: ^ before XOR to avoid double-conversion
-    result = result.replace(" ^ ", "**")
-    result = result.replace(" MOD ", " % ")
-    result = result.replace(" AND ", " & ")
-    result = result.replace(" OR ", " | ")
-    result = result.replace(" XOR ", " ^ ")
-
-    # Function names: SQRT( → sqrt(, etc.
-    result = _CLICK_FUNC_RE.sub(lambda m: _CLICK_FUNC_TO_PYTHON[m.group(1)] + "(", result)
-
-    # PI constant
-    result = _CLICK_PI_RE.sub("PI", result)
-
-    return result
+_EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {
+    "PI",
+    "LiteralExpr",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -384,47 +317,30 @@ def _render_modbus_address(args_str: str) -> str:
     return f"ModbusAddress(address={address}, register_type=RegisterType.{member})"
 
 
-def _compact_click_formula(text: str) -> str:
-    """Compact ``ABS ( DS1 - 5 ) * 2`` to ``ABS(DS1 - 5) * 2``.  Leave quoted text alone."""
-    if '"' in text or "'" in text:
-        return text
-    text = _SPACED_CALL_RE.sub(r"\1(", text)
-    text = _PAREN_INNER_SPACE_RE.sub("", text)
-    return _SPACED_UNARY_RE.sub(r"\1\2(", text)
-
-
 def _validate_operand(text: str) -> ast.expr:
     """Validate Click syntax before substituting trusted generated references."""
+    if _CLICK_ONLY_OPERATOR_RE.search(_strip_quoted_strings(text)):
+        raise ValueError(f"Unsupported CSV operand expression: {text!r}")
     normalized = _pythonize_csv_strings(text)
     normalized = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1)}", normalized)
-    normalized = _RANGE_AGG_RE.sub(
-        lambda m: (
-            f"{_RANGE_AGG_PLACEHOLDERS[m.group(1)]}"
-            f"({m.group(2)}{m.group(3)}, {m.group(4)}{m.group(5)})"
-        ),
-        normalized,
-    )
     normalized = _RANGE_RE.sub(
         lambda m: f"_range({m.group(1)}{m.group(2)}, {m.group(3)}{m.group(4)})",
         normalized,
     )
-    normalized = _click_expr_to_python(normalized)
     return _validate_expression(
         normalized,
-        functions=set(_CLICK_FUNC_TO_PYTHON.values())
-        | _COPY_CONVERTERS
+        functions=_COPY_CONVERTERS
         | {
             "all",
             "any",
             "ModbusTcpTarget",
             "ModbusRtuTarget",
             "_range",
-            *_RANGE_AGG_PLACEHOLDERS.values(),
             "immediate",
             "rise",
             "fall",
         },
-        constants={"PI", "none"} | _COPY_CONVERTERS,
+        constants={"none"} | _COPY_CONVERTERS,
         operand_pattern=_OPERAND_RE,
         blocks=set(_PREFIX_TO_BLOCK),
     )
@@ -443,7 +359,6 @@ def _sub_operand(
     if not text:
         return text
 
-    text = _compact_click_formula(text)
     code_char = _text_code_value(text)
     if code_char is not None:
         # pyrung reads "" as the blank (NUL); keep the source free of \u0000.
@@ -451,6 +366,15 @@ def _sub_operand(
     modbus_address = _MODBUS_ADDRESS_RE.fullmatch(text)
     if modbus_address:
         return _render_modbus_address(modbus_address.group(1))
+    try:
+        formula, pairs = parse_with_unconfirmed_pairs(text)
+    except ValueError:
+        pass
+    else:
+        if isinstance(formula, (BinaryOp, Negate, Call, RangeCall, Pi)):
+            return _render_parsed_formula(
+                text, formula, pairs, collection, nicknames, structured_map
+            )
     expression = _validate_operand(text)
 
     # System operands (SC/SD → system.* path)
@@ -513,19 +437,6 @@ def _sub_operand(
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
             return f"{func_name}({', '.join(rendered)})"
-        # Range aggregate with colon-range: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum()
-        if func_name in _RANGE_AGG_TO_METHOD:
-            agg_match = _RANGE_AGG_RE.fullmatch(text)
-            if agg_match:
-                return _render_range_aggregate(agg_match, collection)
-        # Click expression functions (SQRT, LSH, SIN, etc.)
-        py_name = _CLICK_FUNC_TO_PYTHON.get(func_name)
-        if py_name is not None:
-            if py_name in _EXPR_FUNC_IMPORT_NAMES:
-                collection.used_expr_funcs.add(py_name)
-            args, _ = _parse_af_args(inner_args_str)
-            rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
-            return f"{py_name}({', '.join(rendered)})"
 
     # Check for list/array: [C1,C2,C3]
     if text.startswith("[") and text.endswith("]") and isinstance(expression, ast.List):
@@ -553,16 +464,9 @@ def _sub_operand(
         end_num = int(range_match.group(4))
         return _render_range_expr(prefix, start_num, end_num, collection)
 
-    # Expression with operators: convert Click-native operators to Python,
-    # then substitute operand tokens within.
-
-    # Hex literals first, while text is still raw Click (uppercase operand
-    # names like DH001 won't false-match because H is not a hex digit).
+    # For text that is not a CLICK formula, such as an expression that names a range, replace
+    # each operand in it.
     result = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1).upper()}", _pythonize_csv_strings(text))
-
-    # Convert range-aggregate colon-ranges (before general expression conversion)
-    result = _RANGE_AGG_RE.sub(lambda m: _render_range_aggregate(m, collection), result)
-    result = _click_expr_to_python(result)
     result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), result)
 
     # Pointer/indirect addressing within expressions: DH[DS134] → dh[tag_var]
@@ -585,24 +489,192 @@ def _sub_operand(
             return collection.tags[op].var_name
         return op
 
-    result = _sub_operands(result, _sub_operand_token)
-
-    # Track expression function names for imports
-    for m in _PYTHON_EXPR_FUNC_RE.finditer(result):
-        collection.used_expr_funcs.add(m.group(1))
-    if _CLICK_PI_RE.search(result):
-        collection.used_expr_funcs.add("PI")
-
-    return result
+    return _sub_operands(result, _sub_operand_token)
 
 
-def _render_range_aggregate(match: re.Match[str], collection: _OperandCollection) -> str:
-    """Render one ``_RANGE_AGG_RE`` match as ``block.select(a, b).<method>()``."""
-    method = _RANGE_AGG_TO_METHOD[match.group(1)]
-    prefix = match.group(2)
-    start_num = int(match.group(3))
-    end_num = int(match.group(5))
-    return f"{_render_range_expr(prefix, start_num, end_num, collection)}.{method}()"
+# ---------------------------------------------------------------------------
+# CLICK Math formulas
+# ---------------------------------------------------------------------------
+
+# CLICK's binary operators in Python, with the strength of each Python operator (a higher
+# strength binds tighter).  A unary minus has strength 7, and a name or a call has 9.
+_PYTHON_BINARY_OPS: dict[str, tuple[str, int]] = {
+    "^": ("**", 8),
+    "*": ("*", 6),
+    "/": ("/", 6),
+    "MOD": ("%", 6),
+    "+": ("+", 5),
+    "-": ("-", 5),
+    "AND": ("&", 3),
+    "XOR": ("^", 2),
+    "OR": ("|", 1),
+}
+_UNARY_STRENGTH = 7
+_ATOM_STRENGTH = 9
+
+
+def _render_math_formula(
+    text: str,
+    *,
+    hex_mode: bool,
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None = None,
+) -> str:
+    """Render the CLICK Math formula *text* as Python that computes what a CLICK computes."""
+    try:
+        formula, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
+    except ValueError as error:
+        raise ValueError(f"Unsupported CSV operand expression: {text!r}") from error
+    return _render_parsed_formula(text, formula, pairs, collection, nicknames, structured_map)
+
+
+def _render_parsed_formula(
+    text: str,
+    formula: Formula,
+    pairs: tuple[tuple[str, str], ...],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None,
+) -> str:
+    """Render the parsed *formula* of *text*, and warn once for each unconfirmed pair in it."""
+    for first, second in pairs:
+        if first == second:
+            uses = f"{_operator_words(first)} twice"
+        else:
+            uses = f"{_operator_words(first)} and {_operator_words(second)}"
+        warnings.warn(
+            f"The Math formula {text!r} uses {uses} with no brackets between the two. pyrung "
+            f"applies {_guessed_order(first, second)}, but no one has checked that order on a "
+            "CLICK yet. Add brackets to the formula in CLICK to set the order.",
+            stacklevel=2,
+        )
+
+    def render(node: Formula) -> tuple[str, int]:
+        source, strength = render_bare(node)
+        if node.bracketed and strength < _ATOM_STRENGTH:
+            return f"({source})", _ATOM_STRENGTH
+        return source, strength
+
+    def render_bare(node: Formula) -> tuple[str, int]:
+        if isinstance(node, Number):
+            return _render_number(node.value, node.hex, node.text)
+        if isinstance(node, Address):
+            return _sub_operand(node.text, collection, nicknames, structured_map), _ATOM_STRENGTH
+        if isinstance(node, Pointer):
+            block_var = _PREFIX_TO_BLOCK[node.bank]
+            collection.used_blocks.add(block_var)
+            index = _sub_operand(node.index.text, collection, nicknames, structured_map)
+            return f"{block_var}[{index}]", _ATOM_STRENGTH
+        if isinstance(node, Pi):
+            collection.used_expr_funcs.add("PI")
+            return "PI", _ATOM_STRENGTH
+        if isinstance(node, Call):
+            name = _CLICK_FUNC_TO_PYTHON[node.name]
+            if name in _EXPR_FUNC_IMPORT_NAMES:
+                collection.used_expr_funcs.add(name)
+            args = ", ".join(render(arg)[0] for arg in node.args)
+            return f"{name}({args})", _ATOM_STRENGTH
+        if isinstance(node, RangeCall):
+            block = _render_range_expr(
+                node.first.bank, node.first.index, node.last.index, collection
+            )
+            return f"{block}.{_RANGE_AGG_TO_METHOD[node.name]}()", _ATOM_STRENGTH
+        if isinstance(node, Negate):
+            operand, strength = render(node.operand)
+            if strength < _UNARY_STRENGTH:
+                operand = f"({operand})"
+            return f"-{operand}", _UNARY_STRENGTH
+        symbol, strength = _PYTHON_BINARY_OPS[node.op]
+        left, left_strength = render(node.left)
+        right, right_strength = render(node.right)
+        if _is_python_number(node.left) and _is_python_number(node.right):
+            # Python would compute an operation between two numbers when it loads the
+            # file, in its own arithmetic.  A LiteralExpr keeps the operation for the scan,
+            # so ``5 / 0`` stores 0 and sets the division-error flag, as math() does.
+            left, left_strength = f"LiteralExpr({left})", _ATOM_STRENGTH
+            collection.used_expr_funcs.add("LiteralExpr")
+        # Python applies ** from the right and every other operator from the left.
+        if left_strength < strength or (left_strength == strength and symbol == "**"):
+            left = f"({left})"
+        if right_strength < strength or (right_strength == strength and symbol != "**"):
+            right = f"({right})"
+        if symbol == "**":
+            return f"{left}**{right}", strength
+        return f"{left} {symbol} {right}", strength
+
+    return render(formula)[0]
+
+
+def _render_number(value: int | float, is_hex: bool, text: str) -> tuple[str, int]:
+    """Render a constant, with its hex digits as CLICK wrote them (``00FFh`` is ``0x00FF``)."""
+    sign = "-" if value < 0 else ""
+    if is_hex:
+        source = f"{sign}0x{text.lstrip('-')[:-1].upper()}"
+    elif isinstance(value, int):
+        source = str(value)
+    else:
+        source = text
+    return source, _UNARY_STRENGTH if sign else _ATOM_STRENGTH
+
+
+def _is_python_number(node: Formula) -> bool:
+    """Return whether Python computes *node* to a plain number when it loads the file."""
+    if isinstance(node, Negate):
+        return _is_python_number(node.operand)
+    if isinstance(node, Call) and _CLICK_FUNC_TO_PYTHON[node.name] == "abs":
+        # ABS is Python's builtin abs, which gives a plain number for a plain number.
+        return len(node.args) == 1 and _is_python_number(node.args[0])
+    return isinstance(node, Number)
+
+
+def _has_constant_operation(node: Formula) -> bool:
+    """Return whether the rendered *node* has an operation between two plain numbers."""
+    if isinstance(node, BinaryOp):
+        if _is_python_number(node.left) and _is_python_number(node.right):
+            return True
+        return _has_constant_operation(node.left) or _has_constant_operation(node.right)
+    if isinstance(node, Negate):
+        return _has_constant_operation(node.operand)
+    if isinstance(node, Call):
+        return any(_has_constant_operation(arg) for arg in node.args)
+    return False
+
+
+def _token_needs_literal_expr(token: str) -> bool:
+    """Return whether the importer writes ``LiteralExpr`` for the CLICK instruction *token*,
+    so its file must import it.
+    """
+    open_paren = token.find("(")
+    if open_paren <= 0 or not token.endswith(")"):
+        return False
+    try:
+        args, kwargs = _parse_af_args(token[open_paren + 1 : -1])
+    except ValueError:
+        return False
+    hex_mode = token.startswith("math(") and ("mode", "hex") in kwargs
+    for arg in args:
+        try:
+            formula, _ = parse_with_unconfirmed_pairs(arg, hex_mode=hex_mode)
+        except ValueError:
+            continue
+        if _has_constant_operation(formula):
+            return True
+    return False
+
+
+def _operator_words(operator: str) -> str:
+    """Return *operator* as a warning names it. A binary operator goes in quotes."""
+    return f"'{operator}'" if operator in _TIER_OF else operator
+
+
+def _guessed_order(first: str, second: str) -> str:
+    """Return the words that say how pyrung orders two operators that no reading has ordered."""
+    if first not in _TIER_OF:
+        return "the minus sign first"
+    if _TIER_OF[first] == _TIER_OF[second]:
+        return "the two from the left"
+    return f"'{first if _TIER_OF[first] < _TIER_OF[second] else second}' first"
 
 
 def _sub_range(

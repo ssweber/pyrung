@@ -189,7 +189,11 @@ def render_expr(expr: Any) -> str:
             return f"immediate({operand_name(value.value)})"
         return operand_name(value)
     if isinstance(expr, BinaryExpr):
-        return f"({render_expr(expr.left)} {expr.symbol} {render_expr(expr.right)})"
+        left = render_expr(expr.left)
+        if expr.symbol == "**" and left.startswith(("-", "+", "~")):
+            # Python applies ** before a sign on its left, so -A ** 2 reads as -(A ** 2).
+            left = f"({left})"
+        return f"({left} {expr.symbol} {render_expr(expr.right)})"
     if isinstance(expr, UnaryExpr):
         if expr.symbol == "abs":
             return f"abs({render_expr(expr.operand)})"

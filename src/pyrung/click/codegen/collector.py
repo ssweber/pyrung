@@ -49,6 +49,7 @@ from pyrung.click.codegen.utils import (
     _parse_modbus_address,
     _parse_operand_prefix,
     _strip_quoted_strings,
+    _token_needs_literal_expr,
 )
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 from pyrung.core.structure import AutoDefault
@@ -1283,6 +1284,9 @@ def _ref_af_token(
 
     if func_name in {"raw", "undecoded"}:
         return
+
+    if _token_needs_literal_expr(token):
+        refs.used_expr_funcs.add("LiteralExpr")
 
     # For timer/counter instructions, strip the done_bit + accumulator args
     # from the text before scanning refs — they're rendered as Timer[n]/Counter[n]

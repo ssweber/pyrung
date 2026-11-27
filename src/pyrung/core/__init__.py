@@ -16,6 +16,7 @@ from pyrung.core.debug_trace import RungTrace, RungTraceEvent
 from pyrung.core.expression import (
     PI,
     Expression,
+    LiteralExpr,
     acos,
     asin,
     atan,
@@ -291,6 +292,7 @@ __all__ = [
     "to_binary",
     # Expressions
     "Expression",
+    "LiteralExpr",
     "PI",
     "sqrt",
     "sin",

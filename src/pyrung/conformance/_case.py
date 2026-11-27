@@ -81,6 +81,8 @@ class Case:
     tee: TeeSpec | None = None
     #: Over the wire: ``Fired`` comes last, when the answer is in, within this many seconds.
     fires_within: float | None = None
+    #: The case's Math formulas as the CLICK export types them (see ``_formula.py``).
+    formulas: tuple[str, ...] = ()
 
     @property
     def checks(self) -> dict[str, Expectation]:
@@ -188,6 +190,7 @@ def case(
     probe: str | None = None,
     tee: TeeSpec | None = None,
     fires_within: float | None = None,
+    formulas: Sequence[str] = (),
 ) -> Case:
     """Define a conformance case.
 
@@ -238,6 +241,12 @@ def case(
             may take longer than the harness's usual wait.  It is the number of seconds
             the case may take over the wire.  Nothing moves after ``Fired``, so *scans*
             adds no settle time. It stays the in-process scan count.
+        formulas: For a case that asks about the order in which a CLICK reads a Math
+            formula.  The exporter brackets every operation, so the CLICK export writes
+            these formulas instead, one for each ``math()`` of the case, in rung order.
+            The build refuses a typed formula whose parse differs from the parse of
+            the formula that the export writes for the case's ``math()``. So the PLC runs
+            the same operations as the in-process case.
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
@@ -281,6 +290,7 @@ def case(
         probe=probe,
         tee=tee,
         fires_within=fires_within,
+        formulas=tuple(formulas),
     )
 
 
