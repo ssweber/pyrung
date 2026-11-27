@@ -347,8 +347,7 @@ class ShiftInstruction(Instruction):
     - ``C.select(1, 8)`` → shifts low-to-high (data at C1, exits at C8).
     - ``C.select(8, 1).reverse()`` → shifts high-to-low.
 
-    The `bit_range` must contain only BOOL tags.  The builder parses it into a
-    ``Span`` (:mod:`pyrung.core.instruction.operands`).
+    The `bit_range` must contain only BOOL tags.
 
     Args:
         bit_range: `BlockRange` or `IndirectBlockRange` from `.select()`.

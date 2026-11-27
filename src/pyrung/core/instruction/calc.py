@@ -416,8 +416,8 @@ class CalcInstruction(OneShotMixin, Instruction):
     the formula as it runs.
 
     The builder parses both operands (:mod:`pyrung.core.instruction.operands`).
-    ``source_expression`` holds the formula as it was written, as a ``Value`` or a
-    ``Span``, and the CLICK export writes it.  ``dest`` holds a ``TagArg``.
+    ``source_expression`` is the formula as the author wrote it, parsed into a
+    ``Value`` or a ``Span``.  The CLICK export writes it.  ``dest`` is a ``TagArg``.
 
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.
@@ -473,8 +473,8 @@ class CalcInstruction(OneShotMixin, Instruction):
         self.mode = self.mode_inference.mode
         # Only a Real shows the sign of a 0.  Text keeps Python's ops, so "5" * 2 is "55".
         into_real = self.dest.tag.type is TagType.REAL and not may_be_text(expression)
-        # The analyses and the code generator read this formula, the one that the mode
-        # runs.  It is what calc_form() returns, not a parse result.
+        # The analyses and the code generator read this formula.  calc_form() rewrites
+        # it for the mode.  It is not a parse result.
         self.expression = calc_form(expression, self.mode, into_real=into_real)
 
     def check_operands(self, call: str | None = None) -> None:

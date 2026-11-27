@@ -94,8 +94,8 @@ def _formula_expression(source: Value | Span) -> Any:
 def _leaves(value: Any, seen: set[int] | None = None) -> list[Any]:
     """Return each tag, range and pointer that the expression *value* reads, in order.
 
-    A part of an expression can be a tag, a pointer, a range or an ``immediate()``, such
-    as a ``randint()`` bound.
+    A part of an expression can be a tag, a pointer, a range or an ``immediate()``.  A
+    ``randint()`` bound is one such part.
     """
     seen = set() if seen is None else seen
     if isinstance(value, ImmediateRef):

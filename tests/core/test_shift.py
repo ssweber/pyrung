@@ -207,6 +207,39 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C2"] is True
         assert runner.current_state.tags["C3"] is True
 
+    def test_int_mapped_onto_a_bool_slot_shifts_like_its_neighbours(self, runner_factory):
+        """An Int mapped onto a slot of a Bool block takes the shifted bit as a Bool slot does.
+
+        Both runners store the same values.
+        """
+        Data = Bool("Data")
+        Clock = Bool("Clock")
+        Reset = Bool("Reset")
+        Cb = Block("Cb", TagType.BOOL, 1, 8)
+        Int("Stray").map_to(Cb[2])
+
+        with Program(strict=False) as logic:
+            with rung(Data):
+                shift(Cb.select(1, 4)).clock(Clock).reset(Reset)
+
+        # The start state holds every slot, because only the interpreted runner adds an
+        # unwritten Stray to the state. The comparison of the two runners would fail on that.
+        start = SystemState().with_tags({"Cb1": False, "Stray": 0, "Cb3": False, "Cb4": False})
+        runner = runner_factory(logic, initial_state=start)
+        seen = []
+        for data, clock in ((True, False), (True, True), (False, False), (False, True)):
+            runner.patch({"Data": data, "Clock": clock, "Reset": False})
+            runner.step()
+            tags = runner.current_state.tags
+            seen.append(tuple(tags[name] for name in ("Cb1", "Stray", "Cb3", "Cb4")))
+
+        assert seen == [
+            (False, 0, False, False),
+            (True, False, False, False),
+            (True, False, False, False),
+            (False, True, False, False),
+        ]
+
     def test_non_bool_range_is_refused_at_build(self):
         """Shift requires a Bool range, and the program refuses another when it is built."""
         Data = Bool("Data")
