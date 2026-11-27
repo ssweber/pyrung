@@ -7,15 +7,22 @@ laddercodec's Drum checks all three. The call holds lists of tags and conditions
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never
 
 from laddercodec import Drum
 
 from pyrung.core.condition import AllCondition, Condition
-from pyrung.core.tag import Tag
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg
 from pyrung.core.validation.render import Call, call_of, operand_name, render_condition
 
-from ..fields import Family, Operand, Unbuildable, refusals_of, render_operand
+from ..fields import (
+    Family,
+    Operand,
+    Unbuildable,
+    refusals_of,
+    render_operand,
+    render_preset,
+)
 from ..resolve import _ResolutionCache
 
 # laddercodec's Drum kind for each pyrung class. The kind is also the name of the call.
@@ -83,8 +90,19 @@ def _events(instruction: Any) -> tuple[Any, ...]:
     return tuple(getattr(instruction, "events", ()))
 
 
-def _presets(instruction: Any) -> tuple[Any, ...]:
+def _presets(instruction: Any) -> tuple[Preset | None, ...]:
     return tuple(getattr(instruction, "presets", ()))
+
+
+def _preset_tags(preset: Preset | None) -> list[Any]:
+    """Return the tag that a step's preset or the jump's step names, if it names one."""
+    match preset:
+        case TagArg(tag=tag):
+            return [tag]
+        case ConstArg() | None:
+            return []
+        case _:
+            assert_never(preset)
 
 
 def _operands(instruction: Any) -> list[Operand]:
@@ -100,19 +118,18 @@ def _operands(instruction: Any) -> list[Operand]:
             word = _WORDS[attribute]
             found.append(Operand(argument, word, tuple((attribute, value) for value in values)))
 
-    add("outputs", "outputs", list(instruction.outputs))
+    add("outputs", "outputs", list(instruction.output_tags))
     add("events", "events", [event for event in _events(instruction) if event is not None])
-    add("presets", "presets", [p for p in _presets(instruction) if isinstance(p, Tag)])
-    add("current_step", "current_step", [instruction.current_step])
+    add("presets", "presets", [tag for p in _presets(instruction) for tag in _preset_tags(p)])
+    add("current_step", "current_step", [instruction.current_step.tag])
     accumulator = getattr(instruction, "accumulator", None)
-    add("accumulator", "accumulator", [] if accumulator is None else [accumulator])
-    add("completion_flag", "completion_flag", [instruction.completion_flag])
+    add("accumulator", "accumulator", [] if accumulator is None else [accumulator.tag])
+    add("completion_flag", "completion_flag", [instruction.completion_flag.tag])
     for name, attribute in _PINS:
         condition = getattr(instruction, attribute)
         if condition is not None:
             add(name, attribute, [condition])
-    if isinstance(instruction.jump_step, Tag):
-        add("jump_step", "jump_step", [instruction.jump_step])
+    add("jump_step", "jump_step", _preset_tags(instruction.jump_step))
     return found
 
 
@@ -140,7 +157,7 @@ def _call(instruction: Any) -> Call:
         f"[{', '.join(str(int(c)) for c in row)}]" for row in instruction.pattern
     )
     arguments: list[tuple[str, Any, str]] = [
-        ("outputs", [operand_name(tag) for tag in instruction.outputs], "keyword")
+        ("outputs", [operand_name(tag) for tag in instruction.output_tags], "keyword")
     ]
     if timed:
         arguments.append(("presets", [_item_text(p) for p in instruction.presets], "keyword"))
@@ -149,10 +166,10 @@ def _call(instruction: Any) -> Call:
     if timed:
         arguments.append(("unit", operand_name(instruction.unit.value), "keyword"))
     arguments.append(("pattern", pattern + "]", "keyword"))
-    arguments.append(("current_step", operand_name(instruction.current_step), "keyword"))
+    arguments.append(("current_step", operand_name(instruction.current_step.tag), "keyword"))
     if timed:
-        arguments.append(("accumulator", operand_name(instruction.accumulator), "keyword"))
-    arguments.append(("completion_flag", operand_name(instruction.completion_flag), "keyword"))
+        arguments.append(("accumulator", operand_name(instruction.accumulator.tag), "keyword"))
+    arguments.append(("completion_flag", operand_name(instruction.completion_flag.tag), "keyword"))
     head = call_of(kind, arguments)
 
     # call_of writes no step inside a chained call, so the chained calls are added here.
@@ -185,12 +202,11 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     def render(value: Any, attribute: str) -> str:
         return render_operand(exporter, value, attribute, instruction)
 
-    def render_each(values: tuple[Any, ...], attribute: str) -> tuple[str, ...]:
-        # A step's blank preset or event is the empty text.
-        return tuple(
-            "" if value is None else render(value, f"{attribute}[{index}]")
-            for index, value in enumerate(values)
-        )
+    # A step's blank preset is the empty text.
+    presets = tuple(
+        "" if preset is None else render_preset(exporter, preset, f"presets[{index}]", instruction)
+        for index, preset in enumerate(_presets(instruction))
+    )
 
     events: list[str] = []
     for index, event in enumerate(_events(instruction)):
@@ -208,13 +224,16 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     jumps = instruction.jump_condition is not None
     accumulator = getattr(instruction, "accumulator", None)
     unit = getattr(instruction, "unit", None)
-    outputs = render_each(tuple(instruction.outputs), "outputs")
-    presets = render_each(_presets(instruction), "presets")
-    current_step = render(instruction.current_step, "current_step")
-    completion_flag = render(instruction.completion_flag, "completion_flag")
-    accumulator_text = "" if accumulator is None else render(accumulator, "accumulator")
+    outputs = tuple(
+        render(tag, f"outputs[{index}]") for index, tag in enumerate(instruction.output_tags)
+    )
+    current_step = render(instruction.current_step.tag, "current_step")
+    completion_flag = render(instruction.completion_flag.tag, "completion_flag")
+    accumulator_text = "" if accumulator is None else render(accumulator.tag, "accumulator")
     unit_text = "" if unit is None else render(unit, "unit")
-    jump_step = render(instruction.jump_step, "jump_step") if jumps else ""
+    jump_step = (
+        render_preset(exporter, instruction.jump_step, "jump_step", instruction) if jumps else ""
+    )
     pattern = tuple(tuple(int(cell) for cell in row) for row in instruction.pattern)
     fields: dict[str, Any] = {
         "kind": kind,

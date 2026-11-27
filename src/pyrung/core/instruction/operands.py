@@ -42,12 +42,17 @@ These instructions parse their operands instead:
   passes each value of its ``ins`` to :func:`parse_value`;
 - ``send()`` and ``receive()``.  Each parses only its ``source`` or its ``dest``;
 - the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
-  ``flasher()`` and ``timed()``.  Each coil parses only its target.
+  ``flasher()`` and ``timed()``.  Each coil parses its target.  ``debounce()``,
+  ``flasher()`` and ``timed()`` also parse their presets;
+- the timers ``on_delay()`` and ``off_delay()``, and the counters ``count_up()`` and
+  ``count_down()``;
+- the drums ``event_drum()``, ``time_drum()`` and ``time_event_drum()``.
 
 Their builder calls ``parse()`` on each declaration, which returns one of the results
 below or raises the refusal.  ``search()`` passes the value of its comparison to
-:func:`parse_value`.  That function refuses nothing.  The instruction then holds only
-results.
+:func:`parse_value`.  That function refuses nothing.  The timers, the counters and the
+drums parse in their own ``__init__``, and so do the presets of the coils.  The
+instruction then holds only results.
 ``execute()``, the code generator and the CLICK export match on them and never test the
 raw value again.  A reader that takes the operands of every instruction calls
 :func:`as_authored` on each.

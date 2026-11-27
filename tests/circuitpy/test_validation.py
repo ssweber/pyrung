@@ -19,6 +19,7 @@ from pyrung.core import (
     TagType,
     Timer,
     branch,
+    event_drum,
     off_delay,
     on_delay,
     out,
@@ -127,6 +128,26 @@ class TestIOBlockUntracked:
         def logic():
             with rung(remote_button):
                 out(light)
+
+        prog = _build_program(logic)
+        report = validate_circuitpy_program(prog, hw=hw, mode="warn")
+
+        assert CPY_IO_BLOCK_UNTRACKED in _finding_codes(report)
+
+    def test_drum_output_not_from_p1am_emits_finding(self):
+        hw = P1AM()
+        inputs = hw.slot(1, "P1-08SIM")
+        remote_light = OutputBlock("Remote", TagType.BOOL, 1, 8)[1]
+
+        def logic():
+            with rung(inputs[1]):
+                event_drum(
+                    outputs=[remote_light],
+                    events=[inputs[2]],
+                    pattern=[[1]],
+                    current_step=Int("Step"),
+                    completion_flag=Bool("DrumDone"),
+                ).reset(inputs[3])
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")

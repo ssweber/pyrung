@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never, cast
 
 from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.crossing import Cmp, Constraint, Eq
@@ -18,10 +18,10 @@ from .advance import (
     Snapshot,
     constraint_holds,
     eq,
-    resolve_snapshot_value,
     scalar_boundary,
 )
 from .base import Instruction
+from .operands import ConstArg, Preset, TagArg
 from .utils import elapsed_units, instruction_condition_view, to_condition
 
 if TYPE_CHECKING:
@@ -51,13 +51,13 @@ def _as_bool_matrix(pattern: Sequence[Sequence[bool | int]]) -> tuple[tuple[bool
     return tuple(rows)
 
 
-def _validate_output_tags(outputs: Sequence[Tag]) -> tuple[Tag, ...]:
+def _parse_outputs(outputs: Sequence[Tag]) -> tuple[TagArg, ...]:
     if not outputs:
         raise ValueError("drum outputs must contain at least 1 tag")
     if len(outputs) > 16:
         raise ValueError(f"A drum has at most 16 outputs, and you gave {len(outputs)}.")
     names: set[str] = set()
-    cooked: list[Tag] = []
+    cooked: list[TagArg] = []
     for output in outputs:
         if not isinstance(output, Tag):
             raise TypeError(f"drum output must be Tag, got {type(output).__name__}")
@@ -68,32 +68,42 @@ def _validate_output_tags(outputs: Sequence[Tag]) -> tuple[Tag, ...]:
         if output.name in names:
             raise ValueError(f"drum output tags must be unique; duplicate {output.name!r}")
         names.add(output.name)
-        cooked.append(output)
+        cooked.append(TagArg(output))
     return tuple(cooked)
 
 
-def _validate_step_tag(current_step: Tag) -> Tag:
+def _parse_step_tag(current_step: Tag) -> TagArg:
     if current_step.type not in {TagType.INT, TagType.DINT}:
         raise TypeError(f"drum current_step must be INT or DINT, got {current_step.type.name}")
-    return current_step
+    return TagArg(current_step)
 
 
-def _validate_completion_flag(completion_flag: Tag) -> Tag:
+def _parse_completion_flag(completion_flag: Tag) -> TagArg:
     if completion_flag.type != TagType.BOOL:
         raise TypeError(f"drum completion_flag must be BOOL, got {completion_flag.type.name}")
-    return completion_flag
+    return TagArg(completion_flag)
 
 
-def _validate_jump_step(step: Tag | int | None) -> Tag | int | None:
+def _parse_jump_step(step: Tag | int | None) -> Preset | None:
     if step is None:
         return None
     if isinstance(step, Tag):
         if step.type not in {TagType.INT, TagType.DINT}:
             raise TypeError(f"drum jump step tag must be INT or DINT, got {step.type.name}")
-        return step
+        return TagArg(step)
+    # A bool is an int here, so jump(step=True) goes to step 1.
     if isinstance(step, int):
-        return step
+        return ConstArg(step)
     raise TypeError(f"drum jump step must be int or Tag, got {type(step).__name__}")
+
+
+def _parse_time_preset(call: str, preset: Tag | int) -> Preset:
+    """Return one step's preset of *call*, a time drum or a time and event drum."""
+    if isinstance(preset, Tag):
+        if preset.type not in {TagType.INT, TagType.DINT}:
+            raise TypeError(f"{call} preset tags must be INT or DINT; got {preset.type.name}")
+        return TagArg(preset)
+    return ConstArg(preset)
 
 
 def _read_step_tag_value(ctx: ScanContext, tag: Tag, fallback: int = 1) -> int:
@@ -104,18 +114,37 @@ def _read_step_tag_value(ctx: ScanContext, tag: Tag, fallback: int = 1) -> int:
         return fallback
 
 
-def _resolve_step_value(step: Tag | int | None, ctx: ScanContext) -> int | None:
-    if step is None:
-        return None
-    if isinstance(step, Tag):
-        return _read_step_tag_value(ctx, step)
-    return int(step)
+def _resolve_step_value(step: Preset | None, ctx: ScanContext) -> int | None:
+    match step:
+        case None:
+            return None
+        case TagArg(tag=tag):
+            return _read_step_tag_value(ctx, tag)
+        case ConstArg(value=value):
+            return int(cast(int, value))
+        case _:
+            assert_never(step)
 
 
-def _resolve_preset_value(preset: Tag | int, ctx: ScanContext) -> int:
-    if isinstance(preset, Tag):
-        return _read_step_tag_value(ctx, preset, fallback=0)
-    return int(preset)
+def _resolve_preset_value(preset: Preset, ctx: ScanContext) -> int:
+    match preset:
+        case TagArg(tag=tag):
+            return _read_step_tag_value(ctx, tag, fallback=0)
+        case ConstArg(value=value):
+            return int(cast(int, value))
+        case _:
+            assert_never(preset)
+
+
+def _snapshot_preset(preset: Preset, snapshot: Snapshot) -> Any:
+    """Return *preset*'s value in *snapshot*: a tag's value there, or the constant."""
+    match preset:
+        case TagArg(tag=tag):
+            return snapshot.get(tag.name, tag.default)
+        case ConstArg(value=value):
+            return value
+        case _:
+            assert_never(preset)
 
 
 def _snapshot_int(snapshot: Snapshot, tag: Tag, fallback: int) -> int:
@@ -223,14 +252,14 @@ class _DrumBaseInstruction(Instruction):
         jump_step: Tag | int | None = None,
         jog_condition: Any = None,
     ) -> None:
-        self.outputs = _validate_output_tags(outputs)
+        self.outputs = _parse_outputs(outputs)
         self.pattern = _as_bool_matrix(pattern)
-        self.current_step = _validate_step_tag(current_step)
-        self.completion_flag = _validate_completion_flag(completion_flag)
+        self.current_step = _parse_step_tag(current_step)
+        self.completion_flag = _parse_completion_flag(completion_flag)
         self.auto_condition = to_condition(auto_condition)
         self.reset_condition = to_condition(reset_condition)
         self.jump_condition = to_condition(jump_condition)
-        self.jump_step = _validate_jump_step(jump_step)
+        self.jump_step = _parse_jump_step(jump_step)
         self.jog_condition = to_condition(jog_condition)
 
         self.step_count = len(self.pattern)
@@ -256,10 +285,15 @@ class _DrumBaseInstruction(Instruction):
 
     def set_jump(self, condition: Any, step: Tag | int) -> None:
         self.jump_condition = to_condition(condition)
-        self.jump_step = _validate_jump_step(step)
+        self.jump_step = _parse_jump_step(step)
 
     def set_jog(self, condition: Any) -> None:
         self.jog_condition = to_condition(condition)
+
+    @property
+    def output_tags(self) -> tuple[Tag, ...]:
+        """The output tags, in the pattern's column order."""
+        return tuple(output.tag for output in self.outputs)
 
     def _step_is_valid(self, step: int) -> bool:
         return 1 <= step <= self.step_count
@@ -267,15 +301,15 @@ class _DrumBaseInstruction(Instruction):
     def _apply_outputs(self, ctx: ScanContext, step: int) -> None:
         """Write *step*'s pattern row."""
         row = self.pattern[step - 1]
-        ctx.set_tags({tag.name: bool(row[idx]) for idx, tag in enumerate(self.outputs)})
+        ctx.set_tags({tag.name: bool(row[idx]) for idx, tag in enumerate(self.output_tags)})
 
     def _apply_reset(self, ctx: ScanContext) -> None:
         """Apply a reset, a level that wins: step 1, completion flag off, every output off."""
         ctx.set_tags(
             {
-                self.current_step.name: 1,
-                self.completion_flag.name: False,
-                **{tag.name: False for tag in self.outputs},
+                self.current_step.tag.name: 1,
+                self.completion_flag.tag.name: False,
+                **{tag.name: False for tag in self.output_tags},
             }
         )
         self._clear_time(ctx)
@@ -284,16 +318,16 @@ class _DrumBaseInstruction(Instruction):
         """Set the completion flag and turn every output off.  The step and Acc stay."""
         ctx.set_tags(
             {
-                self.completion_flag.name: True,
-                **{tag.name: False for tag in self.outputs},
+                self.completion_flag.tag.name: True,
+                **{tag.name: False for tag in self.output_tags},
             }
         )
 
     def _flag_on(self, ctx: ScanContext) -> bool:
-        return bool(ctx.get_tag(self.completion_flag.name, self.completion_flag.default))
+        return bool(ctx.get_tag(self.completion_flag.tag.name, self.completion_flag.tag.default))
 
     def _move(self, ctx: ScanContext, step: int) -> None:
-        ctx.set_tag(self.current_step.name, step)
+        ctx.set_tag(self.current_step.tag.name, step)
         self._clear_time(ctx)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -324,7 +358,7 @@ class _DrumBaseInstruction(Instruction):
         register is not a move.
         """
         condition_view = instruction_condition_view(ctx, self)
-        register = _read_step_tag_value(ctx, self.current_step)
+        register = _read_step_tag_value(ctx, self.current_step.tag)
         valid = self._step_is_valid(register)
         jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target = self._read_pins(
             ctx, condition_view
@@ -380,7 +414,7 @@ class _DrumBaseInstruction(Instruction):
         if not enabled:
             return step
         if step != register:
-            ctx.set_tag(self.current_step.name, step)
+            ctx.set_tag(self.current_step.tag.name, step)
         if self._flag_on(ctx):
             return step
         if not bool(ctx.get_memory(self.memory_key("_drum_rung_prev"), False)):
@@ -418,7 +452,7 @@ class _DrumBaseInstruction(Instruction):
         While the flag is on, the drum skips its own time and event logic. So a target other
         than the flag waits for the reset that clears the flag.
         """
-        flag = self.completion_flag
+        flag = self.completion_flag.tag
         if constraint.tag == flag.name or not snapshot.get(flag.name, flag.default):
             return None
         return _condition_step(eq(flag, False), self.reset_condition)
@@ -466,12 +500,12 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     of 0 or less ends it on its first timing scan, as a constant 0 does.
     """
 
-    accumulator: Tag
+    accumulator: TagArg
     unit: TimeUnit
-    presets: tuple[Any, ...]  # each kind narrows it: a time & event step may have none
+    presets: tuple[Preset | None, ...]  # a time & event step may have none
 
     def _acc_max(self) -> int:
-        return _INT_MAX if self.accumulator.type == TagType.INT else _DINT_MAX
+        return _INT_MAX if self.accumulator.tag.type == TagType.INT else _DINT_MAX
 
     def _step_has_time(self, step: int) -> bool:
         return True
@@ -479,18 +513,18 @@ class _TimedDrumInstruction(_DrumBaseInstruction):
     def _tick(self, ctx: ScanContext, step: int) -> int:
         if not self._step_has_time(step):
             return 0
-        frac_key = f"_frac:{self.accumulator.name}"
-        acc = _read_step_tag_value(ctx, self.accumulator, fallback=0)
+        frac_key = f"_frac:{self.accumulator.tag.name}"
+        acc = _read_step_tag_value(ctx, self.accumulator.tag, fallback=0)
         dt = ctx.get_memory("_dt", 0.0)
         int_units, frac = elapsed_units(ctx.get_memory(frac_key, 0), dt, self.unit)
         acc = min(acc + int_units, self._acc_max())
-        ctx.set_tag(self.accumulator.name, acc)
+        ctx.set_tag(self.accumulator.tag.name, acc)
         ctx.set_memory(frac_key, frac)
         return acc
 
     def _clear_time(self, ctx: ScanContext) -> None:
-        ctx.set_tag(self.accumulator.name, 0)
-        ctx.set_memory(f"_frac:{self.accumulator.name}", 0)
+        ctx.set_tag(self.accumulator.tag.name, 0)
+        ctx.set_memory(f"_frac:{self.accumulator.tag.name}", 0)
 
 
 class EventDrumInstruction(_DrumBaseInstruction):
@@ -557,42 +591,42 @@ class EventDrumInstruction(_DrumBaseInstruction):
                 return None
             if constraint_holds(constraint, snapshot) is True:
                 return None
-            current = _snapshot_int(snapshot, self.current_step, 1)
+            current = _snapshot_int(snapshot, self.current_step.tag, 1)
             if not 1 <= current <= self.step_count:
                 return _condition_step(
-                    Cmp(self.current_step.name, ">=", 1),
+                    Cmp(self.current_step.tag.name, ">=", 1),
                     self.reset_condition,
                 )
             past_flag = self._plan_past_flag(constraint, snapshot)
             if past_flag is not None:
                 return past_flag
 
-            if constraint.tag == self.completion_flag.name:
+            if constraint.tag == self.completion_flag.tag.name:
                 desired = _desired_bool(constraint)
                 if desired is None:
                     return None
                 if not desired:
                     return _condition_step(
-                        eq(self.completion_flag, False),
+                        eq(self.completion_flag.tag, False),
                         self.reset_condition,
                     )
                 boundary = (
-                    eq(self.completion_flag, True)
+                    eq(self.completion_flag.tag, True)
                     if current == self.step_count
-                    else Cmp(self.current_step.name, ">=", current + 1)
+                    else Cmp(self.current_step.tag.name, ">=", current + 1)
                 )
-            elif constraint.tag == self.current_step.name:
+            elif constraint.tag == self.current_step.tag.name:
                 boundary = _next_step_boundary(
                     constraint,
                     snapshot,
-                    current_step=self.current_step,
+                    current_step=self.current_step.tag,
                     step_count=self.step_count,
                 )
                 if boundary is None:
                     return None
-                if _is_step_one_restart(boundary, self.current_step):
+                if _is_step_one_restart(boundary, self.current_step.tag):
                     return _condition_step(boundary, self.reset_condition)
-                current = _snapshot_int(snapshot, self.current_step, 1)
+                current = _snapshot_int(snapshot, self.current_step.tag, 1)
             else:
                 return None
 
@@ -604,9 +638,9 @@ class EventDrumInstruction(_DrumBaseInstruction):
             )
 
         return AdvanceProfile(
-            channels=(self.current_step, self.completion_flag),
+            channels=(self.current_step.tag, self.completion_flag.tag),
             plan=plan,
-            done=self.completion_flag,
+            done=self.completion_flag.tag,
         )
 
 
@@ -614,6 +648,7 @@ class TimeDrumInstruction(_TimedDrumInstruction):
     _reads = ("presets", "jump_step", "current_step", "completion_flag")
     _writes = ("outputs", "current_step", "accumulator", "completion_flag")
     _conditions = ("auto_condition", "reset_condition", "jump_condition", "jog_condition")
+    presets: tuple[Preset, ...]  # each time step has a preset
     _structural_fields = ("pattern", "unit")
     # The drum reads its accumulator every scan it times, like a timer does.
     _exclusive_fields = ("current_step", "accumulator")
@@ -649,26 +684,21 @@ class TimeDrumInstruction(_TimedDrumInstruction):
                 f"time_drum has {self.step_count} steps but {len(presets)} presets. "
                 "Give one preset per step."
             )
-        cooked_presets: list[Tag | int] = []
+        cooked_presets: list[Preset] = []
         for preset in presets:
-            if isinstance(preset, Tag):
-                if preset.type not in {TagType.INT, TagType.DINT}:
-                    raise TypeError(
-                        f"time_drum preset tags must be INT or DINT; got {preset.type.name}"
-                    )
-                cooked_presets.append(preset)
-                continue
-            if isinstance(preset, int):
-                cooked_presets.append(preset)
-                continue
-            raise TypeError(f"time_drum presets must be int or Tag, got {type(preset).__name__}")
+            # A bool is an int here, so True is a preset of 1.
+            if not isinstance(preset, (Tag, int)):
+                raise TypeError(
+                    f"time_drum presets must be int or Tag, got {type(preset).__name__}"
+                )
+            cooked_presets.append(_parse_time_preset("time_drum", preset))
         self.presets = tuple(cooked_presets)
 
         if accumulator.type not in {TagType.INT, TagType.DINT}:
             raise TypeError(
                 f"time_drum accumulator must be INT or DINT, got {accumulator.type.name}"
             )
-        self.accumulator = accumulator
+        self.accumulator = TagArg(accumulator)
         self.unit = _parse_time_unit(unit)
 
     def _step_end_met(
@@ -694,45 +724,45 @@ class TimeDrumInstruction(_TimedDrumInstruction):
             if constraint_holds(constraint, snapshot) is True:
                 return None
 
-            current = _snapshot_int(snapshot, self.current_step, 1)
+            current = _snapshot_int(snapshot, self.current_step.tag, 1)
             if not 1 <= current <= self.step_count:
-                return _reset(Cmp(self.current_step.name, ">=", 1))
+                return _reset(Cmp(self.current_step.tag.name, ">=", 1))
             past_flag = self._plan_past_flag(constraint, snapshot)
             if past_flag is not None:
                 return past_flag
 
-            if constraint.tag == self.current_step.name:
+            if constraint.tag == self.current_step.tag.name:
                 boundary = _next_step_boundary(
                     constraint,
                     snapshot,
-                    current_step=self.current_step,
+                    current_step=self.current_step.tag,
                     step_count=self.step_count,
                 )
                 if boundary is None:
                     return None
                 return (
                     _reset(boundary)
-                    if _is_step_one_restart(boundary, self.current_step)
+                    if _is_step_one_restart(boundary, self.current_step.tag)
                     else _auto(boundary)
                 )
 
-            if constraint.tag == self.completion_flag.name:
+            if constraint.tag == self.completion_flag.tag.name:
                 desired = _desired_bool(constraint)
                 if desired is None:
                     return None
                 if not desired:
-                    return _reset(eq(self.completion_flag, False))
+                    return _reset(eq(self.completion_flag.tag, False))
                 if current < self.step_count:
-                    return _auto(Cmp(self.current_step.name, ">=", current + 1))
-                return _auto(eq(self.completion_flag, True))
+                    return _auto(Cmp(self.current_step.tag.name, ">=", current + 1))
+                return _auto(eq(self.completion_flag.tag, True))
 
-            if constraint.tag != self.accumulator.name:
+            if constraint.tag != self.accumulator.tag.name:
                 return None
             target = scalar_boundary(constraint, snapshot)
             if target is None:
                 return None
-            acc = _snapshot_int(snapshot, self.accumulator, 0)
-            preset_raw = resolve_snapshot_value(self.presets[current - 1], snapshot)
+            acc = _snapshot_int(snapshot, self.accumulator.tag, 0)
+            preset_raw = _snapshot_preset(self.presets[current - 1], snapshot)
             try:
                 preset = int(preset_raw)
             except (TypeError, ValueError):
@@ -741,16 +771,16 @@ class TimeDrumInstruction(_TimedDrumInstruction):
             # A non-final step clears Acc as it crosses its preset. Treat that
             # step transition as the observable boundary, then ask again.
             if current < self.step_count and (target >= preset or target < acc):
-                return _auto(Cmp(self.current_step.name, ">=", current + 1))
+                return _auto(Cmp(self.current_step.tag.name, ">=", current + 1))
             if current == self.step_count and target < acc:
-                return _reset(eq(self.current_step, 1))
+                return _reset(eq(self.current_step.tag, 1))
             return _auto(constraint)
 
         return AdvanceProfile(
-            channels=(self.current_step, self.accumulator, self.completion_flag),
+            channels=(self.current_step.tag, self.accumulator.tag, self.completion_flag.tag),
             plan=plan,
-            accumulator=self.accumulator,
-            done=self.completion_flag,
+            accumulator=self.accumulator.tag,
+            done=self.completion_flag.tag,
         )
 
 
@@ -808,21 +838,16 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
                 f"time_event_drum has {self.step_count} steps but {len(events)} events. "
                 "Give one event per step."
             )
-        cooked_presets: list[Tag | int | None] = []
+        cooked_presets: list[Preset | None] = []
         for preset in presets:
-            if preset is None or (isinstance(preset, int) and not isinstance(preset, bool)):
-                cooked_presets.append(preset)
+            if preset is None:
+                cooked_presets.append(None)
                 continue
-            if isinstance(preset, Tag):
-                if preset.type not in {TagType.INT, TagType.DINT}:
-                    raise TypeError(
-                        f"time_event_drum preset tags must be INT or DINT; got {preset.type.name}"
-                    )
-                cooked_presets.append(preset)
-                continue
-            raise TypeError(
-                f"time_event_drum presets must be int, Tag or None, got {type(preset).__name__}"
-            )
+            if isinstance(preset, bool) or not isinstance(preset, (Tag, int)):
+                raise TypeError(
+                    f"time_event_drum presets must be int, Tag or None, got {type(preset).__name__}"
+                )
+            cooked_presets.append(_parse_time_preset("time_event_drum", preset))
         self.presets = tuple(cooked_presets)
         self.events = tuple(None if event is None else to_condition(event) for event in events)
         for index, (preset, event) in enumerate(zip(self.presets, self.events, strict=True)):
@@ -835,7 +860,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
             raise TypeError(
                 f"time_event_drum accumulator must be INT or DINT, got {accumulator.type.name}"
             )
-        self.accumulator = accumulator
+        self.accumulator = TagArg(accumulator)
         self.unit = _parse_time_unit(unit)
 
     def _step_has_time(self, step: int) -> bool:
@@ -877,7 +902,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
             return _condition_step(until, self.reset_condition)
 
         def _next(current: int) -> AdvanceStep:
-            return self._advance(Cmp(self.current_step.name, ">=", current + 1), current)
+            return self._advance(Cmp(self.current_step.tag.name, ">=", current + 1), current)
 
         def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
             if not isinstance(constraint, (Eq, Cmp)):
@@ -885,54 +910,54 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
             if constraint_holds(constraint, snapshot) is True:
                 return None
 
-            current = _snapshot_int(snapshot, self.current_step, 1)
+            current = _snapshot_int(snapshot, self.current_step.tag, 1)
             if not 1 <= current <= self.step_count:
-                return _reset(Cmp(self.current_step.name, ">=", 1))
+                return _reset(Cmp(self.current_step.tag.name, ">=", 1))
             past_flag = self._plan_past_flag(constraint, snapshot)
             if past_flag is not None:
                 return past_flag
 
-            if constraint.tag == self.current_step.name:
+            if constraint.tag == self.current_step.tag.name:
                 boundary = _next_step_boundary(
                     constraint,
                     snapshot,
-                    current_step=self.current_step,
+                    current_step=self.current_step.tag,
                     step_count=self.step_count,
                 )
                 if boundary is None:
                     return None
                 return (
                     _reset(boundary)
-                    if _is_step_one_restart(boundary, self.current_step)
+                    if _is_step_one_restart(boundary, self.current_step.tag)
                     else self._advance(boundary, current)
                 )
 
-            if constraint.tag == self.completion_flag.name:
+            if constraint.tag == self.completion_flag.tag.name:
                 desired = _desired_bool(constraint)
                 if desired is None:
                     return None
                 if not desired:
-                    return _reset(eq(self.completion_flag, False))
+                    return _reset(eq(self.completion_flag.tag, False))
                 if current < self.step_count:
                     return _next(current)
-                return self._advance(eq(self.completion_flag, True), current)
+                return self._advance(eq(self.completion_flag.tag, True), current)
 
-            if constraint.tag != self.accumulator.name:
+            if constraint.tag != self.accumulator.tag.name:
                 return None
             target = scalar_boundary(constraint, snapshot)
             if target is None:
                 return None
-            acc = _snapshot_int(snapshot, self.accumulator, 0)
+            acc = _snapshot_int(snapshot, self.accumulator.tag, 0)
             if target < acc:
                 if current == self.step_count:
-                    return _reset(eq(self.current_step, 1))
+                    return _reset(eq(self.current_step.tag, 1))
                 return _next(current)
             preset_spec = self.presets[current - 1]
             if preset_spec is None:
                 # An event-only step: its event may end it before Acc gets there.
                 return None
             try:
-                preset = int(resolve_snapshot_value(preset_spec, snapshot))
+                preset = int(_snapshot_preset(preset_spec, snapshot))
             except (TypeError, ValueError):
                 return None
             if target < preset:
@@ -945,8 +970,8 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
             return None
 
         return AdvanceProfile(
-            channels=(self.current_step, self.accumulator, self.completion_flag),
+            channels=(self.current_step.tag, self.accumulator.tag, self.completion_flag.tag),
             plan=plan,
-            accumulator=self.accumulator,
-            done=self.completion_flag,
+            accumulator=self.accumulator.tag,
+            done=self.completion_flag.tag,
         )

@@ -216,13 +216,11 @@ class _InstructionMixin:
             reset_condition = getattr(instruction, "reset_condition", None)
             if reset_condition is not None:
                 specs.append(("reset", reset_condition, ".reset()"))
-            jump_condition = getattr(instruction, "jump_condition", None)
-            jump_step = getattr(instruction, "jump_step", None)
+            jump_condition = instruction.jump_condition
+            jump_step = instruction.jump_step
             if jump_condition is not None and jump_step is not None:
-                jump_value = self._render_operand(
-                    jump_step,
-                    path=f"{path}.jump_step",
-                    source=instruction,
+                jump_value = self._render_preset(
+                    jump_step, path=f"{path}.jump_step", source=instruction
                 )
                 specs.append(("jump", jump_condition, f".jump({jump_value})"))
             jog_condition = getattr(instruction, "jog_condition", None)
@@ -700,7 +698,7 @@ class _InstructionMixin:
             return self._fn(
                 "event_drum",
                 outputs=self._render_sequence(
-                    instruction.outputs,
+                    instruction.output_tags,
                     path=f"{path}.outputs",
                     source=instruction,
                 ),
@@ -711,12 +709,12 @@ class _InstructionMixin:
                 ),
                 pattern=self._render_pattern(instruction.pattern),
                 current_step=self._render_operand(
-                    instruction.current_step,
+                    instruction.current_step.tag,
                     path=f"{path}.current_step",
                     source=instruction,
                 ),
                 completion_flag=self._render_operand(
-                    instruction.completion_flag,
+                    instruction.completion_flag.tag,
                     path=f"{path}.completion_flag",
                     source=instruction,
                 ),
@@ -725,11 +723,11 @@ class _InstructionMixin:
             return self._fn(
                 "time_drum",
                 outputs=self._render_sequence(
-                    instruction.outputs,
+                    instruction.output_tags,
                     path=f"{path}.outputs",
                     source=instruction,
                 ),
-                presets=self._render_sequence(
+                presets=self._render_presets(
                     instruction.presets,
                     path=f"{path}.presets",
                     source=instruction,
@@ -739,17 +737,17 @@ class _InstructionMixin:
                 ),
                 pattern=self._render_pattern(instruction.pattern),
                 current_step=self._render_operand(
-                    instruction.current_step,
+                    instruction.current_step.tag,
                     path=f"{path}.current_step",
                     source=instruction,
                 ),
                 accumulator=self._render_operand(
-                    instruction.accumulator,
+                    instruction.accumulator.tag,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
                 completion_flag=self._render_operand(
-                    instruction.completion_flag,
+                    instruction.completion_flag.tag,
                     path=f"{path}.completion_flag",
                     source=instruction,
                 ),
@@ -759,11 +757,11 @@ class _InstructionMixin:
             return self._fn(
                 "time_event_drum",
                 outputs=self._render_sequence(
-                    instruction.outputs,
+                    instruction.output_tags,
                     path=f"{path}.outputs",
                     source=instruction,
                 ),
-                presets=self._render_sequence(
+                presets=self._render_presets(
                     instruction.presets,
                     path=f"{path}.presets",
                     source=instruction,
@@ -778,17 +776,17 @@ class _InstructionMixin:
                 ),
                 pattern=self._render_pattern(instruction.pattern),
                 current_step=self._render_operand(
-                    instruction.current_step,
+                    instruction.current_step.tag,
                     path=f"{path}.current_step",
                     source=instruction,
                 ),
                 accumulator=self._render_operand(
-                    instruction.accumulator,
+                    instruction.accumulator.tag,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
                 completion_flag=self._render_operand(
-                    instruction.completion_flag,
+                    instruction.completion_flag.tag,
                     path=f"{path}.completion_flag",
                     source=instruction,
                 ),
