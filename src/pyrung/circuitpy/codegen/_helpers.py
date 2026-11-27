@@ -355,7 +355,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # A hex Math's / (core _op_hex_div) rounds the quotient down.  A division by 0 is 0 and
-    # sets SC40.
+    # sets SC40.  q // 1 rounds a float down where math.floor would stop the jit's trace.
     "_hex_div": [
         "def _hex_div(a, b, flags):",
         "    if b == 0:",
@@ -363,7 +363,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    if isinstance(a, int) and isinstance(b, int):",
         "        return a // b",
         "    q = a / b",
-        "    return float(math.floor(q)) if math.isfinite(q) else q",
+        "    return q // 1 if math.isfinite(q) else q",
         "",
     ],
     # A randint() site whose bounds are read gives 0 when the bounds are equal (46, SC46)

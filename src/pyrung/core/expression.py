@@ -137,7 +137,7 @@ def _op_hex_div(a: Numeric, b: Numeric) -> Numeric:
     if isinstance(a, int) and isinstance(b, int):
         return a // b
     quotient = a / b
-    return float(math.floor(quotient)) if math.isfinite(quotient) else quotient
+    return quotient // 1 if math.isfinite(quotient) else quotient
 
 
 def _op_mod(a: Numeric, b: Numeric) -> Numeric:

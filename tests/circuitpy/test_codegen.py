@@ -3124,8 +3124,8 @@ class TestBoardPeripheralsAndRunStop:
         # The product passes 2 ** 53, so the dividend is a double.  The MOD brings the
         # quotient back into range, so a wrong quotient shows.
         ("double_dividend", lambda a, b: a * a * a * a / b % 7, (0xFFFF, 3), 3, (0, 0, 0)),
-        # A float constant divides in floats.  The double quotient of 3 / 0.1 rounds down to
-        # 30.  Rounding the exact quotient down would give 29.
+        # A float constant divides in floats.  The double quotient of 3 / 0.1 is 30.0, and
+        # rounding it down keeps 30.  Rounding the exact quotient down would give 29.
         ("float_constant_divisor", lambda a, b: a / 0.1, (3, 0), 30, (0, 0, 0)),
     ]
 
