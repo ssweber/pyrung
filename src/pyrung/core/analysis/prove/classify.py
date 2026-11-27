@@ -73,7 +73,7 @@ from pyrung.core.instruction.conversions import (
     calc_store_transform,
     copy_store_transform,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import as_authored, held
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import RUNTIME_VALUES, SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import TagType, tag_written_from_outside
@@ -471,8 +471,9 @@ def _comparison_influencing_tags(
             # a comparison reads it (``_tag_compared_names``).  The slots of an indexed
             # count stay constant storage, as above.  Its index does not.
             count_index: set[str] = set()
-            count_names = _compared_value_names(instr.count, graph, count_index)
-            if not isinstance(instr.count, (IndirectRef, IndirectExprRef)):
+            count = held(instr.count)
+            count_names = _compared_value_names(count, graph, count_index)
+            if not isinstance(count, (IndirectRef, IndirectExprRef)):
                 influential.update(count_names)
             influential.update(count_index)
 

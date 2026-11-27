@@ -26,6 +26,7 @@ from pyrung.core.condition import (
     Condition,
     NormallyClosedCondition,
 )
+from pyrung.core.instruction.operands import held
 from pyrung.core.tag import ImmediateRef, Tag
 
 if TYPE_CHECKING:
@@ -380,7 +381,7 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool]:
     from pyrung.core.instruction.control import FOR_ZERO_COUNT_ITERATIONS
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    count = loop.count
+    count = held(loop.count)
     if isinstance(count, int) or FOR_ZERO_COUNT_ITERATIONS:
         return ((), True)
     if isinstance(count, Tag):

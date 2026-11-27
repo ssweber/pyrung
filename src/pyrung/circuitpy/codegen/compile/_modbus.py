@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import assert_never
+
 from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
 from pyrung.circuitpy.codegen.context import (
@@ -10,15 +12,13 @@ from pyrung.circuitpy.codegen.context import (
     ModbusClientSymbolSpec,
 )
 from pyrung.core._messages import needs_modbus_client
+from pyrung.core.instruction.operands import RangeArg, TagArg
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusRtuTarget,
     ModbusSendInstruction,
     ModbusTcpTarget,
     RegisterType,
-)
-from pyrung.core.memory_block import (
-    BlockRange,
 )
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import Tag
@@ -40,10 +40,14 @@ def _modbus_client_symbol_spec(tag: Tag, ctx: CodegenContext) -> ModbusClientSym
     )
 
 
-def _modbus_client_operand_tags(operand: Tag | BlockRange) -> tuple[Tag, ...]:
-    if isinstance(operand, Tag):
-        return (operand,)
-    return tuple(operand.tags())
+def _modbus_client_operand_tags(operand: TagArg | RangeArg) -> tuple[Tag, ...]:
+    match operand:
+        case TagArg(tag=tag):
+            return (tag,)
+        case RangeArg(span=span):
+            return tuple(span.tags())
+        case _:
+            assert_never(operand)
 
 
 def _modbus_client_spec_for_instruction(

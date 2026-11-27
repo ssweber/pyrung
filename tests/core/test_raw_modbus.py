@@ -8,6 +8,7 @@ from concurrent.futures import Future
 import pytest
 
 from pyrung.core import PLC, Block, Bool, Dint, Int, Program, TagType, rung
+from pyrung.core.instruction.operands import RangeArg, TagArg
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
@@ -258,12 +259,12 @@ class TestRegisterCount:
 
     def test_preview_single_tag(self):
         tag = Int("X")
-        assert _preview_operand_tag_types(tag, 1) == [TagType.INT]
+        assert _preview_operand_tag_types(TagArg(tag), 1) == [TagType.INT]
 
     def test_preview_block_range(self):
         b = Block("B", TagType.INT, 1, 4)
         br = b.select(1, 3)
-        assert _preview_operand_tag_types(br, 3) == [TagType.INT] * 3
+        assert _preview_operand_tag_types(RangeArg(br), 3) == [TagType.INT] * 3
 
 
 # ---------------------------------------------------------------------------

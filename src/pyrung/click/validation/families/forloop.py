@@ -9,6 +9,8 @@ from typing import Any
 
 from laddercodec import ForLoop
 
+from pyrung.core.instruction.operands import held
+
 from ..fields import Family, refusals_of, render_operand
 from ..resolve import _ResolutionCache
 
@@ -30,7 +32,7 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
 
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the For that the export writes."""
-    count = render_operand(exporter, instruction.count, "count", instruction)
+    count = render_operand(exporter, held(instruction.count), "count", instruction)
     oneshot = bool(instruction.oneshot)
     return refusals_of(lambda: ForLoop(count=count, oneshot=oneshot))
 

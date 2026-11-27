@@ -37,6 +37,10 @@ These instructions parse their operands instead:
 - ``pack_bits()``, ``pack_words()``, ``pack_text()``, ``unpack_to_bits()`` and
   ``unpack_to_words()``;
 - ``math()``, ``search()`` and ``shift()``;
+- ``forloop()``.  It parses only its count;
+- ``run_function()`` and ``run_enabled_function()``.  Each parses its ``outs`` and
+  passes each value of its ``ins`` to :func:`parse_value`;
+- ``send()`` and ``receive()``.  Each parses only its ``source`` or its ``dest``;
 - the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
   ``flasher()`` and ``timed()``.  Each coil parses only its target.
 
@@ -555,12 +559,27 @@ class NumberOperand(ValueOperand):
             "A constant count has no decimal point."
         )
 
+    def parse(self, call: str, arg: str, value: Any) -> Value:
+        """Return the result for *value*, or raise the error that refuses it.
+
+        The field refuses a range, so the result is never a :data:`Span`.
+        """
+        self._refuse(call, arg, value)
+        result = parse_value(value)
+        match result:
+            case TagArg() | PointerArg() | ConstArg() | ExprArg():
+                return result
+            case RangeArg() | PointerRangeArg():
+                raise AssertionError(f"{call} accepted a range as {arg}.")
+            case _:
+                assert_never(result)
+
 
 @dataclass(frozen=True)
 class EachOperand(Operand):
     """A dict whose every value fits *item*, such as the ``outs`` of ``run_function()``."""
 
-    item: Operand = TagOperand()
+    item: TagOperand = TagOperand()
 
     def fits(self, value: Any) -> bool:
         return isinstance(value, Mapping) and all(self.item.accepts(v) for v in value.values())
@@ -577,6 +596,14 @@ class EachOperand(Operand):
             if error is not None:
                 return error
         return None
+
+    def parse(self, call: str, arg: str, value: Any) -> dict[Any, Dest]:
+        """Return the dict with each value parsed, or raise the error that refuses one.
+
+        The result keeps the keys in the author's order.
+        """
+        self._refuse(call, arg, value)
+        return {key: self.item.parse(call, f"{arg}[{key!r}]", item) for key, item in value.items()}
 
 
 @dataclass(frozen=True)
@@ -642,6 +669,23 @@ class CoilBitOperand(Operand):
         self._refuse(call, arg, value)
         bare, wrapper = _split(value)
         return TagArg(bare, wrapper is not None, wrapper)
+
+
+@dataclass(frozen=True)
+class PayloadOperand(CoilOperand):
+    """The tags that ``send()`` sends or ``receive()`` stores: one tag, or a range with fixed ends.
+
+    The field refuses ``immediate()``, a pointer and a range with pointers.  Like
+    :class:`CoilOperand`, its refusals have words of their own.
+    """
+
+    immediate: bool = False
+
+    def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
+        """Return the error that refuses *value*, or None if it fits."""
+        if self.accepts(value):
+            return None
+        return TypeError(f"{arg} must be Tag or BlockRange, got {type(value).__name__}")
 
 
 TAG = TagOperand()

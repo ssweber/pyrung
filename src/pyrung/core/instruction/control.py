@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.storage import CHAR_HOLDS, holds_char
 from pyrung.core.tag import Tag, TagType
@@ -23,14 +23,28 @@ from .base import (
 from .conversions import (
     _store_copy_value_to_tag_type,
 )
-from .operands import EachOperand, NumberOperand, describe
+from .data_transfer import _dest_tag, _read
+from .operands import (
+    ConstArg,
+    Dest,
+    EachOperand,
+    ExprArg,
+    NumberOperand,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+    describe,
+    held,
+    parse_value,
+)
 from .resolvers import (
     _fn_name,
     _set_fault_address_error,
     _set_fault_out_of_range,
     reads_indexed_element,
-    resolve_tag_ctx,
-    resolve_tag_or_value_ctx,
 )
 from .utils import guard_oneshot_execution
 
@@ -41,14 +55,14 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
 
 
-def not_a_char_error(call: str, fn_name: str, key: str, target: Any) -> tuple[str, str]:
+def not_a_char_error(call: str, fn_name: str, key: str, target: Dest) -> tuple[str, str]:
     """Return the text before and after the value in the error for a result no Char holds.
 
     A function's result is known only at the scan.  The scan and the generated code both
     raise this text, as ``TypeError`` for a value that is not a str and as ``ValueError``
     for a str that is not one character.
     """
-    named = describe(target)
+    named = describe(held(target))
     return (
         f"{call}: {fn_name!r} returned ",
         f" for {key!r}. {named[0].upper()}{named[1:]} holds {CHAR_HOLDS}. Return one "
@@ -57,14 +71,41 @@ def not_a_char_error(call: str, fn_name: str, key: str, target: Any) -> tuple[st
 
 
 def _store_result(
-    ctx: ScanContext, call: str, fn: Callable[..., Any], key: str, value: Any, target: Any
+    ctx: ScanContext, call: str, fn: Callable[..., Any], key: str, value: Any, target: Dest
 ) -> None:
-    resolved = resolve_tag_ctx(target, ctx)
+    resolved = _dest_tag(target, ctx)
     if resolved.type is TagType.CHAR and not holds_char(value):
         before, after = not_a_char_error(call, _fn_name(fn), key, target)
         error = ValueError if isinstance(value, str) else TypeError
         raise error(before + repr(value) + after)
     ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(value, resolved))
+
+
+_OUTS = EachOperand(arg="outs")
+
+
+def parse_ins(call: str, ins: Any) -> dict[Any, Value | Span]:
+    """Return the ``ins`` of a function call with each value parsed.
+
+    The parse refuses no value.  The scan reads a tag, a pointer or an expression.  It
+    passes any other value, such as a constant or a range, to the function as it is.
+    The parse refuses *ins* only if it is not a mapping.
+    """
+    if not isinstance(ins, Mapping):
+        raise TypeError(f"{call} ins must be a dict, got {type(ins).__name__}")
+    return {key: parse_value(value) for key, value in ins.items()}
+
+
+def _read_in(value: Value | Span, ctx: ScanContext) -> Any:
+    """Return what the function gets for one of its ``ins`` on this scan."""
+    match value:
+        case TagArg() | PointerArg() | ExprArg() | ConstArg():
+            return _read(value, ctx)
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            # The function gets the range object.  The scan reads none of its tags.
+            return span
+        case _:
+            assert_never(value)
 
 
 class FunctionCallInstruction(OneShotMixin, Instruction):
@@ -74,7 +115,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     _writes = ("_outs",)
     _conditions = ()
     _structural_fields = ("_fn",)
-    _operands = {"_outs": EachOperand(arg="outs")}
+    _operands = {"_outs": _OUTS}
 
     def __init__(
         self,
@@ -86,12 +127,15 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     ):
         OneShotMixin.__init__(self, oneshot)
         self._fn = fn
-        self._ins = ins or {}
-        self._outs = outs or {}
+        self._ins = parse_ins("run_function()", ins or {})
+        self._outs: dict[Any, Dest] = _OUTS.parse("run_function()", "outs", outs or {})
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
+        kwargs = {name: _read_in(src, ctx) for name, src in self._ins.items()}
         result = ctx.call_user_function(self._fn, **kwargs)
         if not self._outs:
             return
@@ -118,7 +162,7 @@ class EnabledFunctionCallInstruction(Instruction):
     _writes = ("_outs",)
     _conditions = ("_enable_condition",)
     _structural_fields = ("_fn",)
-    _operands = {"_outs": EachOperand(arg="outs")}
+    _operands = {"_outs": _OUTS}
 
     def __init__(
         self,
@@ -129,12 +173,15 @@ class EnabledFunctionCallInstruction(Instruction):
         enable_condition: Condition | None,
     ):
         self._fn = fn
-        self._ins = ins or {}
-        self._outs = outs or {}
+        self._ins = parse_ins("run_enabled_function()", ins or {})
+        self._outs: dict[Any, Dest] = _OUTS.parse("run_enabled_function()", "outs", outs or {})
         self._enable_condition = enable_condition
 
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
+
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
+        kwargs = {name: _read_in(src, ctx) for name, src in self._ins.items()}
         result = ctx.call_user_function(self._fn, enabled, **kwargs)
         if not self._outs:
             return
@@ -170,23 +217,31 @@ FOR_COUNT_MASK_32 = 0xFFFFFFFF
 FOR_COUNT_MAX_32 = 0x7FFFFFFF
 
 
-def for_count_mask(count: Any) -> int:
+def for_count_mask(count: Value) -> int:
     """Return the mask that a For reads *count* through.
 
     A For reads a Dint register or a constant whole.  A Dint tag, a Dint block element
     (a DD, a CTD) and an integer constant are read as signed 32-bit.  Anything else
     (an Int, a Word, an expression, a REAL) is read as unsigned 16-bit.
-    """
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    if isinstance(count, int) and not isinstance(count, bool):
-        return FOR_COUNT_MASK_32
-    if isinstance(count, Tag):
-        return FOR_COUNT_MASK_32 if count.type == TagType.DINT else FOR_COUNT_MASK_16
-    if isinstance(count, (IndirectRef, IndirectExprRef)):
-        if getattr(count.block, "type", None) == TagType.DINT:
-            return FOR_COUNT_MASK_32
-    return FOR_COUNT_MASK_16
+    A count in ``immediate()`` is read as unsigned 16-bit for every tag type.
+    CLICK has no immediate For count.  The CLICK export refuses one.
+    """
+    match count:
+        case ConstArg(value=value):
+            if isinstance(value, int) and not isinstance(value, bool):
+                return FOR_COUNT_MASK_32
+            return FOR_COUNT_MASK_16
+        case TagArg(tag=tag, immediate=immediate):
+            if tag.type == TagType.DINT and not immediate:
+                return FOR_COUNT_MASK_32
+            return FOR_COUNT_MASK_16
+        case ExprArg():
+            return FOR_COUNT_MASK_16
+        case PointerArg(ref=ref):
+            return FOR_COUNT_MASK_32 if ref.block.type == TagType.DINT else FOR_COUNT_MASK_16
+        case _:
+            assert_never(count)
 
 
 def for_loop_iterations(count_value: Any, mask: int = FOR_COUNT_MASK_16) -> int:
@@ -211,18 +266,36 @@ def _finite_count(count_value: Any) -> bool:
     return not isinstance(count_value, float) or math.isfinite(count_value)
 
 
-def _count_may_be_non_finite(count: Any) -> bool:
+def _count_may_be_non_finite(count: Value) -> bool:
     """Return whether a For count can resolve to Inf or NaN, which a REAL source can."""
-    from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    match count:
+        case TagArg(tag=tag):
+            return tag.type == TagType.REAL
+        case PointerArg(ref=ref):
+            return ref.block.type == TagType.REAL
+        case ExprArg():
+            return True
+        case ConstArg(value=value):
+            return isinstance(value, float) and not math.isfinite(value)
+        case _:
+            assert_never(count)
 
-    if isinstance(count, Tag):
-        return count.type == TagType.REAL
-    if isinstance(count, (IndirectRef, IndirectExprRef)):
-        return count.block.type == TagType.REAL
-    if isinstance(count, Expression):
-        return True
-    return isinstance(count, float) and not math.isfinite(count)
+
+def _count_reads_indexed_element(count: Value) -> bool:
+    """Return whether a For count reads a block element that a pointer picks at scan time."""
+    match count:
+        case PointerArg():
+            return True
+        case ExprArg(expr=expr):
+            return reads_indexed_element(expr)
+        case TagArg() | ConstArg():
+            return False
+        case _:
+            assert_never(count)
+
+
+# CLICK reads a constant count as signed 32-bit, so a count outside the span runs none.
+_COUNT = NumberOperand(whole=True, span=(1, FOR_COUNT_MAX_32))
 
 
 class ForLoopInstruction(OneShotMixin, Instruction):
@@ -245,8 +318,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
     _call_operands = (("count", "count"),)
     _conditions = ()
     _structural_fields = ()
-    # CLICK reads a constant count as signed 32-bit, so a count outside the span runs none.
-    _operands = {"count": NumberOperand(whole=True, span=(1, FOR_COUNT_MAX_32))}
+    _operands = {"count": _COUNT}
     _executor_kind = _EXECUTOR_FOR_LOOP
 
     def __init__(
@@ -259,15 +331,15 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         body: list[Instruction | Rung] | None = None,
     ):
         OneShotMixin.__init__(self, oneshot)
-        self.count = count
+        self.count: Value = _COUNT.parse("forloop()", "count", count)
         self.idx_tag = idx_tag
         # Only a For whose count can be Inf or NaN sets SC43.  Only a For whose count
         # reads an indexed element can set SC44.  The analyses (PDG, static facts) then
         # see a flag written only where it can be.
         fault_writes: tuple[str, ...] = ()
-        if _count_may_be_non_finite(count):
+        if _count_may_be_non_finite(self.count):
             fault_writes = ("fault.out_of_range",)
-        if reads_indexed_element(count):
+        if _count_reads_indexed_element(self.count):
             fault_writes = (*fault_writes, "fault.address_error")
         if fault_writes:
             self._fault_writes = fault_writes
@@ -282,6 +354,9 @@ class ForLoopInstruction(OneShotMixin, Instruction):
                 flat.extend(item._instructions)
         self.instructions = flat
 
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed the count."""
+
     def iterations(self, ctx: ScanContext) -> int:
         """Return how many times the body runs this scan, reading the count now.
 
@@ -290,7 +365,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         reads an element below its block runs no iteration and sets SC44.
         """
         try:
-            count_value = resolve_tag_or_value_ctx(self.count, ctx)
+            count_value = _read(self.count, ctx)
             if _finite_count(count_value):
                 return for_loop_iterations(count_value, for_count_mask(self.count))
         except OverflowError:  # an expression count hit Inf or NaN on the way

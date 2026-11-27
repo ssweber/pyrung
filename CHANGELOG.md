@@ -13,6 +13,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on `CompiledPLC` and in the generated CircuitPython code. 0.19.0 raised an error there.
+
 ## v0.19.0 (2026-11-26)
 
 Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT tag now holds only text. When you build the program, pyrung refuses each write that would store a number or a bit in a TXT tag. `ladder_to_pyrung()` now groups a Math formula in CLICK's order. `math()` now matches a CLICK on hex division, fault flags and the sign of a zero that it stores in a Real. Read Behaviour changes and Fixes first.

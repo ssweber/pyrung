@@ -16,7 +16,7 @@ from __future__ import annotations
 import itertools
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyclickplc.addresses import parse_address
 
@@ -28,7 +28,7 @@ from pyrung.core.tag import Tag, TagType
 
 from ..base import Instruction
 from ..conversions import _store_copy_value_to_tag_type
-from ..operands import TextInto, check_rules
+from ..operands import PayloadOperand, RangeArg, TagArg, TextInto, check_rules
 from . import backends as _backends
 from .helpers import (
     _addresses_for_count,
@@ -249,7 +249,7 @@ class ModbusSendInstruction(Instruction):
     bank: str | None
     start: int
     addresses: tuple[int, ...]
-    source: Tag | BlockRange
+    source: TagArg | RangeArg
     sending: Tag
     success: Tag
     error: Tag
@@ -408,7 +408,7 @@ class ModbusReceiveInstruction(Instruction):
     bank: str | None
     start: int
     addresses: tuple[int, ...]
-    dest: Tag | BlockRange
+    dest: TagArg | RangeArg
     receiving: Tag
     success: Tag
     error: Tag
@@ -431,9 +431,13 @@ class ModbusReceiveInstruction(Instruction):
     @property
     def external_payload_names(self) -> frozenset[str]:
         """Destination tags whose values come from the injected I/O result."""
-        if isinstance(self.dest, Tag):
-            return frozenset({self.dest.name})
-        return frozenset(tag.name for tag in self.dest.tags())
+        match self.dest:
+            case TagArg(tag=tag):
+                return frozenset({tag.name})
+            case RangeArg(span=span):
+                return frozenset(tag.name for tag in span.tags())
+            case _:
+                assert_never(self.dest)
 
     def _is_live(self) -> bool:
         return self.host is not None or self.raw_target is not None
@@ -601,6 +605,7 @@ class ModbusReceiveInstruction(Instruction):
 # ---------------------------------------------------------------------------
 
 
+_PAYLOAD = PayloadOperand()
 _RECEIVE_TEXT = TextInto(value="remote_start", dest="dest", writes="receive")
 _SEND_TEXT = TextInto(value="remote_start", dest="source", writes="send")
 
@@ -644,7 +649,7 @@ def _resolve_target(
 
 def _resolve_remote_start(
     remote_start: str | ModbusAddress,
-    operand: Tag | BlockRange,
+    operand: TagArg | RangeArg,
     count: int | None,
     target: str | ModbusTcpTarget | ModbusRtuTarget,
     *,
@@ -714,12 +719,11 @@ def send(
         exception_response=exception_response,
         busy_name="sending",
     )
-    if not isinstance(source, (Tag, BlockRange)):
-        raise TypeError(f"source must be Tag or BlockRange, got {type(source).__name__}")
+    payload = _PAYLOAD.parse("send()", "source", source)
 
     target_name, host, port, device_id, timeout_s, raw_target = _resolve_target(target)
     bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
-        remote_start, source, count, target, is_send=True
+        remote_start, payload, count, target, is_send=True
     )
     check_rules({}, (_SEND_TEXT,), "send()", {"remote_start": remote_start, "source": source})
 
@@ -730,7 +734,7 @@ def send(
         bank=bank,
         start=start_addr,
         addresses=addresses,
-        source=source,
+        source=payload,
         sending=sending,
         success=success,
         error=error,
@@ -781,8 +785,7 @@ def receive(
         exception_response=exception_response,
         busy_name="receiving",
     )
-    if not isinstance(dest, (Tag, BlockRange)):
-        raise TypeError(f"dest must be Tag or BlockRange, got {type(dest).__name__}")
+    payload = _PAYLOAD.parse("receive()", "dest", dest)
 
     target_name, host, port, device_id, timeout_s, raw_target = _resolve_target(target)
     if isinstance(raw_target, ModbusRtuTarget) and isinstance(device_id, int) and device_id == 0:
@@ -791,7 +794,7 @@ def receive(
             "address, and no device answers it. Use a device_id from 1 to 247, or a DS tag."
         )
     bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
-        remote_start, dest, count, target, is_send=False
+        remote_start, payload, count, target, is_send=False
     )
     check_rules({}, (_RECEIVE_TEXT,), "receive()", {"remote_start": remote_start, "dest": dest})
 
@@ -802,7 +805,7 @@ def receive(
         bank=bank,
         start=start_addr,
         addresses=addresses,
-        dest=dest,
+        dest=payload,
         receiving=receiving,
         success=success,
         error=error,

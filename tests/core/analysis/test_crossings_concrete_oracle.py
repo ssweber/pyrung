@@ -58,6 +58,7 @@ from pyrung.core.instruction.drums import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.operands import TagArg
 from pyrung.core.instruction.out_variants import (
     DebounceInstruction,
     FlasherInstruction,
@@ -367,7 +368,7 @@ def _receive_instruction() -> ModbusReceiveInstruction:
         bank="DS",
         start=1,
         addresses=(1,),
-        dest=Int("InboundValue"),
+        dest=TagArg(Int("InboundValue")),
         receiving=Bool("RequestActive"),
         success=Bool("RequestSucceeded"),
         error=Bool("RequestFailed"),

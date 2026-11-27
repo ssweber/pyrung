@@ -24,6 +24,7 @@ from pyrung.core import (
 )
 from pyrung.core.instruction import control
 from pyrung.core.instruction.control import for_loop_iterations
+from pyrung.core.instruction.operands import parse_value
 from pyrung.core.validation.walker import walk_program
 from tests.conftest import evaluate_program
 
@@ -142,12 +143,12 @@ def test_for_count_mask_follows_the_count_width():
     words = Block("Words", TagType.INT, 1, 2)
     longs = Block("Longs", TagType.DINT, 1, 2)
     pointer = Int("Pointer")
-    assert control.for_count_mask(Int("A")) == 0xFFFF
-    assert control.for_count_mask(Dint("B")) == 0xFFFFFFFF
-    assert control.for_count_mask(words[pointer]) == 0xFFFF
-    assert control.for_count_mask(longs[pointer]) == 0xFFFFFFFF
-    assert control.for_count_mask(7) == 0xFFFFFFFF
-    assert control.for_count_mask(7.0) == 0xFFFF
+    assert control.for_count_mask(parse_value(Int("A"))) == 0xFFFF
+    assert control.for_count_mask(parse_value(Dint("B"))) == 0xFFFFFFFF
+    assert control.for_count_mask(parse_value(words[pointer])) == 0xFFFF
+    assert control.for_count_mask(parse_value(longs[pointer])) == 0xFFFFFFFF
+    assert control.for_count_mask(parse_value(7)) == 0xFFFFFFFF
+    assert control.for_count_mask(parse_value(7.0)) == 0xFFFF
 
 
 def test_forloop_constant_count_is_read_whole(runner_factory):

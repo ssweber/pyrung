@@ -11,6 +11,7 @@ from typing import Any
 
 from laddercodec import Receive, Send
 
+from pyrung.core.instruction.operands import held
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, is_modbus_status_tag
 from pyrung.core.tag import Tag
 from pyrung.core.validation.render import Call, call_of, operand_name
@@ -99,7 +100,7 @@ def _operands(instruction: Any) -> list[Operand]:
     """Return each argument of the call that holds a tag the author wrote."""
     local, busy = _names(instruction)
     word = "source" if local == "source" else "destination"
-    operands = [Operand(local, word, ((local, getattr(instruction, local)),))]
+    operands = [Operand(local, word, ((local, held(getattr(instruction, local))),))]
     device_id = instruction.device_id
     if isinstance(device_id, Tag):
         operands.append(Operand("target", "device id", (("device_id", device_id),)))
@@ -178,7 +179,7 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
         kwargs = {
             "target": exporter._render_modbus_target(instruction, "instruction"),
             "remote_start": _render_remote_start(instruction),
-            local: render_operand(exporter, getattr(instruction, local), local, instruction),
+            local: render_operand(exporter, held(getattr(instruction, local)), local, instruction),
         }
     except _RenderError as exc:
         raise Unbuildable from exc

@@ -118,6 +118,7 @@ from pyrung.core.instruction.drums import (
     TimeDrumInstruction,
     TimeEventDrumInstruction,
 )
+from pyrung.core.instruction.operands import ConstArg
 from pyrung.core.instruction.out_variants import (
     DebounceInstruction,
     FlasherInstruction,
@@ -560,7 +561,11 @@ class _SliceElision:
         self.runs_a_wide_for = any(
             isinstance(instr, ForLoopInstruction)
             and for_count_mask(instr.count) > FOR_COUNT_MASK_16
-            and not (isinstance(instr.count, int) and instr.count <= FOR_COUNT_MASK_16)
+            and not (
+                isinstance(instr.count, ConstArg)
+                and isinstance(instr.count.value, int)
+                and instr.count.value <= FOR_COUNT_MASK_16
+            )
             for instr in _iter_program_instructions(program)
         )
 

@@ -87,11 +87,15 @@ from pyrung.core.instruction.calc import may_be_text
 from pyrung.core.instruction.control import not_a_char_error
 from pyrung.core.instruction.operands import (
     ConstArg,
+    Dest,
     ExprArg,
     PointerArg,
     PointerRangeArg,
     RangeArg,
+    Span,
     TagArg,
+    Value,
+    inner,
 )
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
@@ -103,7 +107,7 @@ from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.rung import dsl_call
 from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import Tag
 
 from ._emit import emit_cmp, emit_if_enabled, emit_mem_set, emit_prev, emit_truth
 from ._primitives import (
@@ -731,7 +735,7 @@ def _in_f_string(text: str) -> str:
     return _in_quotes(text).replace("{", "{{").replace("}", "}}")
 
 
-def _compile_function_kwargs(ins: dict[str, Any], ctx: CodegenContext) -> str:
+def _compile_function_kwargs(ins: dict[Any, Value | Span], ctx: CodegenContext) -> str:
     """Return a function call's keyword arguments, in the order that stepping passes them.
 
     Some names cannot be written as Python keyword arguments. Examples are ``class``,
@@ -756,22 +760,31 @@ def _call_result_var(ctx: CodegenContext) -> str:
     return f"_{ctx.next_name('call_result')}"
 
 
-def _compile_function_arg(value: Any, ctx: CodegenContext) -> str:
-    if isinstance(value, ImmediateRef):
-        return _compile_function_arg(value.value, ctx)
-    if isinstance(value, Tag | IndirectRef | IndirectExprRef | Expression):
-        return _compile_value(value, ctx)
-    return ctx.function_constant(value)
+def _compile_function_arg(value: Value | Span, ctx: CodegenContext) -> str:
+    match value:
+        case TagArg(tag=tag):
+            return _compile_value(tag, ctx)
+        case PointerArg(ref=ref):
+            return _compile_value(ref, ctx)
+        case ExprArg(expr=expr):
+            return _compile_value(expr, ctx)
+        case ConstArg(value=constant):
+            return ctx.function_constant(constant)
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            # The scan hands the function the range object.
+            return ctx.function_constant(span)
+        case _:
+            assert_never(value)
 
 
 def _not_a_char_check_lines(
-    call: str, fn_name: str, key: str, target: Any, result_var: str
+    call: str, fn_name: str, key: str, target: Dest, result_var: str
 ) -> list[str]:
     """Return the lines that raise when a function returns a value that no Char holds.
 
     The scan raises the same error.  A target of any other type gets no lines.
     """
-    if _value_type_name(target) != "CHAR":
+    if _value_type_name(_function_target(target)) != "CHAR":
         return []
     before, after = not_a_char_error(call, fn_name, key, target)
     value = f"{result_var}[{key!r}]"
@@ -780,6 +793,20 @@ def _not_a_char_check_lines(
         f"    raise (ValueError if isinstance({value}, str) else TypeError)("
         f"{before!r} + repr({value}) + {after!r})",
     ]
+
+
+def _function_target(target: Dest) -> Tag | IndirectRef | IndirectExprRef:
+    """Return the tag or the pointer that a function's result is stored in.
+
+    The generated code writes an ``immediate()`` tag as it writes the plain tag.
+    """
+    match target:
+        case TagArg(tag=tag):
+            return tag
+        case PointerArg(ref=ref):
+            return ref
+        case _:
+            assert_never(target)
 
 
 def _compile_function_call_instruction(
@@ -802,7 +829,8 @@ def _compile_function_call_instruction(
             ]
         )
         for key, target in instr._outs.items():
-            target_type = _value_type_name(target)
+            dest = _function_target(target)
+            target_type = _value_type_name(dest)
             enabled_body.extend(
                 [
                     f"if {key!r} not in {result_var}:",
@@ -815,7 +843,7 @@ def _compile_function_call_instruction(
                 _not_a_char_check_lines("run_function", fn_name, key, target, result_var)
             )
             value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
-            enabled_body.extend(_compile_assignment_lines(target, value_expr, ctx, indent=0))
+            enabled_body.extend(_compile_assignment_lines(dest, value_expr, ctx, indent=0))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -841,7 +869,8 @@ def _compile_enabled_function_call_instruction(
             ]
         )
         for key, target in instr._outs.items():
-            target_type = _value_type_name(target)
+            dest = _function_target(target)
+            target_type = _value_type_name(dest)
             lines.extend(
                 [
                     f"{' ' * indent}if {key!r} not in {result_var}:",
@@ -857,7 +886,7 @@ def _compile_enabled_function_call_instruction(
                 )
             )
             value_expr = _store_coerce_expr(f"{result_var}[{key!r}]", target_type, ctx)
-            lines.extend(_compile_assignment_lines(target, value_expr, ctx, indent=indent))
+            lines.extend(_compile_assignment_lines(dest, value_expr, ctx, indent=indent))
     return lines
 
 
@@ -867,7 +896,8 @@ def _compile_for_loop_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    count_expr = _compile_value(instr.count, ctx)
+    count = instr.count
+    count_expr = _compile_value(inner(count), ctx)
     depth = ctx._for_loop_depth
     suffix = "" if depth == 0 else f"_{depth + 1}"
     iterations_var = f"_iterations{suffix}"
@@ -880,10 +910,14 @@ def _compile_for_loop_instruction(
     # CLICK reads a Dint count, or a constant, whole and signed, so a negative one runs
     # none.  It reads any other count as unsigned 16-bit.  A count of 0 runs
     # FOR_ZERO_COUNT_ITERATIONS (control.for_loop_iterations).
-    mask = control.for_count_mask(instr.count)
-    if isinstance(instr.count, int) and not isinstance(instr.count, bool):
+    mask = control.for_count_mask(count)
+    if (
+        isinstance(count, ConstArg)
+        and isinstance(count.value, int)
+        and not isinstance(count.value, bool)
+    ):
         # The iterations of a constant count are known at compile time.
-        runs = control.for_loop_iterations(instr.count, mask)
+        runs = control.for_loop_iterations(count.value, mask)
         iterations_lines = [f"{iterations_var} = {runs}"]
         capped = runs > PROVE_FOR_ITERATION_CAP
     else:
@@ -949,18 +983,21 @@ def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...
 
     A refusal uses this.
     """
+    where = _source_location(instr)
     count = instr.count
-    if isinstance(count, Tag):
-        return _source_location(instr), count.name, (count.name,)
-    if isinstance(count, IndirectRef):
-        return (
-            _source_location(instr),
-            f"{count.block.name}[{count.pointer.name}]",
-            (count.pointer.name,),
-        )
-    if isinstance(count, IndirectExprRef):
-        return _source_location(instr), f"{count.block.name}[...]", ()
-    return _source_location(instr), str(count), ()
+    match count:
+        case TagArg(tag=tag):
+            return where, tag.name, (tag.name,)
+        case PointerArg(ref=IndirectRef() as ref):
+            return where, f"{ref.block.name}[{ref.pointer.name}]", (ref.pointer.name,)
+        case PointerArg(ref=ref):
+            return where, f"{ref.block.name}[...]", ()
+        case ExprArg(expr=expr):
+            return where, str(expr), ()
+        case ConstArg(value=value):
+            return where, str(value), ()
+        case _:
+            assert_never(count)
 
 
 def _compile_loop_body(
