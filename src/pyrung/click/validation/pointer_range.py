@@ -15,7 +15,7 @@ from pyrung.core.instruction.control import (
     for_loop_iterations,
     iter_loop_body_rungs,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, as_authored
 from pyrung.core.memory_block import IndirectBlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef
 from pyrung.core.validation.walker import ProgramLocation, _instruction_fields
@@ -74,10 +74,12 @@ class _PointerBounds:
                 known = frozenset({tag.max, tag.default})
             self._lookup[name] = known
         for instruction in instructions:
-            count = getattr(instruction, "count", None)
-            if isinstance(instruction, ForLoopInstruction) and type(count) is int:
+            if not isinstance(instruction, ForLoopInstruction):
+                continue
+            count = instruction.count
+            if isinstance(count, ConstArg) and type(count.value) is int:
                 # forloop() refuses a constant count that runs no iteration.
-                runs = for_loop_iterations(count, for_count_mask(count))
+                runs = for_loop_iterations(count.value, for_count_mask(count))
                 # No bank holds 65536 addresses, so the first one past its end still shows.
                 self._lookup[instruction.idx_tag.name] = frozenset(
                     range(min(runs, FOR_COUNT_MASK_16 + 1))

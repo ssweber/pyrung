@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.storage import CHAR_HOLDS, holds_char
 from pyrung.core.tag import Tag, TagType
@@ -23,7 +23,17 @@ from .base import (
 from .conversions import (
     _store_copy_value_to_tag_type,
 )
-from .operands import EachOperand, NumberOperand, describe
+from .data_transfer import _read
+from .operands import (
+    ConstArg,
+    EachOperand,
+    ExprArg,
+    NumberOperand,
+    PointerArg,
+    TagArg,
+    Value,
+    describe,
+)
 from .resolvers import (
     _fn_name,
     _set_fault_address_error,
@@ -170,23 +180,31 @@ FOR_COUNT_MASK_32 = 0xFFFFFFFF
 FOR_COUNT_MAX_32 = 0x7FFFFFFF
 
 
-def for_count_mask(count: Any) -> int:
+def for_count_mask(count: Value) -> int:
     """Return the mask that a For reads *count* through.
 
     A For reads a Dint register or a constant whole.  A Dint tag, a Dint block element
     (a DD, a CTD) and an integer constant are read as signed 32-bit.  Anything else
     (an Int, a Word, an expression, a REAL) is read as unsigned 16-bit.
-    """
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-    if isinstance(count, int) and not isinstance(count, bool):
-        return FOR_COUNT_MASK_32
-    if isinstance(count, Tag):
-        return FOR_COUNT_MASK_32 if count.type == TagType.DINT else FOR_COUNT_MASK_16
-    if isinstance(count, (IndirectRef, IndirectExprRef)):
-        if getattr(count.block, "type", None) == TagType.DINT:
-            return FOR_COUNT_MASK_32
-    return FOR_COUNT_MASK_16
+    A count in ``immediate()`` is read as unsigned 16-bit, whatever the type of its tag.
+    CLICK has no immediate For count, and the CLICK export refuses one.
+    """
+    match count:
+        case ConstArg(value=value):
+            if isinstance(value, int) and not isinstance(value, bool):
+                return FOR_COUNT_MASK_32
+            return FOR_COUNT_MASK_16
+        case TagArg(tag=tag, immediate=immediate):
+            if tag.type == TagType.DINT and not immediate:
+                return FOR_COUNT_MASK_32
+            return FOR_COUNT_MASK_16
+        case ExprArg():
+            return FOR_COUNT_MASK_16
+        case PointerArg(ref=ref):
+            return FOR_COUNT_MASK_32 if ref.block.type == TagType.DINT else FOR_COUNT_MASK_16
+        case _:
+            assert_never(count)
 
 
 def for_loop_iterations(count_value: Any, mask: int = FOR_COUNT_MASK_16) -> int:
@@ -211,18 +229,36 @@ def _finite_count(count_value: Any) -> bool:
     return not isinstance(count_value, float) or math.isfinite(count_value)
 
 
-def _count_may_be_non_finite(count: Any) -> bool:
+def _count_may_be_non_finite(count: Value) -> bool:
     """Return whether a For count can resolve to Inf or NaN, which a REAL source can."""
-    from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    match count:
+        case TagArg(tag=tag):
+            return tag.type == TagType.REAL
+        case PointerArg(ref=ref):
+            return ref.block.type == TagType.REAL
+        case ExprArg():
+            return True
+        case ConstArg(value=value):
+            return isinstance(value, float) and not math.isfinite(value)
+        case _:
+            assert_never(count)
 
-    if isinstance(count, Tag):
-        return count.type == TagType.REAL
-    if isinstance(count, (IndirectRef, IndirectExprRef)):
-        return count.block.type == TagType.REAL
-    if isinstance(count, Expression):
-        return True
-    return isinstance(count, float) and not math.isfinite(count)
+
+def _count_reads_indexed_element(count: Value) -> bool:
+    """Return whether a For count reads a block element that a pointer picks at scan time."""
+    match count:
+        case PointerArg():
+            return True
+        case ExprArg(expr=expr):
+            return reads_indexed_element(expr)
+        case TagArg() | ConstArg():
+            return False
+        case _:
+            assert_never(count)
+
+
+# CLICK reads a constant count as signed 32-bit, so a count outside the span runs none.
+_COUNT = NumberOperand(whole=True, span=(1, FOR_COUNT_MAX_32))
 
 
 class ForLoopInstruction(OneShotMixin, Instruction):
@@ -245,8 +281,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
     _call_operands = (("count", "count"),)
     _conditions = ()
     _structural_fields = ()
-    # CLICK reads a constant count as signed 32-bit, so a count outside the span runs none.
-    _operands = {"count": NumberOperand(whole=True, span=(1, FOR_COUNT_MAX_32))}
+    _operands = {"count": _COUNT}
     _executor_kind = _EXECUTOR_FOR_LOOP
 
     def __init__(
@@ -259,15 +294,15 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         body: list[Instruction | Rung] | None = None,
     ):
         OneShotMixin.__init__(self, oneshot)
-        self.count = count
+        self.count: Value = _COUNT.parse("forloop()", "count", count)
         self.idx_tag = idx_tag
         # Only a For whose count can be Inf or NaN sets SC43.  Only a For whose count
         # reads an indexed element can set SC44.  The analyses (PDG, static facts) then
         # see a flag written only where it can be.
         fault_writes: tuple[str, ...] = ()
-        if _count_may_be_non_finite(count):
+        if _count_may_be_non_finite(self.count):
             fault_writes = ("fault.out_of_range",)
-        if reads_indexed_element(count):
+        if _count_reads_indexed_element(self.count):
             fault_writes = (*fault_writes, "fault.address_error")
         if fault_writes:
             self._fault_writes = fault_writes
@@ -282,6 +317,9 @@ class ForLoopInstruction(OneShotMixin, Instruction):
                 flat.extend(item._instructions)
         self.instructions = flat
 
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed the count."""
+
     def iterations(self, ctx: ScanContext) -> int:
         """Return how many times the body runs this scan, reading the count now.
 
@@ -290,7 +328,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         reads an element below its block runs no iteration and sets SC44.
         """
         try:
-            count_value = resolve_tag_or_value_ctx(self.count, ctx)
+            count_value = _read(self.count, ctx)
             if _finite_count(count_value):
                 return for_loop_iterations(count_value, for_count_mask(self.count))
         except OverflowError:  # an expression count hit Inf or NaN on the way

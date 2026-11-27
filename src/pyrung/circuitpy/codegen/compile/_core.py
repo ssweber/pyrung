@@ -92,6 +92,7 @@ from pyrung.core.instruction.operands import (
     PointerRangeArg,
     RangeArg,
     TagArg,
+    inner,
 )
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
@@ -867,7 +868,8 @@ def _compile_for_loop_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    count_expr = _compile_value(instr.count, ctx)
+    count = instr.count
+    count_expr = _compile_value(inner(count), ctx)
     depth = ctx._for_loop_depth
     suffix = "" if depth == 0 else f"_{depth + 1}"
     iterations_var = f"_iterations{suffix}"
@@ -880,10 +882,14 @@ def _compile_for_loop_instruction(
     # CLICK reads a Dint count, or a constant, whole and signed, so a negative one runs
     # none.  It reads any other count as unsigned 16-bit.  A count of 0 runs
     # FOR_ZERO_COUNT_ITERATIONS (control.for_loop_iterations).
-    mask = control.for_count_mask(instr.count)
-    if isinstance(instr.count, int) and not isinstance(instr.count, bool):
+    mask = control.for_count_mask(count)
+    if (
+        isinstance(count, ConstArg)
+        and isinstance(count.value, int)
+        and not isinstance(count.value, bool)
+    ):
         # The iterations of a constant count are known at compile time.
-        runs = control.for_loop_iterations(instr.count, mask)
+        runs = control.for_loop_iterations(count.value, mask)
         iterations_lines = [f"{iterations_var} = {runs}"]
         capped = runs > PROVE_FOR_ITERATION_CAP
     else:
@@ -949,18 +955,21 @@ def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...
 
     A refusal uses this.
     """
+    where = _source_location(instr)
     count = instr.count
-    if isinstance(count, Tag):
-        return _source_location(instr), count.name, (count.name,)
-    if isinstance(count, IndirectRef):
-        return (
-            _source_location(instr),
-            f"{count.block.name}[{count.pointer.name}]",
-            (count.pointer.name,),
-        )
-    if isinstance(count, IndirectExprRef):
-        return _source_location(instr), f"{count.block.name}[...]", ()
-    return _source_location(instr), str(count), ()
+    match count:
+        case TagArg(tag=tag):
+            return where, tag.name, (tag.name,)
+        case PointerArg(ref=IndirectRef() as ref):
+            return where, f"{ref.block.name}[{ref.pointer.name}]", (ref.pointer.name,)
+        case PointerArg(ref=ref):
+            return where, f"{ref.block.name}[...]", ()
+        case ExprArg(expr=expr):
+            return where, str(expr), ()
+        case ConstArg(value=value):
+            return where, str(value), ()
+        case _:
+            assert_never(count)
 
 
 def _compile_loop_body(

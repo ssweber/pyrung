@@ -54,7 +54,7 @@ from pyrung.core.analysis.write_sites import (
     instruction_written_tags,
     static_write_target_tags,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import as_authored, held
 from pyrung.core.tag import ImmediateRef, tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
@@ -350,7 +350,7 @@ def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | 
     # Outer loops come first in walk order, so an inner loop's entry wins.
     for site in _collect_write_sites(program, target_extractor=_loop_only):
         loop = site.instruction
-        count = loop.count
+        count = held(loop.count)
         # A constant count always runs the body, because forloop() refuses one below 1.
         runs = isinstance(count, int) and not isinstance(count, bool) and not loop._oneshot
         for instr in _flat(loop):

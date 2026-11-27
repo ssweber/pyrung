@@ -22,6 +22,7 @@ from pyrung.click.validation.findings import (
 )
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.instruction import ForLoopInstruction
+from pyrung.core.instruction.operands import held
 from pyrung.core.rung import Rung
 from pyrung.core.validation._common import rung_path
 
@@ -322,7 +323,7 @@ class _RoundTripValidationMixin:
             for_token = self._fn(
                 "for",
                 self._render_operand(
-                    instruction.count,
+                    held(instruction.count),
                     path=f"{path}.instruction[0](ForLoopInstruction).count",
                     source=instruction,
                 ),

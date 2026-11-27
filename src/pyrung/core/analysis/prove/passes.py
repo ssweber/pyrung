@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import as_authored, held
 from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP, CompiledKernel, ForIterationsBeyondCap
 
 from .absorb import _prior_key_done_specs, _ThresholdAbsorptions
@@ -306,7 +306,7 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str) -> bool:
         if isinstance(instr, ForLoopInstruction):
             if not _instructions_write(instr.instructions, name):
                 continue
-            count = instr.count
+            count = held(instr.count)
             literal = isinstance(count, int) and not isinstance(count, bool)
             if instr._oneshot or instr.body_rungs or not literal:
                 return False

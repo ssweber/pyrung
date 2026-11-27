@@ -26,6 +26,7 @@ from pyrung.core import (
     copy,
     fill,
     forloop,
+    immediate,
     lro,
     lsh,
     math,
@@ -343,6 +344,26 @@ def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, v
     tags = plc.current_state.tags
     assert tags["Hits"] == 3
     assert tags["After"] is True
+    assert tags[SC43.name] is True
+
+
+@pytest.mark.parametrize("value", [pymath.nan, INF, -INF])
+def test_a_non_finite_immediate_forloop_count_runs_no_iteration_and_sc43(runner_factory, value):
+    """An ``immediate()`` REAL count reads as the plain one does.
+
+    The compiled kernel raised OverflowError on this count.
+    """
+    r = Real("R", default=3.0)
+    hits = Int("Hits")
+    with Program() as program:
+        with rung():
+            with forloop(immediate(r)):
+                math(hits + 1, hits)
+    plc = runner_factory(program)
+    plc.patch({r: value})
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Hits"] == 0
     assert tags[SC43.name] is True
 
 

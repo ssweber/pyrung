@@ -114,7 +114,7 @@ class _InstructionMixin:
         # forloop() lowers to: for(...) + child instructions + next().
         for_token = self._fn(
             "for",
-            self._render_operand(instruction.count, path=f"{path}.count", source=instruction),
+            self._render_operand(held(instruction.count), path=f"{path}.count", source=instruction),
             **for_kw,
         )
         rows = self._render_network(
