@@ -204,52 +204,6 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
 CALC_OPS: dict[Any, Any] = {operator.mod: _op_mod, _op_pow: _op_pow_calc}
 
 
-def _op_neg_real(a: Numeric) -> Numeric:
-    """Return ``-a``, with -0.0 for an integer 0.
-
-    A CLICK computes a DS of 0 as the double +0.0, so ``- DS1`` with DS1 = 0 stores -0.0
-    into a DF (hardware, 2026-11-26). An integer other than 0 stays an integer.
-    """
-    if a == 0 and isinstance(a, int):
-        return -0.0
-    return -a
-
-
-def _op_mul_real(a: Numeric, b: Numeric) -> Numeric:
-    """Return ``a * b``, with -0.0 for an integer 0 that has a negative factor.
-
-    ``DS1 * DS2`` with 0 and -5 stores -0.0 into a DF on a CLICK (hardware, 2026-11-26).
-    A float product already has the sign that a CLICK gives it.
-    """
-    product = a * b
-    if product == 0 and isinstance(product, int) and (a < 0 or b < 0):
-        return -0.0
-    return product
-
-
-def _op_mod_real(a: Numeric, b: Numeric) -> Numeric:
-    """Return ``a MOD b`` (:func:`_op_mod`), with -0.0 for an integer 0 of a negative dividend.
-
-    So ``-5 MOD 5`` is -0.0, as ``fmod`` gives it. A MOD by 0 raises, as in :func:`_op_mod`,
-    so the Math stores +0.0. A CLICK stored +0.0 for each MOD by zero (hardware,
-    2026-11-26).
-    """
-    remainder = _op_mod(a, b)
-    if remainder == 0 and isinstance(remainder, int) and a < 0:
-        return -0.0
-    return remainder
-
-
-#: Maps each op of a decimal Math into a Real to the op that gives a 0 the sign that a
-#: double gives it (``calc_form``). Python's ``+``, ``-``, ``/`` and ``**`` already give
-#: that sign, because an integer operand is never -0.0.
-REAL_CALC_OPS: dict[Any, Any] = {
-    operator.neg: _op_neg_real,
-    operator.mul: _op_mul_real,
-    _op_mod: _op_mod_real,
-}
-
-
 def bit_operand(value: Numeric) -> int:
     """Return ``int(value)`` for an operand of a bitwise or shift operation.
 
@@ -680,6 +634,39 @@ class CalcUnaryExpr(UnaryExpr):
         ):
             return _calc_step(result)
         return result
+
+
+class DoubleBinaryExpr(CalcBinaryExpr):
+    """A step of a decimal Math into a Real. It converts both operands to doubles.
+
+    A CLICK computes this Math in doubles, so a DS of 0 is the double +0.0. A product or
+    a MOD can then give -0.0. ``DS1 * DS2`` with 0 and -5 stores -0.0 into a DF
+    (hardware, 2026-11-26). ``calc_form`` builds this class for ``+``, ``-``, ``*``,
+    ``/``, MOD and ``**``. These are the operators of CLICK's decimal Math.
+    """
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        left = self.left.evaluate(ctx)
+        right = self.right.evaluate(ctx)
+        try:
+            return self.op(float(left), float(right))
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
+
+
+class DoubleUnaryExpr(CalcUnaryExpr):
+    """A minus sign, plus sign or ABS of a decimal Math into a Real.
+
+    It converts its operand to a double. So ``- DS1`` with DS1 = 0 stores -0.0 into a DF
+    (hardware, 2026-11-26).
+    """
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        operand = self.operand.evaluate(ctx)
+        try:
+            return self.op(float(operand))
+        except (ArithmeticError, ValueError) as error:
+            return _permissive(error)
 
 
 # =============================================================================
@@ -1313,9 +1300,15 @@ INTEGER_TAG_TYPE_NAMES = frozenset({"BOOL", "INT", "DINT", "WORD"})
 def may_be_float(expr: Any) -> bool:
     """Return False only when *expr* is integer-valued, so it is never Inf or NaN.
 
-    A REAL operand, a float constant, a ``/``, a ``**`` or a math function can make a
-    float, and a float can be Inf or NaN (``Inf - Inf``). This function treats anything
-    it does not recognise as a float.
+    A float can be Inf or NaN (``Inf - Inf``). These can make one:
+
+    - a REAL operand or a float constant;
+    - a ``/`` or a ``**``;
+    - a math function.
+
+    This function treats anything it does not recognise as a float. It reads the
+    formula's operands, not how a Math computes them. So ``A + 1`` with an Int A is
+    integer-valued even in a Math into a Real, which computes the sum in doubles.
     """
     from pyrung.core.tag import ImmediateRef
 

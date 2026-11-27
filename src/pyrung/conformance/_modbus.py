@@ -174,6 +174,9 @@ class SimServer:
     :attr:`endpoint` is where to connect.
     """
 
+    #: The name a case's ``pending_on`` gives this target.
+    target = "pyrung"
+
     def __init__(
         self,
         build: ConformanceProgram,
@@ -336,6 +339,7 @@ def run_modbus(
     sim: Callable[[ConformanceProgram], Any] | None = None,
     pending: bool | None = None,
     local: bool | None = None,
+    target: str | None = None,
 ) -> list[CaseResult]:
     """Run cases over Modbus TCP and return one result per case, in group order.
 
@@ -356,6 +360,9 @@ def run_modbus(
         local: The endpoint is one of pyrung's own targets, not a real PLC.
             ``None`` (the default) means *endpoint* is ``None``.  Pass ``True``
             for a local target served on an endpoint of its own.
+        target: The local target's name.  A case whose ``pending_on`` names it is
+            a strict xfail.  ``None`` (the default) takes the name from *sim* when
+            *endpoint* is ``None``.
 
     A selected group whose subroutine hash does not match is stale: its cases
     come back with ``stale=True`` without running, and the other groups still run.
@@ -382,20 +389,22 @@ def run_modbus(
         local = endpoint is None
     if pending is None:
         pending = local
+    if target is None and endpoint is None:
+        target = getattr(sim or SimServer, "target", None)
 
     by_group: dict[str, list[CaseResult]] = {}
     if wire:
         if endpoint is None:
-            with (sim or SimServer)(build) as target:
-                assert target.endpoint is not None
+            with (sim or SimServer)(build) as server:
+                assert server.endpoint is not None
                 try:
                     by_group = asyncio.run(
-                        _drive(build, wire, target.endpoint, timeout, pending, local)
+                        _drive(build, wire, server.endpoint, timeout, pending, local, target)
                     )
                 finally:
-                    target.raise_if_failed()
+                    server.raise_if_failed()
         else:
-            by_group = asyncio.run(_drive(build, wire, endpoint, timeout, pending, local))
+            by_group = asyncio.run(_drive(build, wire, endpoint, timeout, pending, local, target))
 
     results: list[CaseResult] = []
     for name in build.names:
@@ -560,6 +569,7 @@ async def _drive(
     timeout: float,
     pending: bool,
     local: bool,
+    target: str | None,
 ) -> dict[str, list[CaseResult]]:
     from pyclickplc.client import ClickClient
 
@@ -687,7 +697,12 @@ async def _drive(
             elif met_first != met_second:
                 notes.append(f"unstable: first read {actual_first}, second read {actual}")
             passed, xfail, pending_note = judge(
-                c, [met_first, met_second], (g.name, i) not in unready, actual, pending=pending
+                c,
+                [met_first, met_second],
+                (g.name, i) not in unready,
+                actual,
+                pending=pending,
+                target=target,
             )
             if pending_note:
                 notes.insert(0, pending_note)

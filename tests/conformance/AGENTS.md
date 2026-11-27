@@ -79,6 +79,7 @@ No case carries `DRUM`, `MATH`, `SC43` or `SYS` now, and the `faults` `TEXT` cas
 - On pyrung's own targets (in-process `run()`, the local sim, `TARGET=circuitpy`) a pending case is a **strict xfail**: it passes, reported `XFAIL` with what pyrung read, only if no run meets its expectation and its reset is clean (a leak still fails it). Once pyrung starts meeting the expectation, the case fails with "remove pending=": the fixer of that step deletes the marker in the same commit, so `grep 'pending="S2"'` lists exactly what a step must flip.
 - Against a real CLICK (`PLC=`) the expectation is judged as for any case. `run_modbus(pending=None)` decides by endpoint: an endpoint means a CLICK; pass `local=True` for a local target served on an endpoint of its own (`test_suite_repeats_without_restarting`).
 - `pending` is not part of the exported ladder or the case comment, so removing it changes no group hash.
+- To mark a difference on one target only, give the case `pending_on={"circuitpy": "why"}` (or `"pyrung"`). It is a strict xfail on that target and is judged as usual on every other one.
 
 **`probe="..."`** marks a case that asks an open hardware question, in a few words for the report. Its expectation is the answer pyrung would adopt (and, where pyrung reads something else, the case is also `pending`). Its module docstring lists every candidate answer and what each reads, so a probe that fails on a CLICK is an answer, not a bug: change the expectation to what the CLICK read and say which answer it was; the next CLICK run confirms it.
 

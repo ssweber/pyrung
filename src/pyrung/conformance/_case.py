@@ -55,6 +55,10 @@ PENDING_STEPS: Mapping[str, str] = {
     ),
 }
 
+#: The local targets a case can be ``pending_on``: pyrung's engine (in-process and the
+#: soft PLC) and the generated P1AM-200 code.
+PENDING_TARGETS = ("pyrung", "circuitpy")
+
 
 @dataclass(frozen=True)
 class Case:
@@ -75,6 +79,8 @@ class Case:
     expect_system: dict[str, Expectation] = field(default_factory=dict)
     #: Fix step (a key of :data:`PENDING_STEPS`) pyrung waits on to meet ``expect``.
     pending: str | None = None
+    #: Target name -> why pyrung differs from CLICK on that target only.
+    pending_on: dict[str, str] = field(default_factory=dict)
     #: The open hardware question the case asks; ``expect`` is the hypothesis.
     probe: str | None = None
     #: Pins the CLICK export redraws as tees off the box's input wire (see ``_tee.py``).
@@ -187,6 +193,7 @@ def case(
     keep: Sequence[Tag] = (),
     expect_system: Mapping[str, Expectation] | None = None,
     pending: str | None = None,
+    pending_on: Mapping[str, str] | None = None,
     probe: str | None = None,
     tee: TeeSpec | None = None,
     fires_within: float | None = None,
@@ -228,6 +235,9 @@ def case(
             *expect*.  This is a strict xfail. The case fails once pyrung starts
             matching, and the fixer then removes the marker.  A run against a real
             CLICK judges *expect* as usual.
+        pending_on: Target name (a name in :data:`PENDING_TARGETS`) -> why pyrung
+            differs from CLICK on that target only.  The case is a strict xfail on
+            that target and is judged as usual on every other one.
         probe: The open hardware question the case asks, in a few words.
             *expect* is the answer pyrung would adopt.  The case's module
             docstring says which reading means which answer, so a failure on
@@ -268,6 +278,12 @@ def case(
         raise ValueError(f"scans must be >= 1, got {scans}")
     if pending is not None and pending not in PENDING_STEPS:
         raise ValueError(f"pending={pending!r} must name a fix step: {', '.join(PENDING_STEPS)}")
+    bad_targets = set(pending_on or {}) - set(PENDING_TARGETS)
+    if bad_targets:
+        raise ValueError(
+            f"pending_on cannot name {', '.join(sorted(bad_targets))}. Name one of "
+            f"{', '.join(PENDING_TARGETS)}."
+        )
     case_id = id if id is not None else _default_id(ladder)
     if not _CASE_ID.fullmatch(case_id):
         raise ValueError(
@@ -287,6 +303,7 @@ def case(
         keep=tuple(keep),
         expect_system=system_expect,
         pending=pending,
+        pending_on=dict(pending_on or {}),
         probe=probe,
         tee=tee,
         fires_within=fires_within,
@@ -326,24 +343,37 @@ def expectation_met(expect: Mapping[str, Expectation], actual: Mapping[str, int]
 
 
 def judge(
-    c: Case, met: Sequence[bool], clean: bool, actual: Mapping[str, int], *, pending: bool
+    c: Case,
+    met: Sequence[bool],
+    clean: bool,
+    actual: Mapping[str, int],
+    *,
+    pending: bool,
+    target: str | None = None,
 ) -> tuple[bool, bool, str]:
     """Return ``(passed, xfail, note)`` for case *c*.
 
     *met* says, for each run, whether the case fired and met its expectation.
     *clean* says whether every reset completed and left nothing behind.  When
     *pending* is on, which is a run on one of pyrung's own targets, a case marked
-    ``pending`` passes only if no run met its expectation.  If a run does meet it,
-    the case fails, so its marker comes off when its fix lands.
+    ``pending``, or ``pending_on`` the run's *target*, passes only if no run met its
+    expectation.  If a run does meet it, the case fails, so its marker comes off
+    when its fix lands.
     """
-    if not pending or c.pending is None:
+    reason = c.pending_on.get(target) if target is not None else None
+    if not pending or (c.pending is None and reason is None):
         return all(met) and clean, False, ""
-    step = f"pending {c.pending} ({PENDING_STEPS[c.pending]})"
+    if c.pending is not None:
+        step = f"pending {c.pending} ({PENDING_STEPS[c.pending]})"
+        remove = "Remove pending= from the case."
+    else:
+        step = f"pending on {target} ({reason})"
+        remove = f"Remove {target!r} from the case's pending_on=."
     if all(met):
         return (
             False,
             False,
-            f"{step}, but pyrung now meets CLICK's expectation. Remove pending= from the case.",
+            f"{step}, but pyrung now meets CLICK's expectation. {remove}",
         )
     if any(met):
         return False, False, f"{step}, but some runs meet CLICK's expectation and some do not"

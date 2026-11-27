@@ -11,9 +11,12 @@ prover must see the rest of the formula live.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Callable
 from functools import reduce
 from operator import mul
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -122,6 +125,24 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
         float("-inf"),
         {43},
     ),
+    # A left shift of a double near the float range passes it, so the shift is Inf, as
+    # an integer step past 2 ** 1024 is. A bit operation on that Inf is 0 with SC43.
+    "double_shifted_past_floats": (lambda: ((DINT_TOP**32) << 60) + 1, Real, float("inf"), {43}),
+    "double_lsh_past_floats": (lambda: lsh(DINT_TOP**33, 64) - DINT_TOP, Real, float("inf"), {43}),
+    "double_shifted_into_and": (lambda: ((DINT_TOP**32) << 60) & 1, Real, 0.0, {43}),
+    "real_lsh_past_floats": (lambda: lsh(BIG**8, 64) + 1, Real, float("inf"), {43}),
+    "real_lsh_past_floats_into_and": (lambda: (lsh(BIG**8, 64) & 1) + 2, Int, 2, {43}),
+    # A bit op on a double reads int() of it, which can be wider than 53 bits. The Math
+    # rounds that step to a double, so a later & 1 reads the rounded low bits. An & of
+    # two such integers keeps only their bits, so its row passes even without the rule.
+    "double_or_low_bits": (lambda: ((DINT_TOP * DINT_TOP) | 5) & 7, Real, 0.0, set()),
+    "double_xor_low_bits": (lambda: ((DINT_TOP * DINT_TOP) ^ 5) & 1, Real, 0.0, set()),
+    "double_inverted_low_bits": (lambda: (~(DINT_TOP * DINT_TOP)) & 1, Real, 0.0, set()),
+    "double_and_low_bits": (lambda: ((DINT_TOP * DINT_TOP) & -1) & 1, Real, 0.0, set()),
+    "real_or_low_bits": (lambda: (BIG | 5) & 7, Real, 0.0, set()),
+    "real_xor_low_bits": (lambda: (BIG ^ 5) & 1, Real, 0.0, set()),
+    "real_inverted_low_bits": (lambda: (~BIG) & 1, Real, 0.0, set()),
+    "real_and_low_bits": (lambda: (BIG & -1) & 1, Real, 0.0, set()),
     "no_error": (lambda: SEVEN / 2 + 5, Real, 8.5, set()),
 }
 
@@ -163,9 +184,9 @@ class _StubBase:
         return 0.0
 
 
-def _program(name: str) -> tuple[Program, dict[str, Any]]:
+def _program(name: str, table: dict = FORMULAS) -> tuple[Program, dict[str, Any]]:
     """Return a program and its tags: *name*'s formula into a destination, a coil per flag."""
-    build, dest_type, _stored, _flags = FORMULAS[name]
+    build, dest_type, _stored, _flags = table[name]
     dest = dest_type("Dest")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
     with Program(strict=False) as prog:
@@ -215,6 +236,39 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
     assert actual["Dest"] == stored
     assert type(actual["Dest"]) is type(stored)
     assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags
+
+
+#: A power with a large integer exponent, into a Real. The Math computes it in doubles,
+#: so it overflows to Inf and sets SC43. As a Python int, 5 ** (2 ** 31 - 1) takes hours.
+LARGE_POWERS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
+    "five_to_dint_top": (lambda: 5**DINT_TOP, Real, float("inf"), {43}),
+    "minus_five_to_dint_top": (lambda: -5 * 5**DINT_TOP, Real, float("-inf"), {43}),
+}
+
+
+def _check_large_powers() -> None:
+    """Check each of :data:`LARGE_POWERS` on the desktop engines. A child process runs this.
+
+    Known difference on CircuitPython: the board has no doubles, so code.py keeps integer
+    steps exact. It computes this power as a Python int, as for an Int destination.
+    """
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        for name, (_build, _dest_type, stored, flags) in LARGE_POWERS.items():
+            for engine in (engine for engine in ENGINES if not engine.startswith("circuitpy")):
+                prog, tags = _program(name, LARGE_POWERS)
+                actual = _first_scan(prog, engine, tags, monkeypatch)
+                assert actual["Dest"] == stored, (name, engine)
+                assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags, (name, engine)
+
+
+def test_a_large_power_into_a_real_finishes_on_the_desktop_engines() -> None:
+    # A hang would hold the GIL, so the check runs in a child process that a timeout can kill.
+    code = "from tests.core.test_math_terms import _check_large_powers; _check_large_powers()"
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
 
 
 TABLE = Block("Table", TagType.INT, 1, 10)

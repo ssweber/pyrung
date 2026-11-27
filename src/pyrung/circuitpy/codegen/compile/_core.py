@@ -83,7 +83,7 @@ from pyrung.core.instruction import (
     UnpackToWordsInstruction,
     control,
 )
-from pyrung.core.instruction.calc import may_be_text
+from pyrung.core.instruction.calc import calc_form, may_be_text
 from pyrung.core.instruction.control import not_a_char_error
 from pyrung.core.instruction.operands import (
     ConstArg,
@@ -638,7 +638,14 @@ def _compile_calc_instruction(
     div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
     dest = instr.dest.tag
     dest_type = dest.type.name
-    value_expr = _compile_value(instr.expression, ctx, strict=True)
+    expression = instr.expression
+    if not ctx.kernel_runtime and instr.mode == "decimal":
+        # The P1AM-200 has only 30-bit floats, so code.py keeps a decimal Math's integer
+        # steps exact.  calc_form turns each double step back into an integer step.  An
+        # integer 0 has no sign, so ``- DS1`` with DS1 = 0 stores +0.0 (a CLICK stores
+        # -0.0).
+        expression = calc_form(expression, "decimal")
+    value_expr = _compile_value(expression, ctx, strict=True)
     store_expr = _calc_store_expr("_calc_value", dest_type, instr.mode, ctx)
     zero_store_expr = _calc_store_expr("0", dest_type, instr.mode, ctx)
     out_of_range_body = _compile_set_out_of_range_fault_body(ctx)

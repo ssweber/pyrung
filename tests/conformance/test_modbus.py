@@ -130,13 +130,14 @@ def test_suite_repeats_without_restarting(
     else:
         build = suite.build_for(conformance_endpoint, conformance_groups)
     local = conformance_endpoint is None
+    target = conformance_sim.target if local else None
     names = conformance_groups or [g.name for g in build.groups]
     with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
         for n in (1, 2):
-            results = run_modbus(build, endpoint, groups=names, local=local)
+            results = run_modbus(build, endpoint, groups=names, local=local, target=target)
             _passes(results, f"suite run {n} of 2")
         for step, name in enumerate(names + names[-2::-1], start=1):
-            results = run_modbus(build, endpoint, groups=[name], local=local)
+            results = run_modbus(build, endpoint, groups=[name], local=local, target=target)
             _passes(results, f"step {step}: {name} alone")
 
 

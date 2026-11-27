@@ -119,7 +119,7 @@ def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> l
         outcomes = [r.get(i, ({}, False)) for r in runs]
         actual, fired = outcomes[-1]
         met = [f and expectation_met(c.checks, a) for a, f in outcomes]
-        expected_miss = c.pending is not None
+        expected_miss = c.pending is not None or "pyrung" in c.pending_on
         notes: list[str] = []
         if i in unready:
             notes.append(
@@ -131,7 +131,7 @@ def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> l
         if i in leaks:
             notes.append("state left after the reset: " + ", ".join(leaks[i]))
         passed, xfail, pending_note = judge(
-            c, met, i not in unready and i not in leaks, actual, pending=True
+            c, met, i not in unready and i not in leaks, actual, pending=True, target="pyrung"
         )
         if pending_note:
             notes.insert(0, pending_note)
@@ -308,6 +308,7 @@ def format_report(
         marks = ["confirmed" if confirmed else "unconfirmed"]
         if r.case.pending is not None:
             marks.append(f"pending {r.case.pending}")
+        marks += [f"pending on {t}" for t in r.case.pending_on]
         if r.case.probe is not None:
             marks.append(f"probe: {r.case.probe}")
         lines.append(f"{status:<5} {_label(r)} [{'; '.join(marks)}] {r.case.sentence}")

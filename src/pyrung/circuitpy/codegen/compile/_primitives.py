@@ -33,6 +33,8 @@ from pyrung.core.expression import (
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
+    DoubleBinaryExpr,
+    DoubleUnaryExpr,
     Expression,
     LiteralExpr,
     MathFuncExpr,
@@ -43,9 +45,6 @@ from pyrung.core.expression import (
     TagExpr,
     UnaryExpr,
     _op_hex_div,
-    _op_mod_real,
-    _op_mul_real,
-    _op_neg_real,
     _op_pow,
     may_be_float,
 )
@@ -179,7 +178,9 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-        calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol)) or expr.op is _op_mod_real
+        if isinstance(expr, DoubleBinaryExpr):
+            left, right = _double_operands(expr, left, right)
+        calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         flags = CALC_FLAGS if strict else None
         if expr.op is _op_hex_div:
             # A hex Math's / rounds the quotient down (core _op_hex_div).  // gives the same
@@ -222,6 +223,7 @@ def _compile_expression_impl(
         if expr.symbol == "**" and (
             _may_be_float(expr.left)
             or _may_be_float(expr.right)
+            or isinstance(expr, DoubleBinaryExpr)
             or (strict and _may_be_double(left, right))
         ):
             # _pow returns +/-Inf for a float overflow, as the core's _op_pow does.
@@ -243,10 +245,9 @@ def _compile_expression_impl(
             # fail then builds no flag list.
             # Every call passes three arguments, because scan_trace matches a helper
             # call by its argument count and does not fill in a default.
-            helper = "_mod_real" if expr.op is _op_mod_real else "_mod"
-            ctx.mark_helper(helper)
+            ctx.mark_helper("_mod")
             mod_flags = None if _non_zero_literal(expr.right) else flags
-            return f"{helper}({left}, {right}, {mod_flags})"
+            return f"_mod({left}, {right}, {mod_flags})"
         if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
             # A Math's division by 0 is 0 with SC40.  If the divisor is a tag, the
             # zero test is inline.  The exception is a dividend that appends flags of
@@ -262,9 +263,6 @@ def _compile_expression_impl(
                 ctx.mark_helper(helper)
                 compiled = f"{helper}({left}, {right}, {flags})"
             return _calc_step(expr, compiled, ctx, strict)
-        if expr.op is _op_mul_real:
-            ctx.mark_helper("_mul_real")
-            return _calc_step(expr, f"_mul_real({left}, {right})", ctx, strict)
         if expr.symbol == "**" and left.startswith("-"):
             # Python applies ** before a minus sign on its left, so -2 ** 2 is -4. A
             # negative constant is the only operand that renders with a bare sign.
@@ -279,6 +277,8 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
+        if isinstance(expr, DoubleUnaryExpr):
+            inner = _float_without_call(expr.operand, inner) or f"float({inner})"
         flags = CALC_FLAGS if strict else None
         if expr.symbol == "abs":
             floor = _abs_floor(expr)
@@ -294,9 +294,6 @@ def _compile_expression_impl(
                 compiled = _permissive_op("~", inner, "0", ctx, flags)
                 return _calc_step(expr, compiled, ctx, strict) if strict else compiled
             return _calc_step(expr, f"(~{_bit_int_expr(expr.operand, inner, ctx)})", ctx, strict)
-        if expr.op is _op_neg_real:
-            ctx.mark_helper("_neg_real")
-            return _calc_step(expr, f"_neg_real({inner})", ctx, strict)
         return _calc_step(expr, f"({expr.symbol}({inner}))", ctx, strict)
 
     if isinstance(expr, MathFuncExpr):
@@ -568,7 +565,11 @@ def _int_bound(expr: Any) -> float:
 
     In a Math, a step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl``,
     as in the core's ``_calc_step``.  A float result needs no bound, so its bound is 0.
+    That 0 is no bound on ``int()`` of the float, so a bit op reads it as no bound
+    (:func:`_reads_int_of_float`).
     """
+    if _reads_int_of_float(expr):
+        return math.inf
     if isinstance(expr, bool):
         return 1
     if isinstance(expr, int):
@@ -579,6 +580,8 @@ def _int_bound(expr: Any) -> float:
         return _int_bound(expr.value)
     if isinstance(expr, TagExpr):
         return _TYPE_BOUNDS.get(expr.tag.type, math.inf)
+    if isinstance(expr, (DoubleBinaryExpr, DoubleUnaryExpr)):
+        return 0
     if isinstance(expr, BinaryExpr):
         left, right = _int_bound(expr.left), _int_bound(expr.right)
         symbol = expr.symbol
@@ -621,6 +624,25 @@ def _int_bound(expr: Any) -> float:
     return math.inf
 
 
+def _reads_int_of_float(expr: Any) -> bool:
+    """Return whether *expr* is a bit op or a shift that reads ``int()`` of a float.
+
+    ``int()`` of a double can be near 2 ** 1024, so such a step has no bound and goes
+    through ``_dbl``.  The core's ``_calc_step`` rounds the step to a double too, so a
+    later bit op reads the same low bits on every engine.  ``lro()`` and ``rro()`` keep
+    16 bits, so they need no rule.
+    """
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in _BITWISE_SYMBOLS and (
+            _may_be_float(expr.left) or _may_be_float(expr.right)
+        )
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol == "~" and _may_be_float(expr.operand)
+    if isinstance(expr, ShiftFuncExpr):
+        return expr.name in ("lsh", "rsh") and _may_be_float(expr.value)
+    return False
+
+
 def _small_count_literal(expr: Any) -> bool:
     return _non_negative_int_literal(expr) and expr.value <= 64
 
@@ -639,6 +661,33 @@ def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> s
         return compiled
     ctx.mark_helper("_dbl")
     return f"_dbl({compiled})"
+
+
+def _float_without_call(expr: Any, compiled: str) -> str | None:
+    """Return code for *expr* that is already a float, or None.
+
+    A constant becomes a float literal.  A Real tag holds a float, so *compiled* is
+    returned as it is.
+    """
+    if isinstance(expr, LiteralExpr):
+        return _compile_constant(float(expr.value))
+    if isinstance(expr, TagExpr) and expr.tag.type is TagType.REAL:
+        return compiled
+    return None
+
+
+def _double_operands(expr: DoubleBinaryExpr, left: str, right: str) -> tuple[str, str]:
+    """Return the compiled operands of *expr*, a step that computes in doubles.
+
+    Python computes an int with a float in doubles, so the step needs only one float
+    operand.  If neither operand is a constant or a Real tag, the left one goes through
+    ``float()``.  The core converts both operands, and the result is the same.
+    """
+    left_float = _float_without_call(expr.left, left)
+    right_float = _float_without_call(expr.right, right)
+    if left_float is None and right_float is None:
+        return f"float({left})", right
+    return left_float or left, right_float or right
 
 
 def _binary_may_raise(expr: BinaryExpr) -> bool:
@@ -727,7 +776,20 @@ def _permissive_op(
     return f"_permissive_op({op!r}, {left}, {right}{tail})"
 
 
-_may_be_float = may_be_float
+def _may_be_float(expr: Any) -> bool:
+    """Return whether *expr* can compile to a float, so it may be Inf or NaN.
+
+    This is the core's ``may_be_float``, which reads only the formula's operands.  A
+    double step (``DoubleBinaryExpr``, ``DoubleUnaryExpr``) always gives a float, even
+    from Int operands, so an operation on it needs the guard of a float operand.
+    """
+    if isinstance(expr, (DoubleBinaryExpr, DoubleUnaryExpr)):
+        return True
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in ("/", "**") or _may_be_float(expr.left) or _may_be_float(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol != "~" and _may_be_float(expr.operand)
+    return may_be_float(expr)
 
 
 def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:

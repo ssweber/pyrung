@@ -16,6 +16,8 @@
 ### Fixes
 
 - A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on `CompiledPLC` and in the generated CircuitPython code. 0.19.0 raised an error there.
+- `math()` into a Real in `PLC` and `CompiledPLC` now stores Inf and sets SC43 for a power with a huge exponent, such as `5 ** DD1` with DD1 = 2147483647 (it hung).
+- `CompiledPLC` and the generated CircuitPython code now store what `PLC` stores for a bit operation on a large `Real` in `math()`.
 
 ## v0.19.0 (2026-11-26)
 
@@ -77,7 +79,7 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
   - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DF1 * DF2` or `- DH1 * DH2` in hex mode. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` now imports a minus sign before a constant in a hex Math as a CLICK runs it. `- 5h MOD DH1` with DH1 = 3h stores FFFEh (it stored 2h). `- 2h` sets SC43 (it set no flag).
-- `math()` into a `Real` now stores -0.0 where a CLICK does. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0).
+- `math()` into a `Real` now stores -0.0 as a CLICK does, in `PLC` and `CompiledPLC`. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0). The generated CircuitPython code still stores 0.0.
 - `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. `math()` then stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
 
 ## v0.18.1 (2026-11-25)

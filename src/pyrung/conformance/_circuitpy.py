@@ -86,6 +86,9 @@ class CircuitPySim:
     :attr:`endpoint` and :meth:`raise_if_failed`.
     """
 
+    #: The name a case's ``pending_on`` gives this target.
+    target = "circuitpy"
+
     def __init__(self, build: ConformanceProgram, *, host: str = "127.0.0.1", port: int = 0):
         self.build = build
         self._host = host
