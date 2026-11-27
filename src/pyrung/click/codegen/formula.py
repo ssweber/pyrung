@@ -60,16 +60,25 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "MOD", "b12"),
     ("^", "+", "b12"),
     ("^", "-", "b12"),
+    ("*", "*", "b16"),
     ("*", "/", "b11, b12, b15"),
     ("*", "MOD", "b10, b11, b15"),
     ("*", "AND", "b11"),
+    ("*", "OR", "b16"),
+    ("*", "XOR", "b16"),
     ("*", "+", "b10"),
     ("*", "-", "b15"),
     ("/", "/", "b10"),
+    ("/", "MOD", "b16"),
+    ("/", "AND", "b16"),
     ("/", "OR", "b14"),
+    ("/", "XOR", "b16"),
     ("/", "+", "b12"),
     ("/", "-", "b12"),
+    ("MOD", "MOD", "b16"),
     ("MOD", "AND", "b14"),
+    ("MOD", "OR", "b16"),
+    ("MOD", "XOR", "b16"),
     ("MOD", "+", "b12"),
     ("MOD", "-", "b12"),
     ("AND", "OR", "b10"),
@@ -81,8 +90,12 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("OR", "-", "b15"),
     ("XOR", "+", "b11"),
     ("XOR", "-", "b15"),
+    ("+", "+", "b16"),
+    ("+", "-", "b11, b16"),
     ("-", "-", "b10"),
     (NEGATE_ADDRESS, "^", "b11"),
+    (NEGATE_ADDRESS, "/", "b16"),
+    (NEGATE_ADDRESS, "MOD", "b16"),
     (NEGATE_ADDRESS, "AND", "b12"),
     (NEGATE_ADDRESS, "OR", "b14"),
     (NEGATE_ADDRESS, "XOR", "b14"),
@@ -90,18 +103,20 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_ADDRESS, "-", "b12"),
     (NEGATE_BRACKET, "^", "b15"),
     (NEGATE_BRACKET, "AND", "b15"),
+    (NEGATE_BRACKET, "OR", "b16"),
+    (NEGATE_BRACKET, "XOR", "b16"),
     (NEGATE_BRACKET, "+", "b15"),
+    (NEGATE_BRACKET, "-", "b16"),
     (NEGATE_FUNCTION, "^", "b15"),
     (NEGATE_FUNCTION, "+", "b15"),
 )
 
 #: Each pair of operators whose order a reading of a CLICK settled only when the formula
-#: writes them in this order, as (first operator, second operator, rounds). ``5 - 3 + 1`` (b11)
-#: is 3, so a CLICK does not apply ``+`` first there. That settles ``DS1 - DS2 + DS3``. No
-#: reading settles ``DS1 + DS2 - DS3``, whose other grouping applies ``-`` first. A pair in
-#: :data:`CONFIRMED_PAIRS` is settled in either order. ``tests/click/test_click_formula.py``
-#: checks this list against its readings.
-CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = (("-", "+", "b11"),)
+#: writes them in this order, as (first operator, second operator, rounds). A reading of
+#: ``5 - 3 + 1`` settles ``DS1 - DS2 + DS3`` and says nothing of ``DS1 + DS2 - DS3``. A pair
+#: in :data:`CONFIRMED_PAIRS` is settled in either order. ``tests/click/test_click_formula.py``
+#: checks this list against its readings. The list is empty.
+CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = ()
 
 #: Formulas that a CLICK was read running, as (text, hex mode), whose pairs of operators the
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
@@ -109,7 +124,6 @@ CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = (("-", "+", "b11"),)
 #: readings.
 READ_FORMULAS: tuple[tuple[str, bool], ...] = (
     ("- DS1 * 3", False),
-    ("- DS1 MOD 3", False),
 )
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
@@ -121,9 +135,9 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (
 #: reading shows each step of both groupings. The grid holds a value of each class that an
 #: operand can take, and the list is empty:
 #:
-#: - A DF can hold Inf and NaN, and no reading shows a minus sign before either, or before 0.
-#:   So no decimal pair with a minus sign agrees. Each other decimal pair differs on some value
-#:   of the grid.
+#: - A DF can hold Inf and NaN, and the model counts no step on either as read. No reading
+#:   shows every sign of the 0 that a product gives. So no decimal pair with a minus sign
+#:   agrees. Each other decimal pair differs on some value of the grid.
 #: - No reading shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step.
 #:   An operand can be a longer formula, so no hex pair agrees.
 #:
@@ -136,17 +150,15 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = ()
 #: second operator, hex mode) in the order that the formula writes them. The other step of the
 #: pair counts as plain. :func:`plain_operands` says which operands are plain.
 #: In hex mode a plain operand is never past FFFFh, so these steps stay inside the values that
-#: the readings show. In decimal mode a plain operand is a whole number inside a Dint, so a
-#: double holds the value of a sum of three exactly. No reading shows the sign of the 0 that a
-#: sum or a minus sign gives, and a DF holds either sign. So no decimal pair is here.
+#: the readings show. No decimal pair is here. No reading shows every sign of the 0 that a
+#: product gives after a minus sign, and a DF holds either sign. A minus sign before a bracket
+#: gives ``- ( 5 ) / 0`` and ``- ( 5 ) MOD 0`` the value +0.0 in one order and -0.0 in the
+#: other.
 #: ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
 SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
-    ("+", "+", True),
-    ("+", "-", True),
     ("AND", "AND", True),
     ("OR", "OR", True),
     ("XOR", "XOR", True),
-    (NEGATE_ADDRESS, "MOD", True),
     (NEGATE_BRACKET, "MOD", True),
 )
 

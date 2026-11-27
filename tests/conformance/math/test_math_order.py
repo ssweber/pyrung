@@ -24,11 +24,11 @@ because a reading settled the pair. The rest are probes (``probe=``). When a pro
 CLICK, add its readings to the ``READINGS`` of ``tests/click/test_click_formula.py``, and its
 pair to ``formula.CONFIRMED_PAIRS`` with the round.
 
-No case in this group asks about a minus sign before ``/`` or MOD in decimal. Both orders give
-the same value in pyrung and in the model of a CLICK (``formula_values.py``) for each value the
-model reads, so no such value tells them apart. The model reads no step on Inf or NaN, no step
-past the largest double, no minus sign before 0 and no sign of the 0 of a division by zero. So
-the importer warns on these pairs. ``test_math_range.py`` asks what a CLICK does with each.
+No case in this group asks about a minus sign before ``/`` or MOD in decimal.
+``math_range/by_zero`` settled the two pairs with a minus sign before an address. A case that
+reads ``- ( DF 5.0 ) / DF 0.0`` and ``- ( DF 5.0 ) MOD DF 0.0`` into a DF would settle the
+two pairs with a minus sign before a bracket. Applied first, the minus sign gives +0.0, and
+applied last it gives -0.0. Until a case reads them, the importer warns on these two pairs.
 
 The ``WIDTHS`` cases each bracket their formulas, so the order is fixed and only one step is
 read. They run formulas that a CLICK was read running on 2026-11-26, and expect the values read
@@ -51,7 +51,7 @@ intermediate value to the destination's size. It raises SC43 only for the value 
   case does not read SC46. ``math_flags/hex_by_zero_goes_on`` reads it.
 
 The ``doubles`` case is a probe. It types its formulas without brackets, as the order cases
-do, and expects what pyrung gives.
+do, and expects what pyrung gives. A CLICK read the same in reading round b16.
 
 - Result1 is ``DF 1.0 + DF 1.0E+17 - DF 1.0E+17`` into an Int. A double drops the 1.0 from
   1.0 + 1.0E+17, so the formula is 0 from the left and 1 with the ``-`` first.
@@ -66,8 +66,8 @@ do, and expects what pyrung gives.
   with the second ``+`` first. A slot has four Results, so the case reads this one in
   ``Scratch``, which it uses for nothing else.
 
-When the case passes on a CLICK, add its readings to ``READINGS``, and widen the stores that
-``formula_values._STORES_READ`` reads.
+``READINGS`` in ``tests/click/test_click_formula.py`` holds its readings of an order.
+``formula_values._STORES_READ`` holds the stores that it read.
 
 No probe asks about a minus sign before another minus sign. laddercodec refuses ``- - DS1``
 (OBJ-1001), as CLICK's dialog refused ``5 - - DS1``. One formula that laddercodec refuses keeps
