@@ -89,8 +89,8 @@ def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> flo
     """Return what a CLICK computes for *node*, by the rules the readings show.
 
     A decimal Math computes in doubles, and its MOD keeps the dividend's sign. A hex Math reads
-    each DH as unsigned and computes in whole numbers of any size. Its ``/`` drops the fraction,
-    and its MOD keeps the dividend's sign. Its AND, OR and XOR return 16 unsigned bits. It
+    each DH as unsigned and computes in whole numbers of any size. Its ``/`` rounds the quotient
+    down, and its MOD keeps the dividend's sign. Its AND, OR and XOR return 16 unsigned bits. It
     stores the low 16 bits of the result.
     """
     value = _value(node, hex_mode, registers, None)
@@ -106,8 +106,6 @@ def click_steps(
 
     - a hex step whose value is above FDA93880h or below -FDA93880h, the largest read (b15 m2b)
     - a hex AND, OR or XOR of a value above FFFFh or below -FFFFh
-    - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
-      a negative divisor
     - a decimal step on Inf or NaN, which a DF can hold
     - the sign of a decimal 0 that no reading shows (:data:`ZEROS_READ`), from a ``*``,
       ``/``, sum, MOD or ``^``, a division or MOD by zero, or SQRT of 0 or of a negative value
@@ -437,7 +435,9 @@ def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> 
             "+": lambda: x + y,
             "-": lambda: x - y,
             "*": lambda: x * y,
-            "/": lambda: _truncated(x, y),
+            # A hex / rounds down, and a hex MOD truncates, whatever the signs (b22 c_div and
+            # c_mod, b23). So the two do not pair up: -1 / 3h is -1, and -1 MOD 3h is -1.
+            "/": lambda: x // y,
             "MOD": lambda: x - y * _truncated(x, y),
             # AND, OR and XOR return 16 unsigned bits, so a negative operand gives no SC43
             # (b17 a8 to a11). The next step reads those bits as unsigned, so ( 0h - 1h ) OR 0h
@@ -470,11 +470,6 @@ def _check_hex_step(op: str, x: int, y: int) -> None:
     # wider one unread.
     if op in ("AND", "OR", "XOR") and not (-0xFFFF <= x <= 0xFFFF and -0xFFFF <= y <= 0xFFFF):
         raise Unread(f"hex {x} {op} {y}")
-    # A negative dividend was read in MOD (b17 a7, b15 m1b) and in an exact ``/`` (b17 a6).
-    if op == "/" and (x < 0 or y < 0) and y != 0 and x % y != 0:
-        raise Unread(f"hex {x} / {y}")
-    if op == "MOD" and y < 0:
-        raise Unread(f"hex {x} MOD {y}")
 
 
 def _power_is_read(a: float, b: float) -> bool:

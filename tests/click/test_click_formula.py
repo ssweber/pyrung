@@ -472,9 +472,8 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 # - A constant from 0h to FFFFh (the stand-in FFFFh). The model reads it as unsigned.
 # - A longer formula past FFFFh, past FDA93880h and past 2^53 (the product). The model reads it
 #   up to FDA93880h. It leaves a larger value unread, and an AND, OR or XOR of one past FFFFh.
-# - A longer formula below 0, down to -FFFFh (the difference). The model reads it in each step
-#   but three. It leaves unread a ``/`` whose quotient has a fraction, a MOD by it, and an AND,
-#   OR or XOR of one below -FFFFh.
+# - A longer formula below 0, down to -FFFFh (the difference). The model reads it in each
+#   step, except an AND, OR or XOR of a value below -FFFFh.
 # - A longer formula below -FFFFh, down to -40000000h (the stand-in ( 0h - DH4 ) * DH5). The
 #   model reads it, except in AND, OR or XOR. It leaves a value below -FDA93880h unread.
 # - Every hex step works in whole numbers, so no hex value is a fraction, -0, Inf or NaN.
@@ -1273,7 +1272,7 @@ def test_imported_formula_with_an_unconfirmed_pair_warns(
 #:
 #: - b1a and b1b: a minus sign before ABS and SUM binds to the function's result first.
 #: - b2 and b2x: a minus sign before RSH applies to the shift's result. A minus sign on the
-#:   register, then a division by 2 that truncates toward 0, stores the same value for every
+#:   register, then a shift by 1 that rounds toward 0, stores the same value for every
 #:   register value, so these two cases do not tell those two apart.
 #: - b3a to b3c: the step after AND, XOR and OR reads the result as 16 unsigned bits. b3ax ends
 #:   at 65536, so it stores 0000h and sets SC43.
@@ -1467,22 +1466,10 @@ ROUND_B21_READINGS: list[tuple[str, str, dict[str, int], str, int, bool]] = [
     ("b21-n4", "( 0h - DH421 ) / 2h", {"DH421": 1}, "DH12", 0xFFFF, True),
 ]
 
-#: pyrung's hex ``/`` rounds -1 / 2h toward 0. It stores 0h with no SC43.
-_B21_DIVISION = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="pyrung stores 0h for a hex -1 / 2h, and a CLICK stored FFFFh with SC43",
-)
-
-
 @pytest.mark.parametrize(
     ("text", "registers", "dest", "stored", "out_of_range"),
-    [
-        pytest.param(*reading[1:], id=reading[0], marks=_B21_DIVISION)
-        if reading[1].endswith("/ 2h")
-        else pytest.param(*reading[1:], id=reading[0])
-        for reading in ROUND_B21_READINGS
-    ],
+    [reading[1:] for reading in ROUND_B21_READINGS],
+    ids=[reading[0] for reading in ROUND_B21_READINGS],
 )
 def test_imported_formula_stores_what_round_b21_read(
     text: str, registers: dict[str, int], dest: str, stored: int, out_of_range: bool, monkeypatch

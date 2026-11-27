@@ -313,9 +313,10 @@ def calc_form(expression: Any, mode: CalcMode, *, into_real: bool = False) -> An
       hex mode.
     - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
-    - A hex Math truncates the result of each ``/`` toward zero
-      (:func:`~pyrung.core.expression._op_hex_div`).  So ``7h / 2h * 2h`` stores 6h
-      (read, 2026-11-26).  A decimal ``/`` keeps the fraction.
+    - A hex Math rounds the result of each ``/`` down to a whole number
+      (:func:`~pyrung.core.expression._op_hex_div`).  So ``7h / 2h * 2h`` stores 6h,
+      and ``- 5h / 2h`` stores FFFDh, which is -3 (read, 2026-11-26 and 2026-11-27).
+      A decimal ``/`` keeps the fraction.
     - ``%`` truncates.  A ``%`` by 0 is 0 and sets SC46.  ``0 ^ 0`` is 0 with no
       flag, and 0 to a negative power is +Inf
       (:data:`~pyrung.core.expression.CALC_OPS`).  Outside a Math they stay Python's.

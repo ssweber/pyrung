@@ -116,17 +116,18 @@ def _op_div(a: Numeric, b: Numeric) -> Numeric:
 
 
 def _op_hex_div(a: Numeric, b: Numeric) -> Numeric:
-    """Return ``a / b`` truncated toward zero, as a CLICK's hex Math divides.
+    """Return ``a / b`` rounded down to a whole number, as a CLICK's hex Math divides.
 
-    A hex Math truncates each division, so ``7h / 2h * 2h`` is 6h and ``1h / 2h * 4h``
-    is 0 (hardware, 2026-11-26).  ``calc_form`` runs ``/`` as this function in a hex
+    A CLICK was read rounding each quotient down, whatever the signs.  ``7h / 2h * 2h``
+    stores 6h.  ``( 0h - DH1 ) / 3h`` with 1h stores FFFFh, which is -1, and
+    ``5h / ( 0h - 3h )`` stores FFFEh, which is -2 (hardware, 2026-11-26 and 2026-11-27).
+    That is Python's ``//``.  The hex MOD truncates instead (:func:`_op_mod`), so
+    ``5h MOD ( 0h - 3h )`` stores 2h.  ``calc_form`` runs ``/`` as this function in a hex
     Math.  A division by 0 is 0 and sets SC40, as in :func:`_op_div`.
 
     A float operand comes from a float constant, a ``**``, ``sqrt()`` or another math
-    function, or a step past 2 ** 53.  The function then truncates the rounded quotient
-    to a whole double, so ``3 / 0.1`` is 30.  No CLICK reading had a negative quotient.
-    Truncation toward zero there is pyrung's assumption, based on the hex MOD, which
-    truncates.
+    function, or a step past 2 ** 53.  The function then rounds the double quotient down,
+    so ``3 / 0.1`` is 30.  Python's ``//`` would round the exact quotient and give 29.
     """
     if b == 0:
         faults = CALC_FAULTS.get()
@@ -134,10 +135,9 @@ def _op_hex_div(a: Numeric, b: Numeric) -> Numeric:
             faults.append(DIVISION_FAULT)
         return 0
     if isinstance(a, int) and isinstance(b, int):
-        quotient = abs(a) // abs(b)
-        return quotient if (a < 0) == (b < 0) else -quotient
+        return a // b
     quotient = a / b
-    return float(int(quotient)) if math.isfinite(quotient) else quotient
+    return float(math.floor(quotient)) if math.isfinite(quotient) else quotient
 
 
 def _op_mod(a: Numeric, b: Numeric) -> Numeric:
