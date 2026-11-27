@@ -771,7 +771,7 @@ def _compile_function_arg(value: Value | Span, ctx: CodegenContext) -> str:
         case ConstArg(value=constant):
             return ctx.function_constant(constant)
         case RangeArg(span=span) | PointerRangeArg(span=span):
-            # The function gets the range object, as the scan passes it.
+            # The scan hands the function the range object.
             return ctx.function_constant(span)
         case _:
             assert_never(value)

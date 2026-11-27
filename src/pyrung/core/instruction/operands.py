@@ -38,8 +38,8 @@ These instructions parse their operands instead:
   ``unpack_to_words()``;
 - ``math()``, ``search()`` and ``shift()``;
 - ``forloop()``.  It parses only its count;
-- ``run_function()`` and ``run_enabled_function()``.  Each parses the values of its
-  ``outs``, and passes each value of its ``ins`` to :func:`parse_value`;
+- ``run_function()`` and ``run_enabled_function()``.  Each parses its ``outs`` and
+  passes each value of its ``ins`` to :func:`parse_value`;
 - ``send()`` and ``receive()``.  Each parses only its ``source`` or its ``dest``;
 - the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
   ``flasher()`` and ``timed()``.  Each coil parses only its target.

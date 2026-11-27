@@ -223,8 +223,8 @@ def for_count_mask(count: Value) -> int:
     (a DD, a CTD) and an integer constant are read as signed 32-bit.  Anything else
     (an Int, a Word, an expression, a REAL) is read as unsigned 16-bit.
 
-    A count in ``immediate()`` is read as unsigned 16-bit, whatever the type of its tag.
-    CLICK has no immediate For count, and the CLICK export refuses one.
+    A count in ``immediate()`` is read as unsigned 16-bit for every tag type.
+    CLICK has no immediate For count.  The CLICK export refuses one.
     """
     match count:
         case ConstArg(value=value):
