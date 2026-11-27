@@ -29,6 +29,7 @@ from pyrung.conformance import (
     record_confirmations,
     run,
 )
+from pyrung.conformance._case import judge
 from pyrung.conformance._ladder import case_comment, emit_case
 from pyrung.conformance._modbus import check_scan_time
 from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
@@ -650,6 +651,37 @@ def test_pending_case_still_fails_a_leak() -> None:
     (result,) = run(Group("g", [leaky]))
     assert not result.passed
     assert "state left after the reset" in result.note
+
+
+def test_pending_on_is_a_strict_xfail_on_its_target_only() -> None:
+    # pyrung reads 7.  Each case expects 8 (CLICK's answer) and is pending on one target.
+    on_cp = case(
+        "CLICK reads 8",
+        ladder=_prove_constant,
+        expect={"Result1": 8},
+        pending_on={"circuitpy": "why"},
+    )
+    (result,) = run(Group("g", [on_cp]))
+    assert not result.passed and not result.xfail
+    assert "[unconfirmed; pending on circuitpy]" in format_report([result])
+
+    on_pyrung = replace(on_cp, pending_on={"pyrung": "why"})
+    (result,) = run(Group("g", [on_pyrung]))
+    assert result.passed and result.xfail
+    assert "pending on pyrung (why)" in result.note
+
+    passed, xfail, note = judge(on_cp, [False, False], True, {}, pending=True, target="circuitpy")
+    assert passed and xfail and "pending on circuitpy (why)" in note
+    passed, xfail, note = judge(on_cp, [True, True], True, {}, pending=True, target="circuitpy")
+    assert not passed and not xfail
+    assert "Remove 'circuitpy' from the case's pending_on=." in note
+    # A real CLICK judges the case as usual.
+    assert judge(on_cp, [True, True], True, {}, pending=False, target="circuitpy")[:2] == (
+        True,
+        False,
+    )
+    with pytest.raises(ValueError, match="pending_on cannot name board"):
+        case("x", ladder=_prove_constant, expect={"Result1": 7}, pending_on={"board": "why"})
 
 
 def test_pending_and_probe_are_checked_and_reported() -> None:

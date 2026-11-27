@@ -420,6 +420,10 @@ group = Group(
             id="minus_sign",
             expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 5},
             formulas=MINUS_FORMULAS,
+            pending_on={
+                "circuitpy": "ErrorCode: the P1AM-200 has no doubles, so code.py keeps integer "
+                "steps exact, and - DS 0 stores +0.0 (Sam, 2026-11-27)"
+            },
             probe="what a minus sign gives before 0, Inf and NaN, and which order a CLICK "
             "applies to it with * and /",
         ),
