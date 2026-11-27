@@ -486,20 +486,34 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
-- **The sign of a zero in a product after a minus sign.** pyrung stores the zero sign that a CLICK stores in each
-  runtime (round b16, `math_range/minus_sign` and `zero_sum`). `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on
-  import. Their pairs need the 14 zero-sign rows that `PENDING_ZERO_SIGNS` lists, in a conformance part of their own.
-  `- ( DF1 ) / DF2` and `- ( DF1 ) MOD DF2` need an order probe. With 5.0 and 0.0 into a DF, +0.0 means that the
-  minus sign applies first.
+- **The sign of a zero in a product after a minus sign.** `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on import.
+  The readings show the sign of 0 * x only for x = 5.0, -5.0 and -1.0. Each gave the sign that a double gives.
+  The 9 rows that `PENDING_ZERO_SIGNS` lists need every value of their class. Sam decides whether one value stands for
+  its class. If it does, both decimal pairs join `SAME_VALUE_ON_PLAIN_OPERANDS`. No conformance case reads these rows.
+- **A hex minus sign before `*` or `/`.** `- 5h * DH1`, `- DH1 * DH2`, `- ( DH1 ) * DH2` and `- 5h / DH1` warn on
+  import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. For a hex `/` of a negative value,
+  see the next item.
+- **pyrung's hex `/` of a negative value differs from a CLICK's.** It affects each hex `/` whose dividend is below 0
+  and whose quotient has a fraction.
+  - With 1h in DH1, `( 0h - DH1 ) / 2h` stored FFFFh with SC43 on a CLICK (round b21, n4 and p4).
+  - `- DH1 / 2h`, `- ( DH1 ) / 2h` and `( 0h - DH1 ) / 2h` import with no warning. pyrung stores 0h with no SC43 for
+    each, on every backend.
+  - Two readings fit. The quotient rounds down, or the division works on 32 unsigned bits. Round b22 Part C reads
+    `( 0h - DH1 ) / 3h` and the same with MOD 3h. `/ 3h` stores FFFFh or 5555h, each with SC43.
+  - `test_imported_formula_stores_what_round_b21_read` holds b21-p4 and b21-n4 as strict xfails.
+  - CHANGELOG.md says hex `math()` truncates each division, as a CLICK does. That holds for positive values only.
+    Rewrite the line when the fix lands.
+- **A decimal plus before anything but a constant.** No reading shows one. The import keeps the plus, and warns
+  when the plus meets another operator. Round b22 Part B reads `+ DS1 * 2` and `+ ( DS1 - 3 ) * 2`.
+  - pyrung's export writes the plus with no space, such as `+DS1 * 2`. pyrung imports that text again. Round b22
+    Part B asks whether CLICK takes it.
 - **A Math pair read in one mode only.** The pair lists in `click/codegen/formula.py` have no mode. pyrung assumes
-  that one parser sets the order in both modes. Read a hex case of a pair read only in decimal, and the reverse:
-  - hex `DH1 MOD DH2 MOD DH3` with 7h, 5h and 3h stores 2h from the left and 1h from the right.
-  - decimal `DS1 / DS2 MOD 3` with 7 and 2, into a DF, stores 0.5 from the left and 3.5 from the right.
+  that one parser sets the order in both modes. Round b20 checked two pairs, MOD MOD in hex and `/` MOD in decimal.
+  Each ran left to right, as round b16 read it in the other mode. Most other pairs were read in one mode only.
 - **`math_range/minus_sign` and `zero_sum` need a CLICK run.** Their expectations changed to round b16's readings,
   so their hashes changed. Run them on a CLICK to confirm them at the new hashes.
-- **Two open questions about the formula parser.** The parser drops a unary `+`, and no reading shows whether CLICK
-  keeps it as a token. `pyrung.click` exports `parse_click_formula` and `Formula` but not the node classes, such as
-  `BinaryOp`. Export them if ClickNick needs to check a node's class.
+- **The formula parser's node classes.** `pyrung.click` exports `parse_click_formula` and `Formula` but not the node
+  classes, such as `BinaryOp`. Export them if ClickNick needs to check a node's class.
 - **A Math step past 2\*\*53 is rounded to a double.** The rounded value can land just past an exact corner, as in
   `13 ** (A + 15)`. No false domain was found (math-flags review, 2026-11-26).
 - **The jit declines a scan that calls a helper with a default argument.** Four CircuitPython helpers take

@@ -93,15 +93,15 @@ A pair joins a list again only when a reading shows every row of its entry in
 
 ``test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets`` in
 ``tests/click/test_click_formula.py`` generates the rows that each pair meets, and checks the
-table against them. Each row names the case and field that reads it, or says that no case
-reads it yet. No case of this group reads the rows that are left.
+table against them. Each row that is left has one value of its class read, by a field of
+this group or by a case of reading round b20. A row is read only when every value of its class
+is.
 
 ``by_zero`` also settles two pairs in ``formula.CONFIRMED_PAIRS``. ``- DF 5.0 / DF 0.0`` and
 ``- DF 5.0 MOD DF 0.0`` stored +0.0. Applied last, the minus sign would give -0.0. So a CLICK
-applies a minus sign before an address first, with ``/`` and with MOD. No case reads the
-same for a minus sign before a bracket. With DS1 = 5 and DS2 = 0, ``- ( DS1 ) / DS2`` gives
-+0.0 in one order and -0.0 in the other, and so does MOD. So no reading of a zero sign brings
-those two pairs back. Only a reading of their order does.
+applies a minus sign before an address first, with ``/`` and with MOD. In reading round b20,
+``- ( DF 5.0 ) / DF 0.0`` and ``- ( DF 5.0 ) MOD DF 0.0`` stored +0.0 too. So a minus sign
+before a bracket applies first as well. No case of this group reads those two formulas.
 
 The pairs of a minus sign with ``*`` also depend on these:
 

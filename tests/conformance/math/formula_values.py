@@ -27,6 +27,7 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
+    Plus,
     Pointer,
     RangeCall,
     operator_kind,
@@ -108,14 +109,15 @@ def click_steps(
     - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
       a negative divisor
     - a decimal step on Inf or NaN, which a DF can hold
-    - the sign of a decimal 0 that no reading shows (:data:`ZEROS_READ`), from a minus sign
-      before -0.0, a ``*``, ``/``, sum, MOD or ``^``, a division or MOD by zero, or SQRT of 0
-      or of a negative value
+    - the sign of a decimal 0 that no reading shows (:data:`ZEROS_READ`), from a ``*``,
+      ``/``, sum, MOD or ``^``, a division or MOD by zero, or SQRT of 0 or of a negative value
+      other than -5.0
     - a decimal step whose value passes the largest double or falls below the smallest
       normal double
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
     - a pointer
+    - a decimal plus before anything but a constant
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -177,14 +179,16 @@ class _Guard:
 
     def function(self, name: str, args: list[float]) -> float:
         # SQRT(4) is 2 (b15 u2 and u4). SQRT of a negative is 0 with SC46, and the rest of the
-        # formula runs (``math_terms/error_terms``). No reading shows the sign of that 0, or of
-        # SQRT of 0. Each other function was read at a few inputs only (``math_more/functions``,
+        # formula runs (``math_terms/error_terms``). SQRT ( -5.0 ) is +0.0 (b20 c14). No reading
+        # shows the sign of the 0 at another negative value, or of SQRT of 0. Each other
+        # function was read at a few inputs only (``math_more/functions``,
         # ``math_error/math_errors_do_not_stop``).
         if name != "SQRT" or self.hex_mode:
             raise Unread(f"{name} in a formula")
         (x,) = args
         if x <= 0:
-            self.unread_zero("SQRT", x)
+            if x != -5.0:
+                self.unread_zero("SQRT", x)
             # The rejoin rules suppose that SQRT of a negative value is +0.0, as pyrung's is.
             if x < 0:
                 self.flags.add("math_operation_error")
@@ -200,12 +204,6 @@ class _Guard:
         # unread.
         if not self.hex_mode and not all(math.isfinite(value) for value in values):
             raise Unread(f"a step on {values}")
-
-    def negate(self, value: float) -> None:
-        # A minus sign flips the sign bit, so - DF 0.0 and - DS 0 give -0.0
-        # (``math_range/minus_sign``). No reading shows a minus sign before -0.0.
-        if not self.hex_mode and value == 0 and _sign_bit(value):
-            self.unread_zero("-", value)
 
     def result(self, op: str, a: float, b: float, value: float) -> None:
         # A CLICK does not cut an intermediate value to the destination's size. It raises SC43
@@ -261,6 +259,10 @@ ZEROS_READ: tuple[tuple[str, float, float], ...] = (
     ("MOD", -0.0, 5.0),
     # ``math_range/by_zero``, reading round b16. Each gives +0.0.
     *((op, dividend, 0.0) for op in ("/", "MOD") for dividend in (5.0, -5.0, 0.0, -0.0)),
+    # Round b20, cases c01 to c12: each product of a zero with 0.0, -0.0, 5.0 or -5.0, in
+    # either order.
+    *(("*", zero, other) for zero in (0.0, -0.0) for other in (0.0, -0.0, 5.0, -5.0)),
+    *(("*", other, zero) for zero in (0.0, -0.0) for other in (5.0, -5.0)),
 )
 
 
@@ -279,7 +281,7 @@ def _zero_is_read(op: str, a: float, b: float) -> bool:
 def zero_sign_row(op: str, *operands: float) -> str:
     """Return the row of :data:`PENDING_ZERO_SIGNS` that the 0 of *op* on *operands* falls in.
 
-    *op* is a binary operator, ``-`` for a minus sign, or ``SQRT``.
+    *op* is a binary operator or ``SQRT``.
     """
     classes = [
         ("-0.0" if _sign_bit(value) else "+0.0") if value == 0 else ("+x" if value > 0 else "-x")
@@ -321,52 +323,39 @@ def unread_zero_signs(node: Formula, registers: dict[str, float]) -> set[str]:
     return recorder.rows
 
 
-#: The probe of a row of :data:`PENDING_ZERO_SIGNS` that no case of ``test_math_range.py`` reads.
-NO_PROBE = "no probe yet"
-
 _PRODUCTS = {
-    "- ( -0.0 )": NO_PROBE,
-    "+0.0 * +0.0": NO_PROBE,
-    "+0.0 * +x": NO_PROBE,
-    "+0.0 * -x": "minus_sign ErrorCode bit 4 (0 * -5 only)",
-    "+x * +0.0": NO_PROBE,
-    "-0.0 * +0.0": NO_PROBE,
-    "-0.0 * +x": NO_PROBE,
-    "-0.0 * -x": "zero_sum ErrorCode bit 1 (-0.0 * -5.0 only)",
-    "-x * +0.0": NO_PROBE,
+    "+0.0 * +x": "b20 c05 (0.0 * 5.0 only)",
+    "+0.0 * -x": "minus_sign ErrorCode bit 4 and b20 c09 (0 * -5 only)",
+    "+x * +0.0": "b20 c06 (5.0 * 0.0 only)",
+    "-0.0 * +x": "b20 c07 (-0.0 * 5.0 only)",
+    "-0.0 * -x": "zero_sum ErrorCode bit 1 and b20 c11 (-0.0 * -5.0 only)",
+    "-x * +0.0": "b20 c10 (-5.0 * 0.0 only)",
 }
 _PRODUCTS_BY_MINUS_ZERO = {
-    "+0.0 * -0.0": NO_PROBE,
-    "+x * -0.0": NO_PROBE,
-    "-0.0 * -0.0": NO_PROBE,
-    "-x * -0.0": NO_PROBE,
+    "+x * -0.0": "b20 c08 (5.0 * -0.0 only)",
+    "-x * -0.0": "b20 c12 (-5.0 * -0.0 only)",
 }
 #: The stand-in SQRT ( DS4 ) at -1 meets this row.
-_SQRT_OF_A_NEGATIVE = {"SQRT ( -x )": NO_PROBE}
+_SQRT_OF_A_NEGATIVE = {"SQRT ( -x )": "b20 c14 (SQRT ( -5.0 ) only)"}
 
 #: The zero signs that a decimal pair meets and that no reading shows, by the list that the
 #: pair would join again. A pair joins that list only when a reading shows every row of its
 #: entry. ``tests/click/test_click_formula.py`` generates the rows of each pair over the grid
 #: of that list, and checks that this table holds exactly those rows.
 #:
-#: A pair has no entry for a list that another difference keeps it out of. A minus sign
-#: before a bracket gives ``- ( 5 ) / 0`` and ``- ( 5 ) MOD 0`` the value +0.0 in one order
-#: and -0.0 in the other. So neither of those two pairs has an entry.
-#:
 #: A row is a step that gives 0, with a class for each operand:
 #:
 #: - ``+0.0`` and ``-0.0`` are the two zeros;
-#: - ``+x`` is a value above 0, and ``-x`` is a value below 0;
-#: - ``- ( -0.0 )`` is a minus sign before -0.0.
+#: - ``+x`` is a value above 0, and ``-x`` is a value below 0.
 #:
 #: The readings show +0.0 * -1.0 and -1.0 * +0.0 (``real_bits/minus_zero_math``,
 #: ``real_bits/minus_zero_shapes``). So in ``+0.0 * -x`` and ``-x * +0.0``, -x is a value
 #: below 0 other than -1.0.
 #:
-#: Each row names the probe in ``test_math_range.py`` that reads it, or :data:`NO_PROBE`. A
-#: probe that reads one value of ``+x`` or ``-x`` says which, such as ``(0 * -5 only)``.
-#: That row is read only when a reading or a ruling shows that every value of the class gives
-#: the same sign.
+#: Each row names the readings that show one value of its class: a probe in
+#: ``test_math_range.py``, or a case of reading round b20. Each says which value it read, such
+#: as ``(0.0 * 5.0 only)``. Every reading gave the sign that a double gives. A row is read only
+#: when a reading or a ruling shows that every value of the class gives the same sign.
 PENDING_ZERO_SIGNS: dict[str, dict[tuple[str, str], dict[str, str]]] = {
     "SAME_VALUE_ON_PLAIN_OPERANDS": {
         (NEGATE_ADDRESS, "*"): _PRODUCTS,
@@ -411,10 +400,18 @@ def _value(
         return guard.function(node.name, args)
     if isinstance(node, Negate):
         operand = _value(node.operand, hex_mode, registers, guard)
+        # A minus sign flips the sign bit. - DF 0.0 and - DS 0 give -0.0
+        # (``math_range/minus_sign``), and - DF -0.0 gives +0.0 (b20 c13).
         if guard is not None:
             guard.operands(operand)
-            guard.negate(operand)
         return -operand
+    if isinstance(node, Plus):
+        operand = _value(node.operand, hex_mode, registers, guard)
+        if guard is not None:
+            # The parse keeps a plus only in decimal mode, before anything but a constant. No
+            # reading shows one.
+            raise Unread("a decimal plus before anything but a constant")
+        return operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)
     b = _value(node.right, hex_mode, registers, guard)
@@ -510,6 +507,8 @@ def pyrung_expression(node: Formula, tags: Mapping[int, Any]) -> Any:
         return -(LiteralExpr(0) - inner)
     if isinstance(node, Negate):
         return -pyrung_expression(node.operand, tags)
+    if isinstance(node, Plus):
+        return +pyrung_expression(node.operand, tags)
     if isinstance(node, Call):
         name = _CLICK_FUNC_TO_PYTHON[node.name]
         function = abs if name == "abs" else getattr(expression, name)
@@ -525,7 +524,7 @@ def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
 
     A minus sign on the right of an operator has no other order, so it yields nothing.
     """
-    if isinstance(node, Negate):
+    if isinstance(node, (Negate, Plus)):
         for parent, child, child_is_left, operand in regroupings(node.operand):
             yield parent, child, child_is_left, replace(node, operand=operand)
         return
@@ -538,9 +537,9 @@ def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
     op, left, right = node.op, node.left, node.right
     if isinstance(left, BinaryOp) and not left.bracketed:
         yield op, left.op, True, BinaryOp(left.op, left.left, BinaryOp(op, left.right, right))
-    if isinstance(left, Negate) and not left.bracketed:
+    if isinstance(left, (Negate, Plus)) and not left.bracketed:
         kind = operator_kind(left)
         assert kind is not None
-        yield op, kind, True, Negate(BinaryOp(op, left.operand, right))
+        yield op, kind, True, type(left)(BinaryOp(op, left.operand, right))
     if isinstance(right, BinaryOp) and not right.bracketed:
         yield op, right.op, False, BinaryOp(right.op, BinaryOp(op, left, right.left), right.right)
