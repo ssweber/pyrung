@@ -565,7 +565,7 @@ def _int_bound(expr: Any) -> float:
 
     In a Math, a step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl``,
     as in the core's ``_calc_step``.  A float result needs no bound, so its bound is 0.
-    That 0 is no bound on ``int()`` of the float, so a bit op reads it as no bound
+    But ``int()`` of a float can be near 2 ** 1024, so a bit op on a float has no bound
     (:func:`_reads_int_of_float`).
     """
     if _reads_int_of_float(expr):
