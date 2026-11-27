@@ -25,6 +25,7 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
+    Plus,
     Pointer,
     RangeCall,
     operator_kind,
@@ -78,8 +79,10 @@ _STORES_READ: dict[str, tuple[float, float]] = {
 _HEX_READ = 0xFDA93880
 
 #: The lowest hex value that a reading shows a CLICK holding whole inside a formula.
-#: With FFFFh and FF00h, - DH1 * DH2 MOD 7h is FFFBh. A minus sign before an address applies
-#: first, so the product -FEFF0100h stays whole before the MOD (b22 c_mulr7).
+#: With FFFFh and FF00h, - DH1 * DH2 MOD 7h is FFFBh (b22 c_mulr7). If the minus sign applies
+#: first, the product -FEFF0100h stays whole before the MOD. No reading settles that order for
+#: a hex minus sign before an address and ``*``. The bound derives it from b22 c_div3, where a
+#: minus sign before a constant applies before ``/``, which sits in the same tier as ``*``.
 _HEX_READ_BELOW = -0xFEFF0100
 
 
@@ -117,6 +120,7 @@ def click_steps(
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
     - a pointer
+    - a decimal plus before a function, a pointer, PI or another sign
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -378,6 +382,13 @@ def _value(
         if guard is not None:
             guard.operands(operand)
         return -operand
+    if isinstance(node, Plus):
+        operand = _value(node.operand, hex_mode, registers, guard)
+        if guard is not None:
+            # The parse keeps a plus only in decimal mode, before a function, a pointer, PI or
+            # another sign. No reading puts a plus there.
+            raise Unread("a decimal plus before a function, a pointer, PI or another sign")
+        return operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)
     b = _value(node.right, hex_mode, registers, guard)
@@ -470,6 +481,8 @@ def pyrung_expression(node: Formula, tags: Mapping[int, Any]) -> Any:
         return -(LiteralExpr(0) - inner)
     if isinstance(node, Negate):
         return -pyrung_expression(node.operand, tags)
+    if isinstance(node, Plus):
+        return +pyrung_expression(node.operand, tags)
     if isinstance(node, Call):
         name = _CLICK_FUNC_TO_PYTHON[node.name]
         function = abs if name == "abs" else getattr(expression, name)
@@ -485,7 +498,7 @@ def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
 
     A minus sign on the right of an operator has no other order, so it yields nothing.
     """
-    if isinstance(node, Negate):
+    if isinstance(node, (Negate, Plus)):
         for parent, child, child_is_left, operand in regroupings(node.operand):
             yield parent, child, child_is_left, replace(node, operand=operand)
         return
@@ -498,9 +511,9 @@ def regroupings(node: Formula) -> Iterator[tuple[str, str, bool, Formula]]:
     op, left, right = node.op, node.left, node.right
     if isinstance(left, BinaryOp) and not left.bracketed:
         yield op, left.op, True, BinaryOp(left.op, left.left, BinaryOp(op, left.right, right))
-    if isinstance(left, Negate) and not left.bracketed:
+    if isinstance(left, (Negate, Plus)) and not left.bracketed:
         kind = operator_kind(left)
         assert kind is not None
-        yield op, kind, True, Negate(BinaryOp(op, left.operand, right))
+        yield op, kind, True, type(left)(BinaryOp(op, left.operand, right))
     if isinstance(right, BinaryOp) and not right.bracketed:
         yield op, right.op, False, BinaryOp(right.op, BinaryOp(op, left, right.left), right.right)

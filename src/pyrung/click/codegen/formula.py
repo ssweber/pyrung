@@ -50,11 +50,30 @@ NEGATE_CONSTANT = "a minus sign before a constant"
 NEGATE_BRACKET = "a minus sign before a bracket"
 NEGATE_FUNCTION = "a minus sign before a function"
 
-#: A minus sign before a pointer, before PI and before another minus sign. Each is an operator
-#: of its own, because no reading has run one yet.
+#: A minus sign before a pointer, before PI, before another minus sign and before a plus sign.
+#: Each is an operator of its own, because no reading has run one yet.
 NEGATE_POINTER = "a minus sign before a pointer"
 NEGATE_PI = "a minus sign before PI"
 NEGATE_MINUS = "a minus sign before another minus sign"
+NEGATE_PLUS = "a minus sign before a plus sign"
+
+#: A plus sign, as the pair lists name it. In hex mode a plus changes no value or flag. Round
+#: b20 read it before 5h, and round b21 read it before a bracket and before 0h. The plus did
+#: not cut its operand to 16 bits in any case that a CLICK ran (b21). A plus that does not cut
+#: changes nothing in any grouping. So the parse drops every hex plus. No round read one
+#: before an address or in a function. The drop there rests on b21's readings.
+#:
+#: In decimal mode CLICK stores a plus before a constant in the constant (H+5). The parse
+#: drops that plus. It also drops a plus before an address or a bracket, which changed
+#: nothing in each case that a CLICK ran:
+#:
+#: - With 5 in DS401, ``+ DS401 * 2`` and ``+ ( DS401 - 3 ) * 2`` stored 10 and 4 (round b22).
+#: - With -0.0 in DF110, ``+ DF110`` stored -0.0 (round b24 z1). So the plus is not 0 + x,
+#:   which would store +0.0.
+#:
+#: No reading puts a decimal plus before a function, a pointer, PI or another sign. The parse
+#: keeps that plus as an operator.
+PLUS_SIGN = "a plus sign"
 
 #: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
 #: readings. Two operators meet when one is an operand of the other, and the operand has no
@@ -78,7 +97,7 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "-", "b12"),
     ("*", "*", "b16"),
     ("*", "/", "b11, b12, b15"),
-    ("*", "MOD", "b10, b11, b15, b22"),
+    ("*", "MOD", "b10, b11, b15, b22, b24"),
     ("*", "AND", "b11"),
     ("*", "OR", "b16"),
     ("*", "XOR", "b16"),
@@ -151,6 +170,7 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (
     ("- DH431 * DH432", True),
     ("- FFFFh * FF00h MOD 7h", True),
     ("- DH431 * DH432 MOD 7h", True),
+    ("- DH1 * DH2 MOD 7h", True),
 )
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
@@ -305,6 +325,13 @@ class Negate(_Node):
 
 
 @dataclass(frozen=True)
+class Plus(_Node):
+    """A plus sign in decimal mode, before a function, a pointer, PI or another sign."""
+
+    operand: Formula
+
+
+@dataclass(frozen=True)
 class BinaryOp(_Node):
     """A binary operation. *op* is CLICK's spelling: ``+ - * / ^ MOD AND OR XOR``."""
 
@@ -313,7 +340,7 @@ class BinaryOp(_Node):
     right: Formula
 
 
-Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | BinaryOp
+Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | Plus | BinaryOp
 """A node of the tree that :func:`parse_click_formula` returns."""
 
 
@@ -332,10 +359,11 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     """
     # The pairs that a formula needs are those of each bracket scope: the formula outside
     # brackets, the inside of one bracket, or one argument of a function. A minus sign is an
-    # operator of one of the NEGATE_* kinds. It applies before every operator to its left in
-    # its scope, so it pairs only with the operators to its right. A pair in SAME_VALUE_PAIRS
-    # needs no reading. A pair in SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps
-    # have plain operands. A formula with the tree of one in READ_FORMULAS needs none.
+    # operator of one of the NEGATE_* kinds, and a plus sign is a PLUS_SIGN. Each
+    # applies before every operator to its left in its scope, so it pairs only with the
+    # operators to its right. A pair in SAME_VALUE_PAIRS needs no reading. A pair in
+    # SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps have plain operands. A
+    # formula with the tree of one in READ_FORMULAS needs none.
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
 
@@ -358,7 +386,7 @@ def parse_with_unconfirmed_pairs(
     for steps in _scope_steps(tree):
         for index, first_step in enumerate(steps):
             for second_step in steps[index + 1 :]:
-                if isinstance(second_step, Negate):
+                if isinstance(second_step, (Negate, Plus)):
                     continue
                 first, second = operator_kind(first_step), operator_kind(second_step)
                 assert first is not None and second is not None
@@ -382,6 +410,8 @@ def operator_kind(node: Formula) -> str | None:
     """
     if isinstance(node, BinaryOp):
         return node.op
+    if isinstance(node, Plus):
+        return PLUS_SIGN
     if not isinstance(node, Negate):
         return None
     operand = node.operand
@@ -397,6 +427,8 @@ def operator_kind(node: Formula) -> str | None:
         return NEGATE_PI
     if isinstance(operand, Number):
         return NEGATE_CONSTANT
+    if isinstance(operand, Plus):
+        return NEGATE_PLUS
     return NEGATE_MINUS
 
 
@@ -413,7 +445,7 @@ def plain_operands(first: Formula, second: Formula, *, hex_mode: bool) -> bool:
     for step in (first, second):
         if isinstance(step, BinaryOp):
             operands: tuple[Formula, ...] = (step.left, step.right)
-        elif isinstance(step, Negate):
+        elif isinstance(step, (Negate, Plus)):
             operands = (step.operand,)
         else:
             return False
@@ -434,7 +466,7 @@ def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:
     them, each with whether it is a sign before its operand.
     """
     for steps in _scope_steps(tree):
-        yield [(str(operator_kind(step)), isinstance(step, Negate)) for step in steps]
+        yield [(str(operator_kind(step)), isinstance(step, (Negate, Plus))) for step in steps]
 
 
 def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
@@ -451,7 +483,7 @@ def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
             walk(node.left)
             steps.append(node)
             walk(node.right)
-        elif isinstance(node, Negate):
+        elif isinstance(node, (Negate, Plus)):
             steps.append(node)
             walk(node.operand)
         elif isinstance(node, Call):
@@ -545,16 +577,22 @@ class _Parser:
     def _unary(self) -> Formula:
         token = self._peek()
         if token == ("punct", "+"):
-            # The parse drops every plus sign. Each formula that a CLICK was read running with
-            # a plus stored the value and flags of the formula without the plus. In hex mode
-            # the plus did not cut its operand to 16 bits in any case it ran: with 1h in DH1,
-            # + ( 0h - DH1 ) + 1h stored 0h with no SC43 (round b21). In decimal mode CLICK
-            # stores a plus before a constant in the constant (+5 is H+5, round b20). With 5 in
-            # DS1, + DS1 * 2 and + ( DS1 - 3 ) * 2 stored 10 and 4 (round b22). No reading
-            # puts a plus before a function, a pointer or PI, or before a DF that holds -0.0.
-            # The drop there is pyrung's assumption, based on these readings.
             self.pos += 1
-            return self._unary()
+            after = self._peek()
+            if self.hex_mode:
+                # A hex plus does not cut its operand. It changes nothing (see PLUS_SIGN).
+                # With 1h in DH1, + ( 0h - DH1 ) + 1h stores 0h with no SC43, as
+                # ( 0h - DH1 ) + 1h does (round b21).
+                return self._unary()
+            if after is not None and after[0] in ("number", "hex"):
+                # A decimal CLICK stores a plus before a constant in the constant (+5 is H+5).
+                self.pos += 1
+                return self._number(after)
+            operand = self._unary()
+            if isinstance(operand, Address) or operand.bracketed:
+                # A plus before an address or a bracket changes nothing (see PLUS_SIGN).
+                return operand
+            return Plus(operand)
         if token == ("punct", "-"):
             self.pos += 1
             after = self._peek()
