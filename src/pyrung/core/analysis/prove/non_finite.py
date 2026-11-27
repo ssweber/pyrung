@@ -34,10 +34,18 @@ cannot bound, may hold NaN or Inf.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.reverse_edges import literal_value_from_value, tag_name_from_value
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    TagArg,
+    Value,
+)
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
@@ -188,13 +196,17 @@ class _Bounds:
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 return _converted(instr.convert)
-            return self.value(as_authored(instr.source))
+            return self.operand(instr.source)
         if isinstance(instr, FillInstruction):
-            return self.value(as_authored(instr.value))
+            return self.operand(instr.value)
         if isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 return _converted(instr.convert)
-            return self.source_range(as_authored(instr.source))
+            match instr.source:
+                case RangeArg(span=span) | PointerRangeArg(span=span):
+                    return self.source_range(span)
+                case _:
+                    assert_never(instr.source)
         if isinstance(instr, CalcInstruction):
             if instr.mode == "hex":
                 return (0, 65535)
@@ -244,6 +256,20 @@ class _Bounds:
         if any(self.reals.get(name, _FINITE) is None for name in elements):
             return None
         return _FINITE
+
+    def operand(self, source: Value) -> Bounds | None:
+        """Return the values the source of a copy or a fill can give."""
+        match source:
+            case TagArg(tag=tag):
+                return self.tag(tag.name)
+            case PointerArg(ref=ref):
+                return self.indirect(ref)
+            case ConstArg(value=value):
+                return self.value(value)
+            case ExprArg(expr=expr):
+                return self.value(expr)
+            case _:
+                assert_never(source)
 
     def value(self, node: Any) -> Bounds | None:
         """Return the values the operand or formula *node* can give."""

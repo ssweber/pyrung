@@ -40,7 +40,7 @@ import operator
 import os
 import sys
 import time
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 from pyrung.core.analysis.affine import (
     extract_forward_affine as _extract_forward_affine,
@@ -73,7 +73,18 @@ from pyrung.core.instruction.conversions import (
     calc_store_transform,
     copy_store_transform,
 )
-from pyrung.core.instruction.operands import as_authored, held
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+    parse_value,
+)
+from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import RUNTIME_VALUES, SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import TagType, tag_written_from_outside
@@ -92,6 +103,7 @@ from .absorb import (
     _collect_done_acc_pairs,
     _collect_progress_source_kinds,
     _drum_flag_without_its_time,
+    _field_tag_name,
     _find_comparison_absorptions,
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
@@ -269,16 +281,12 @@ def _collect_implicit_edge_condition_exprs(
     def _in_scope(instr: Any) -> bool:
         if upstream is None:
             return True
+        # A drum's outputs field holds a tuple of tags.
         for field_name in getattr(type(instr), "_writes", ()):
-            targets = as_authored(getattr(instr, field_name, None))
-            if targets is None:
-                continue
-            if hasattr(targets, "__iter__") and not isinstance(targets, str):
-                for t in map(as_authored, targets):
-                    if hasattr(t, "name") and t.name in upstream:
-                        return True
-            elif hasattr(targets, "name") and targets.name in upstream:
-                return True
+            value = getattr(instr, field_name)
+            for target in value if isinstance(value, tuple) else (value,):
+                if any(name in upstream for name in _fixed_tag_names(target)):
+                    return True
         return False
 
     def _walk(instructions: list[Any]) -> None:
@@ -419,49 +427,36 @@ def _comparison_influencing_tags(
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+    from pyrung.core.validation._common import walk_instructions
 
     target_to_sources: dict[str, set[str]] = {}
     for instr in walk_instructions(program):
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _tag_name_from_value(as_authored(instr.source))
+            source_name = _source_tag_name(instr.source)
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(as_authored(instr.dest))
-            if not target_names:
-                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
-            for tn in target_names:
+            for tn in _operand_tag_names(instr.dest):
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, FillInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _tag_name_from_value(as_authored(instr.value))
+            source_name = _source_tag_name(instr.value)
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(as_authored(instr.dest))
-            if not target_names:
-                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
-            for tn in target_names:
+            for tn in _operand_tag_names(instr.dest):
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _resolve_tag_names(as_authored(instr.source))
-            dest_names = _resolve_tag_names(as_authored(instr.dest))
-            if not source_names:
-                source_names = _expand_indirect_tag_names(as_authored(instr.source))
-            if not dest_names:
-                dest_names = _expand_indirect_tag_names(as_authored(instr.dest))
+            source_names = _operand_tag_names(instr.source)
+            dest_names = _operand_tag_names(instr.dest)
             if source_names and dest_names and len(source_names) == len(dest_names):
                 for src, dst in zip(source_names, dest_names, strict=True):
                     target_to_sources.setdefault(dst, set()).add(src)
         elif isinstance(instr, CalcInstruction):
-            target_name = _tag_name_from_value(as_authored(instr.dest))
-            if target_name is None:
-                continue
+            target_name = instr.dest.tag.name
             edge = _calc_reverse_edge(instr.expression)
             if edge is not None:
                 source_name, _ = edge
@@ -471,10 +466,17 @@ def _comparison_influencing_tags(
             # a comparison reads it (``_tag_compared_names``).  The slots of an indexed
             # count stay constant storage, as above.  Its index does not.
             count_index: set[str] = set()
-            count = held(instr.count)
-            count_names = _compared_value_names(count, graph, count_index)
-            if not isinstance(count, (IndirectRef, IndirectExprRef)):
-                influential.update(count_names)
+            match instr.count:
+                case TagArg(tag=tag):
+                    influential.update(_compared_value_names(tag, graph, count_index))
+                case PointerArg(ref=ref):
+                    _compared_value_names(ref, graph, count_index)
+                case ConstArg(value=value):
+                    influential.update(_compared_value_names(value, graph, count_index))
+                case ExprArg(expr=expr):
+                    influential.update(_compared_value_names(expr, graph, count_index))
+                case _:
+                    assert_never(instr.count)
             influential.update(count_index)
 
     changed = True
@@ -558,24 +560,30 @@ def _compared_value_names(
     return found
 
 
-def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
+def _normalize_literal_write_value(source: Value, target: Tag) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
-    from pyrung.core.expression import Expression
-    from pyrung.core.instruction.conversions import (
-        _store_copy_value_to_tag_type,
-        copy_source_kind,
-    )
-    from pyrung.core.tag import ImmediateRef, Tag
+    from pyrung.core.instruction.conversions import copy_source_kind
 
-    value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
-    source = copy_source_kind(value)
-    if isinstance(value, Tag):
-        if value.readonly:
-            value = value.default
-        else:
+    match source:
+        case TagArg(tag=tag) if tag.readonly:
+            value = tag.default
+        case ConstArg(value=value):
+            pass
+        case TagArg() | PointerArg() | ExprArg():
             return _NO_LITERAL_WRITE
-    if isinstance(value, Expression):
-        return _NO_LITERAL_WRITE
+        case _:
+            assert_never(source)
+    return _stored_literal(value, copy_source_kind(source), target)
+
+
+def _stored_literal(value: Any, source: Any, target: Tag) -> Any | object:
+    """Return the value that a Copy of the constant *value* stores in *target*.
+
+    *source* is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the
+    copy's source.  Return ``_NO_LITERAL_WRITE`` when the copy stores no single constant.
+    """
+    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+
     if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE
     # A Copy of "ABC" into a CHAR writes one character into each of the next three.
@@ -594,11 +602,11 @@ def _literal_write_values(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        raw_value = as_authored(instr.source)
+        source = instr.source
     elif isinstance(instr, FillInstruction):
         if instr.convert is not None:
             return None
-        raw_value = as_authored(instr.value)
+        source = instr.value
     else:
         return None
 
@@ -607,7 +615,7 @@ def _literal_write_values(
         target = tags.get(target_name)
         if target is None:
             return None
-        stored = _normalize_literal_write_value(raw_value, target)
+        stored = _normalize_literal_write_value(source, target)
         if stored is _NO_LITERAL_WRITE:
             return None
         values[target_name] = stored
@@ -698,7 +706,7 @@ def _hop_affine_index(
 
 
 def _indirect_constant_table_index(
-    source: Any,
+    source: Value,
     graph: ProgramGraph,
     writer_instrs: dict[str, list[Any]],
     literal_values: dict[str, set[Any]],
@@ -720,13 +728,14 @@ def _indirect_constant_table_index(
     (``IndirectExprRef`` sources punt, matching the scope of
     :func:`_domain_from_indirect_source`.)
     """
-    from pyrung.core.memory_block import IndirectRef
-
-    if not isinstance(source, IndirectRef):
-        return None
-    idx_tag = getattr(source.pointer, "name", None)
-    if idx_tag is None:
-        return None
+    match source:
+        case PointerArg(ref=IndirectRef() as ref):
+            pass
+        case PointerArg() | TagArg() | ConstArg() | ExprArg():
+            return None
+        case _:
+            assert_never(source)
+    idx_tag = ref.pointer.name
 
     root, scale, offset = _hop_affine_index(idx_tag, writer_instrs)
 
@@ -738,7 +747,7 @@ def _indirect_constant_table_index(
     if not domain:
         return None
 
-    block = source.block
+    block = ref.block
     writers = graph.writers_of
     for value in domain:
         if isinstance(value, bool) or not isinstance(value, int):
@@ -746,7 +755,7 @@ def _indirect_constant_table_index(
         addr = scale * value + offset
         if addr < block.start or addr > block.end:
             continue
-        slot = block._effective_slot_name(addr)
+        slot = block._effective_slot_name(addr)  # ty: ignore[invalid-argument-type]
         if (
             slot in writers
             or graph.unlisted_writers_at(block, int(addr))
@@ -777,7 +786,7 @@ def _compute_stepping_tags(
     literal_values: dict[str, set[Any]] = {}
     copy_targets: dict[str, str] = {}
     writer_instrs: dict[str, list[Any]] = {}
-    indirect_pending: list[tuple[str, Any]] = []
+    indirect_pending: list[tuple[str, Value]] = []
 
     for instr in walk_instructions(program):
         targets = _all_write_targets(instr)
@@ -794,17 +803,17 @@ def _compute_stepping_tags(
                     arithmetic.add(target_name)
 
             if isinstance(instr, CalcInstruction):
-                if getattr(
-                    as_authored(instr.dest), "name", None
-                ) == target_name and _expr_reads_tag(instr.expression, target_name):
+                if instr.dest.tag.name == target_name and _expr_reads_tag(
+                    instr.expression, target_name
+                ):
                     arithmetic.add(target_name)
 
             if isinstance(instr, CopyInstruction) and instr.convert is None:
-                source_name = _tag_name_from_value(as_authored(instr.source))
+                source_name = _source_tag_name(instr.source)
                 if source_name is not None and source_name != target_name:
                     copy_targets[target_name] = source_name
                 elif source_name is None:
-                    indirect_pending.append((target_name, as_authored(instr.source)))
+                    indirect_pending.append((target_name, instr.source))
 
         lit = _literal_write_values(instr, graph.tags)
         if lit is not None:
@@ -903,7 +912,7 @@ def _domain_for_source_tag(
 
 
 def _domain_from_indirect_source(
-    indirect: Any,
+    indirect: IndirectRef,
     target: Tag,
     graph: ProgramGraph,
     known_domains: dict[str, tuple[Any, ...]],
@@ -928,10 +937,6 @@ def _domain_from_indirect_source(
     the source unresolved.  A write through a pointer that lists no targets
     counts as a writer with no domain (``ProgramGraph.unlisted_writers_of``).
     """
-    from pyrung.core.memory_block import IndirectRef
-
-    if not isinstance(indirect, IndirectRef):
-        return None
     block = indirect.block
     pointer = indirect.pointer
 
@@ -975,7 +980,7 @@ def _domain_from_indirect_source(
 
 
 def _domain_from_copy_like_value(
-    raw_value: Any,
+    source: Value | Span,
     target: Tag,
     graph: ProgramGraph,
     all_exprs: list[Expr],
@@ -993,7 +998,24 @@ def _domain_from_copy_like_value(
     """
     from pyrung.core.instruction.conversions import copy_source_kind
 
-    source_tag_name = _tag_name_from_value(raw_value)
+    source_tag_name: str | None = None
+    literal: Any = None
+    pointer: IndirectRef | None = None
+    match source:
+        case TagArg(tag=tag):
+            source_tag_name = tag.name
+        case ExprArg(expr=expr):
+            source_tag_name = _tag_name_from_value(expr)
+            literal = _literal_value_from_value(expr)
+        case ConstArg(value=value):
+            literal = _literal_value_from_value(value)
+        case PointerArg(ref=IndirectRef() as ref):
+            pointer = ref
+        case PointerArg() | RangeArg() | PointerRangeArg():
+            pass
+        case _:
+            assert_never(source)
+
     if source_tag_name is not None:
         # An input Real has its input domain.  Storing it into another type gives that
         # domain plus the values that a NaN or an Inf stores: 0, or the end of the type.
@@ -1014,26 +1036,27 @@ def _domain_from_copy_like_value(
         if domain is None:
             return None
         if not stores_input:
-            return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+            return _stored_domain(domain, copy_source_kind(source), target, calc_mode)
         domain = (*domain, math.nan, math.inf, -math.inf)
-        stored = _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+        stored = _stored_domain(domain, copy_source_kind(source), target, calc_mode)
         if stored is None or any(isinstance(v, float) and not math.isfinite(v) for v in stored):
             return None
         return stored
 
-    literal = _literal_value_from_value(raw_value)
     if literal is not None:
         if calc_mode is not None:
             return _stored_domain((literal,), None, target, calc_mode)
-        stored = _normalize_literal_write_value(literal, target)
+        stored = _stored_literal(literal, copy_source_kind(literal), target)
         if stored is _NO_LITERAL_WRITE:
             return None
         return (stored,)
 
-    domain = _domain_from_indirect_source(raw_value, target, graph, known_domains, non_finite)
+    if pointer is None:
+        return None
+    domain = _domain_from_indirect_source(pointer, target, graph, known_domains, non_finite)
     if domain is None:
         return None
-    return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+    return _stored_domain(domain, copy_source_kind(source), target, calc_mode)
 
 
 def _stored_domain(
@@ -1250,7 +1273,7 @@ def _domain_from_calc_expression(
     from pyrung.core.expression import BinaryExpr
 
     direct = _domain_from_copy_like_value(
-        expression,
+        parse_value(expression),
         target,
         graph,
         all_exprs,
@@ -1353,12 +1376,12 @@ def _domain_from_drum_instruction(
 ) -> tuple[Any, ...] | None:
     """Infer target domain for drum instruction outputs."""
     step_count = len(instr.pattern)
-    if target_name == as_authored(instr.current_step).name:
+    if target_name == instr.current_step.tag.name:
         return tuple(range(1, step_count + 1))
-    if target_name == as_authored(instr.completion_flag).name:
+    if target_name == instr.completion_flag.tag.name:
         return (False, True)
-    for out_tag in map(as_authored, instr.outputs):
-        if target_name == out_tag.name:
+    for output in instr.outputs:
+        if target_name == output.tag.name:
             return (False, True)
     return None
 
@@ -1382,14 +1405,17 @@ def _domain_from_search_instruction(
     target_name: str,
 ) -> tuple[Any, ...] | None:
     """Infer target domain for search instruction outputs."""
-    if target_name == as_authored(instr.found).name:
+    if target_name == instr.found.tag.name:
         return (False, True)
-    if target_name == as_authored(instr.result).name:
-        from pyrung.core.memory_block import BlockRange
-
-        search_range = as_authored(instr.search_range)
-        if isinstance(search_range, BlockRange):
-            return (-1, *range(search_range.start, search_range.end + 1))
+    if target_name == instr.result.tag.name:
+        search_range: Span = instr.search_range
+        match search_range:
+            case RangeArg(span=span):
+                return (-1, *range(span.start, span.end + 1))
+            case PointerRangeArg():
+                return None
+            case _:
+                assert_never(search_range)
     return None
 
 
@@ -1403,20 +1429,11 @@ def _domain_from_blockcopy(
     With an indexed window on either side (``DS.select(Ptr, Ptr + 1)``) the
     position is unknown, so the target takes any source element's value.
     """
-    from pyrung.core.memory_block import IndirectBlockRange
-    from pyrung.core.validation._common import _resolve_tag_names
-
-    source_names = _resolve_tag_names(as_authored(instr.source)) or _expand_indirect_tag_names(
-        as_authored(instr.source)
-    )
-    dest_names = _resolve_tag_names(as_authored(instr.dest)) or _expand_indirect_tag_names(
-        as_authored(instr.dest)
-    )
+    source_names = _operand_tag_names(instr.source)
+    dest_names = _operand_tag_names(instr.dest)
     if not dest_names or target_name not in dest_names:
         return ()
-    if isinstance(as_authored(instr.source), IndirectBlockRange) or isinstance(
-        as_authored(instr.dest), IndirectBlockRange
-    ):
+    if _has_pointers(instr.source) or _has_pointers(instr.dest):
         if not source_names or any(name not in known_domains for name in source_names):
             return None
         values = {value for name in source_names for value in known_domains[name]}
@@ -1458,7 +1475,7 @@ def _domain_from_write_instruction(
         if instr.convert is not None:
             return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
-            as_authored(instr.source),
+            instr.source,
             target,
             graph,
             all_exprs,
@@ -1472,7 +1489,7 @@ def _domain_from_write_instruction(
         if instr.convert is not None:
             return _domain_from_copy_convert(instr)
         return _domain_from_copy_like_value(
-            as_authored(instr.value),
+            instr.value,
             target,
             graph,
             all_exprs,
@@ -1488,11 +1505,18 @@ def _domain_from_write_instruction(
         domain = _domain_from_blockcopy(instr, target_name, known_domains)
         if not domain:
             return domain
-        source = getattr(getattr(as_authored(instr.source), "block", None), "type", None)
-        return None if source is None else _stored_domain(domain, source, target)
+        match instr.source:
+            # This reader has never modelled an immediate() source, so it returns no
+            # domain for one.
+            case RangeArg(span=span, immediate=False) | PointerRangeArg(span=span):
+                return _stored_domain(domain, span.block.type, target)
+            case RangeArg():
+                return None
+            case _:
+                assert_never(instr.source)
 
     if isinstance(instr, CalcInstruction):
-        if as_authored(instr.dest).name != target_name:
+        if instr.dest.tag.name != target_name:
             return None
         return _domain_from_calc_expression(
             instr.expression,
@@ -1531,7 +1555,7 @@ def _is_monotone_self_feed_calc(instr: Any, target_name: str) -> bool:
         return False
     if getattr(instr, "oneshot", False):
         return False
-    if getattr(as_authored(instr.dest), "name", None) != target_name:
+    if instr.dest.tag.name != target_name:
         return False
     fwd = _extract_forward_offset(instr)
     return fwd is not None and fwd[0] == target_name and fwd[1] != 0
@@ -1818,9 +1842,8 @@ def collect_produced_value_domains(
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.memory_block import IndirectRef
     from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+    from pyrung.core.validation._common import walk_instructions
 
     from .passes import _collect_receive_dest_names
 
@@ -1863,30 +1886,37 @@ def collect_produced_value_domains(
 
     def dependencies_are_known(instr: Any, target_name: str) -> bool:
         """Prevent write helpers from falling back to comparison-derived bounds."""
-        raw: Any | None = None
+        source: Value | None = None
         if isinstance(instr, CopyInstruction):
-            raw = as_authored(instr.source)
+            source = instr.source
         elif isinstance(instr, FillInstruction):
-            raw = as_authored(instr.value)
+            source = instr.value
 
-        if raw is not None:
-            source_name = _tag_name_from_value(raw)
+        if source is not None:
+            source_name = _source_tag_name(source)
             if source_name is not None:
                 # An identity self-copy only retains the already-accounted-for
                 # value; it is not an unknown producer.
                 return source_name == target_name or source_name in known
-            if isinstance(raw, IndirectRef):
-                pointer_name = getattr(raw.pointer, "name", None)
-                return pointer_name is not None and pointer_name in known
             # A literal has no dependency.  Other indirect/expression forms punt.
-            return _literal_value_from_value(raw) is not None
+            match source:
+                case PointerArg(ref=IndirectRef(pointer=pointer)):
+                    return pointer.name in known
+                case PointerArg() | TagArg():
+                    return False
+                case ConstArg(value=value):
+                    return _literal_value_from_value(value) is not None
+                case ExprArg(expr=expr):
+                    return _literal_value_from_value(expr) is not None
+                case _:
+                    assert_never(source)
 
         if isinstance(instr, CalcInstruction):
             refs = _expr_tag_names(instr.expression)
             return refs is not None and target_name not in refs and refs <= known.keys()
 
         if isinstance(instr, BlockCopyInstruction):
-            sources = _resolve_tag_names(as_authored(instr.source))
+            sources = _fixed_tag_names(instr.source)
             return bool(sources) and set(sources) <= known.keys()
 
         # Drums, searches, and converting copies have intrinsic finite domains;
@@ -1910,13 +1940,9 @@ def collect_produced_value_domains(
                     complete = False
                     break
                 # A self-copy contributes no new value beyond retention.
-                if isinstance(instr, (CopyInstruction, FillInstruction)):
-                    raw = (
-                        as_authored(instr.source)
-                        if isinstance(instr, CopyInstruction)
-                        else as_authored(instr.value)
-                    )
-                    if _tag_name_from_value(raw) == target_name:
+                if isinstance(instr, CopyInstruction | FillInstruction):
+                    source = instr.source if isinstance(instr, CopyInstruction) else instr.value
+                    if _source_tag_name(source) == target_name:
                         continue
                 domain = _domain_from_write_instruction(
                     instr,
@@ -1950,35 +1976,90 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
     back to already-materialized tags in the block (avoids forcing creation
     of all block elements in large blocks).  Past 1000 elements that is none.
     """
-    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
-
-    if isinstance(dest, IndirectRef):
-        block = dest.block
-        lo = block.start
-        hi = block.end
-        ptr = dest.pointer
-        if ptr.min is not None:
-            lo = max(lo, int(ptr.min))
-        if ptr.max is not None:
-            hi = min(hi, int(ptr.max))
-        if lo > hi:
+    match dest:
+        case IndirectRef(block=block, pointer=ptr):
+            lo = block.start
+            hi = block.end
+            if ptr.min is not None:
+                lo = max(lo, int(ptr.min))
+            if ptr.max is not None:
+                hi = min(hi, int(ptr.max))
+            if lo > hi:
+                return []
+            if ptr.choices is not None:
+                addrs = sorted(int(a) for a in ptr.choices if lo <= int(a) <= hi)
+                return [block._get_tag(addr).name for addr in addrs]
+            size = hi - lo + 1
+            if size > 1000:
+                return []
+            return [block._get_tag(addr).name for addr in range(lo, hi + 1)]
+        case IndirectBlockRange(block=block) | IndirectExprRef(block=block):
+            size = block.end - block.start + 1
+            if size > 1000:
+                return []
+            return [block._get_tag(addr).name for addr in range(block.start, block.end + 1)]
+        case _:
             return []
-        if ptr.choices is not None:
-            addrs = sorted(int(a) for a in ptr.choices if lo <= int(a) <= hi)
-            return [block._get_tag(addr).name for addr in addrs]
-        size = hi - lo + 1
-        if size > 1000:
-            return []
-        return [block._get_tag(addr).name for addr in range(lo, hi + 1)]
 
-    if isinstance(dest, (IndirectBlockRange, IndirectExprRef)):
-        block = dest.block
-        size = block.end - block.start + 1
-        if size > 1000:
-            return []
-        return [block._get_tag(addr).name for addr in range(block.start, block.end + 1)]
 
-    return []
+def _fixed_tag_names(arg: Value | Span) -> list[str]:
+    """Return the names of the tags that *arg* names at fixed addresses, in address order.
+
+    A pointer, a constant and an expression name none.
+    """
+    match arg:
+        case TagArg(tag=tag):
+            return [tag.name]
+        case RangeArg(span=span):
+            return [tag.name for tag in span.tags()]
+        case PointerArg() | PointerRangeArg() | ConstArg() | ExprArg():
+            return []
+        case _:
+            assert_never(arg)
+
+
+def _operand_tag_names(arg: Value | Span) -> list[str]:
+    """Return the names of the tags that *arg* can name, in address order.
+
+    A pointer names the elements that :func:`_expand_indirect_tag_names` lists.  A
+    constant and an expression name none.
+    """
+    match arg:
+        case PointerArg(ref=ref):
+            return _expand_indirect_tag_names(ref)
+        case PointerRangeArg(span=span):
+            return _expand_indirect_tag_names(span)
+        case TagArg() | RangeArg() | ConstArg() | ExprArg():
+            return _fixed_tag_names(arg)
+        case _:
+            assert_never(arg)
+
+
+def _has_pointers(span: Span) -> bool:
+    """Return whether the scan reads the ends of *span* from pointers."""
+    match span:
+        case PointerRangeArg():
+            return True
+        case RangeArg():
+            return False
+        case _:
+            assert_never(span)
+
+
+def _source_tag_name(source: Value) -> str | None:
+    """Return the name of the tag that the source of a copy or a fill reads, or None.
+
+    Return None for a pointer, a constant, or an expression that is more than one tag.
+    """
+    match source:
+        case TagArg(tag=tag):
+            return tag.name
+        case ExprArg(expr=expr):
+            return _tag_name_from_value(expr)
+        case PointerArg() | ConstArg():
+            return None
+        case _:
+            assert_never(source)
 
 
 def _unsupported_reverse_sources(
@@ -1996,7 +2077,6 @@ def _unsupported_reverse_sources(
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.validation._common import _resolve_tag_names
 
     if isinstance(instr, CalcInstruction):
         source_name = _tag_name_from_value(instr.expression)
@@ -2011,9 +2091,7 @@ def _unsupported_reverse_sources(
                     source_name = _tag_name_from_value(instr.expression.right)
         if source_name is None:
             return []
-        target_names = _resolve_tag_names(as_authored(instr.dest))
-        if not target_names:
-            target_names = _expand_indirect_tag_names(as_authored(instr.dest))
+        target_names = _operand_tag_names(instr.dest)
         uncovered = [
             tn
             for tn in target_names
@@ -2022,19 +2100,12 @@ def _unsupported_reverse_sources(
         if uncovered:
             return [(source_name, uncovered)]
 
-    elif isinstance(instr, (CopyInstruction, FillInstruction)):
-        raw = (
-            as_authored(instr.source)
-            if isinstance(instr, CopyInstruction)
-            else as_authored(instr.value)
-        )
-        source_name = _tag_name_from_value(raw)
+    elif isinstance(instr, CopyInstruction | FillInstruction):
+        source = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        source_name = _source_tag_name(source)
         if source_name is None:
             return []
-        dest = as_authored(instr.dest)
-        target_names = _resolve_tag_names(dest)
-        if not target_names:
-            target_names = _expand_indirect_tag_names(dest)
+        target_names = _operand_tag_names(instr.dest)
         uncovered = [
             tn
             for tn in target_names
@@ -2044,12 +2115,8 @@ def _unsupported_reverse_sources(
             return [(source_name, uncovered)]
 
     elif isinstance(instr, BlockCopyInstruction):
-        source_names = _resolve_tag_names(as_authored(instr.source))
-        dest_names = _resolve_tag_names(as_authored(instr.dest))
-        if not source_names:
-            source_names = _expand_indirect_tag_names(as_authored(instr.source))
-        if not dest_names:
-            dest_names = _expand_indirect_tag_names(as_authored(instr.dest))
+        source_names = _operand_tag_names(instr.source)
+        dest_names = _operand_tag_names(instr.dest)
         result: list[tuple[str, list[str]]] = []
         if source_names and dest_names:
             if len(source_names) == len(dest_names):
@@ -2181,7 +2248,7 @@ def _backward_propagate_comparison_boundaries(
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
+    from pyrung.core.validation._common import walk_instructions
 
     # Source -> (target, inverse of the expression, what the target's store is): copy's
     # store unless a Math wrote it, when the mode names Math's.
@@ -2192,36 +2259,28 @@ def _backward_propagate_comparison_boundaries(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _tag_name_from_value(as_authored(instr.source))
+            source_name = _source_tag_name(instr.source)
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(as_authored(instr.dest))
-            if not target_names:
-                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
-            for target_name in target_names:
+            for target_name in _operand_tag_names(instr.dest):
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, FillInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _tag_name_from_value(as_authored(instr.value))
+            source_name = _source_tag_name(instr.value)
             if source_name is None:
                 continue
-            target_names = _resolve_tag_names(as_authored(instr.dest))
-            if not target_names:
-                target_names = _expand_indirect_tag_names(as_authored(instr.dest))
-            for target_name in target_names:
+            for target_name in _operand_tag_names(instr.dest):
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _resolve_tag_names(as_authored(instr.source))
-            dest_names = _resolve_tag_names(as_authored(instr.dest))
-            if not dest_names:
-                dest_names = _expand_indirect_tag_names(as_authored(instr.dest))
+            source_names = _fixed_tag_names(instr.source)
+            dest_names = _operand_tag_names(instr.dest)
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
@@ -2234,9 +2293,7 @@ def _backward_propagate_comparison_boundaries(
                             covered_pairs.add((src, dst))
 
         elif isinstance(instr, CalcInstruction):
-            target_name = _tag_name_from_value(as_authored(instr.dest))
-            if target_name is None:
-                continue
+            target_name = instr.dest.tag.name
             edge = _calc_reverse_edge(instr.expression)
             if edge is not None:
                 source_name, invert = edge
@@ -2384,9 +2441,7 @@ def _backward_propagate_comparison_boundaries(
     for instr in walk_instructions(program):
         if carried_back and isinstance(instr, CalcInstruction):
             # Whatever shape it is in, a Math no edge covers has no way back from its target.
-            dest_names = _resolve_tag_names(as_authored(instr.dest)) or _expand_indirect_tag_names(
-                as_authored(instr.dest)
-            )
+            dest_names = _operand_tag_names(instr.dest)
             for source_name in sorted(carried_back & _extract_tag_names(instr.expression, {})):
                 for target_name in dest_names:
                     if (
@@ -2881,13 +2936,12 @@ def _accumulator_names(program: Program) -> set[str]:
 
     The instruction moves such a tag on from whatever value is stored in it.
     """
-    from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
 
     return {
-        accumulator.name
+        name
         for instr in walk_instructions(program)
-        if isinstance(accumulator := as_authored(getattr(instr, "accumulator", None)), Tag)
+        if (name := _field_tag_name(instr, "accumulator")) is not None
     }
 
 
@@ -2943,8 +2997,7 @@ def _acc_start_values(
         for name, _itype in _all_write_targets(instr):
             if name not in wanted or name in unknown:
                 continue
-            accumulator = as_authored(getattr(instr, "accumulator", None))
-            if isinstance(instr, owner_types) and getattr(accumulator, "name", None) == name:
+            if isinstance(instr, owner_types) and _field_tag_name(instr, "accumulator") == name:
                 owners[name] = owners.get(name, 0) + 1
                 if isinstance(instr, CountUpInstruction) and instr.down_condition is not None:
                     both_ways.add(name)
@@ -2998,8 +3051,7 @@ def _lowest_held(
     if name not in _accumulator_names(program) or graph.unlisted_writers_of(name):
         return lowest
     counts_down = any(
-        isinstance(instr, CountDownInstruction)
-        and getattr(as_authored(instr.accumulator), "name", None) == name
+        isinstance(instr, CountDownInstruction) and instr.accumulator.tag.name == name
         for instr in walk_instructions(program)
     )
     starts = _acc_start_values(
@@ -3312,12 +3364,12 @@ def _unmodeled_accumulators(program: Program) -> dict[str, str]:
     out: dict[str, str] = {}
     for instr in walk_instructions(program):
         if isinstance(instr, TimeEventDrumInstruction):
-            out[as_authored(instr.accumulator).name] = "time_event_drum"
+            out[instr.accumulator.tag.name] = "time_event_drum"
         elif isinstance(instr, TimeDrumInstruction):
             # Its completion flag can be on without its time up.
             reason = _drum_flag_without_its_time(instr, program)
             if reason is not None:
-                out[as_authored(instr.accumulator).name] = f"time_drum ({reason})"
+                out[instr.accumulator.tag.name] = f"time_drum ({reason})"
         elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
             verb = "debounce" if isinstance(instr, DebounceInstruction) else "flasher"
             out[instr.on_acc.name] = verb
