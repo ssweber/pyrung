@@ -76,7 +76,7 @@ fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # 964 s alone on 2026-1
 tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
 conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
 conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
-hypothesis = { cmd = ["make", "test-hypothesis"], timeout = 900 }   # 524 s on main and on parse-copy (2026-11-25); test_parity alone varies 50..250 s with the examples drawn
+hypothesis = { cmd = ["make", "test-hypothesis"], timeout = 900 }   # 524 s on main (2026-11-25); test_parity alone varies 50..250 s with the examples drawn
 fuzz = { cmd = ["make", "test-fuzz-gate"], timeout = 600 }   # capped Hypothesis profile (tests/fuzz/conftest.py); PLC against CompiledPLC and the fold checks
 docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plus the reference manifest; a new public export must be listed
 
