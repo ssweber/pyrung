@@ -9,10 +9,11 @@ from pyrung.core.expression import (
     ABS_OF_TYPE,
     CALC_FAULTS,
     CALC_OPS,
-    REAL_CALC_OPS,
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
+    DoubleBinaryExpr,
+    DoubleUnaryExpr,
     Expression,
     LiteralExpr,
     MathFuncExpr,
@@ -157,6 +158,11 @@ def _int32(value: int) -> int:
 #: The binary ops whose result a hex Math keeps to 16 unsigned bits (:func:`calc_form`).
 _HEX_MASKED_SYMBOLS = frozenset({"<<", "&", "|", "^"})
 
+#: The ops of CLICK's decimal Math.  Into a Real, each converts its operands to doubles
+#: (:func:`calc_form`).
+_DOUBLE_BINARY_SYMBOLS = frozenset({"+", "-", "*", "/", "%", "**"})
+_DOUBLE_UNARY_SYMBOLS = frozenset({"-", "+", "abs"})
+
 
 @dataclass(frozen=True)
 class _CalcForm:
@@ -167,7 +173,7 @@ class _CalcForm:
     mask_bits: bool = False
     calc_ops: bool = True
     whole_division: bool = False
-    real_zeros: bool = False
+    doubles: bool = False
 
     def cut(self, value: int) -> int:
         return value & 0xFFFF if self.unsigned else _int32(value)
@@ -206,9 +212,10 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             op = CALC_OPS.get(op, op)
             if form.whole_division and op is _op_div:
                 op = _op_hex_div
-            if form.real_zeros and not (_holds_double(left) or _holds_double(right)):
-                op = REAL_CALC_OPS.get(op, op)
-        cls = CalcBinaryExpr if form.calc_ops else type(value)
+        cls = type(value)
+        if form.calc_ops:
+            doubles = form.doubles and value.symbol in _DOUBLE_BINARY_SYMBOLS
+            cls = DoubleBinaryExpr if doubles else CalcBinaryExpr
         node = value
         if (
             left is not value.left
@@ -225,9 +232,10 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         op = value.op
         if form.abs_ops and value.symbol == "abs" and isinstance(operand, TagExpr):
             op = ABS_OF_TYPE.get(operand.tag.type.name, op)
-        if form.calc_ops and form.real_zeros and not _holds_double(operand):
-            op = REAL_CALC_OPS.get(op, op)
-        cls = CalcUnaryExpr if form.calc_ops else type(value)
+        cls = type(value)
+        if form.calc_ops:
+            doubles = form.doubles and value.symbol in _DOUBLE_UNARY_SYMBOLS
+            cls = DoubleUnaryExpr if doubles else CalcUnaryExpr
         if operand is value.operand and op is value.op and type(value) is cls:
             return value
         return cls(operand, op, value.symbol)
@@ -260,13 +268,6 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         )
         return value.with_cut_bounds(lo, hi, unsigned=unsigned)
     return value
-
-
-def _holds_double(value: Any) -> bool:
-    """Return whether *value* is a Real tag or a float constant, which always holds a double."""
-    if isinstance(value, LiteralExpr):
-        return isinstance(value.value, float)
-    return isinstance(value, TagExpr) and value.tag.type is TagType.REAL
 
 
 def may_be_text(value: Any) -> bool:
@@ -333,18 +334,19 @@ def calc_form(expression: Any, mode: CalcMode, *, into_real: bool = False) -> An
       ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
       2026-11-26).  An operand past 16 bits gets the same cut, with no SC43.  So
       ``( DH1 * DH2 ) OR 0h`` with 100h and 100h stores 0000h (read, 2026-11-26).
-    - With *into_real*, for a decimal Math into a Real, a minus sign, ``*`` and MOD give a
-      0 the sign that a double gives it.  A CLICK computes a DS of 0 as the double +0.0,
-      so ``- DS1`` with DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5 stores -0.0
-      (read, 2026-11-26).  A step on a Real tag or a float constant needs no other op,
-      because Python computes it in doubles.
+    - With *into_real*, for a decimal Math into a Real, each ``+``, ``-``, ``*``, ``/``,
+      ``%``, ``**``, minus sign, plus sign and ``abs()`` converts its operands to doubles
+      (``DoubleBinaryExpr``, ``DoubleUnaryExpr``).  A CLICK computes a DS of 0 as the
+      double +0.0, so ``- DS1`` with DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5
+      stores -0.0 (read, 2026-11-26).  The other ops, such as ``//`` and ``&``, are not
+      in CLICK's decimal Math.  They do not convert their operands.
 
     Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
         form = _CalcForm(unsigned=True, mask_bits=True, whole_division=True)
     else:
-        form = _CalcForm(abs_ops=True, real_zeros=into_real)
+        form = _CalcForm(abs_ops=True, doubles=into_real)
     return _rebuild(expression, form)
 
 
