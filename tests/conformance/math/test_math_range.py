@@ -44,9 +44,15 @@ and 4 for the third.
 - ErrorCode holds the signs of ``- DS 0``, ``- DS 0 * DS -5`` and ``DS 0 * DS -5``, each
   stored in a DF.
 
-pyrung flips the sign of a Real. A minus sign before a DS of 0 gives the whole number 0,
-which stores +0.0. For a dividend other than 0, the 0 of pyrung's MOD takes the dividend's
-sign. pyrung reads Result1 = 1, Result2 = 1, Result3 = 3, Result4 = 2 and ErrorCode = 0.
+A CLICK read Result1 = 1, Result2 = 1, Result3 = 3, Result4 = 2 and ErrorCode = 5 in reading
+round b16. So a minus sign flips the sign bit. A CLICK also computes a DS of 0 as the double
++0.0, not as a whole number:
+
+- ``- DS 0`` gives -0.0.
+- ``- DS 0 * DS -5`` gives +0.0.
+- ``DS 0 * DS -5`` gives -0.0.
+
+The 0 of a MOD takes the dividend's sign.
 
 ``by_zero`` asks which sign the 0 of a division or MOD by zero takes. It stages -0.0 as
 0.0 * -1.0 (``real_bits/minus_zero_math``).
@@ -70,8 +76,11 @@ gives. It stages -0.0 the same way. Each 0 is stored in a DF.
 - Scratch holds the signs of ``DF -0.0 MOD DF 5.0`` and ``DF 0.0 MOD DF 5.0``.
 - ErrorCode holds the signs of ``DF -0.0 * DF -5.0`` and ``DF -0.0 / DF -5.0``.
 
-pyrung gives +0.0 for each of these, and reads 0 in each field. The part has no rung to spare,
-so this case does not check the staged -0.0. ``by_zero`` checks it.
+A CLICK read 0 in each field but Scratch, which read 1, in reading round b16. So each sum to 0
+gives +0.0, and so do ``DF -0.0 * DF -5.0`` and ``DF -0.0 / DF -5.0``. ``DF -0.0 MOD DF 5.0``
+gives -0.0 and ``DF 0.0 MOD DF 5.0`` gives +0.0. So the 0 of a MOD takes the dividend's sign,
+-0.0 included. The part has no rung to spare, so this case does not check the staged -0.0.
+``by_zero`` checks it.
 
 A pair joins a list again only when a reading shows every row of its entry in
 ``formula_values.PENDING_ZERO_SIGNS``. Each reading must agree with these rules:
@@ -409,18 +418,18 @@ group = Group(
             "normal double, inside a formula",
         ),
         case(
-            "pyrung expects a minus sign before Inf to give -Inf, and a step on NaN to give NaN "
-            "(Result1 = 1). The other fields hold the sign bits of zeros. pyrung gives -0.0 for "
-            "- DF 0.0 (Result2 = 1). It gives -0.0 for - DF 5.0 MOD DF 5.0 and "
-            "DF -5.0 MOD DF 5.0, and +0.0 for DF 5.0 MOD DF 5.0 (Result3 = 3). It gives +0.0 for "
-            "DF 5.0 MOD DF -5.0 and -0.0 for DF -5.0 MOD DF -5.0 (Result4 = 2). It computes a DS "
-            "in whole numbers, so a DS of 0 gives +0.0 with a minus sign and in a product "
-            "(ErrorCode = 0)",
+            "A minus sign before Inf gives -Inf, and a step on NaN gives NaN (Result1 = 1). The "
+            "other fields hold the sign bits of zeros. - DF 0.0 gives -0.0 (Result2 = 1). "
+            "- DF 5.0 MOD DF 5.0 and DF -5.0 MOD DF 5.0 give -0.0, and DF 5.0 MOD DF 5.0 gives "
+            "+0.0 (Result3 = 3). DF 5.0 MOD DF -5.0 gives +0.0 and DF -5.0 MOD DF -5.0 gives -0.0 "
+            "(Result4 = 2). A Math computes a DS of 0 as the double +0.0. So - DS 0 gives -0.0, "
+            "- DS 0 * DS -5 gives +0.0 and DS 0 * DS -5 gives -0.0 (ErrorCode = 5)",
             ladder=prove_minus_sign,
             init=init_minus_sign,
             id="minus_sign",
-            expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 0},
+            expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 5},
             formulas=MINUS_FORMULAS,
+            pending="MATH",
             probe="what a minus sign gives before 0, Inf and NaN, and which order a CLICK "
             "applies to it with * and /",
         ),
@@ -436,10 +445,9 @@ group = Group(
             probe="which sign the 0 of a division or MOD by zero takes",
         ),
         case(
-            "Each field holds the sign bits of zeros. pyrung gives +0.0 for each sum to 0 "
-            "(Result1 to Result4 = 0). It gives +0.0 for DF -0.0 MOD DF 5.0 and "
-            "DF 0.0 MOD DF 5.0 (Scratch = 0), and for DF -0.0 * DF -5.0 and DF -0.0 / DF -5.0 "
-            "(ErrorCode = 0)",
+            "Each field holds the sign bits of zeros. Each sum to 0 gives +0.0 (Result1 to "
+            "Result4 = 0). DF -0.0 MOD DF 5.0 gives -0.0 and DF 0.0 MOD DF 5.0 gives +0.0 "
+            "(Scratch = 1). DF -0.0 * DF -5.0 and DF -0.0 / DF -5.0 give +0.0 (ErrorCode = 0)",
             ladder=prove_zero_sum,
             init=init_zero_sum,
             id="zero_sum",
@@ -448,10 +456,11 @@ group = Group(
                 "Result2": 0,
                 "Result3": 0,
                 "Result4": 0,
-                "Scratch": 0,
+                "Scratch": 1,
                 "ErrorCode": 0,
             },
             formulas=ZERO_SUM_FORMULAS,
+            pending="MATH",
             probe="which sign the 0 of a sum takes, and the 0 of a MOD, * and / of 0",
         ),
     ],
