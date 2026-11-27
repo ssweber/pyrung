@@ -293,27 +293,27 @@ class BinaryOp(_Node):
 
 
 Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | BinaryOp
+"""A node of the tree that :func:`parse_click_formula` returns."""
 
 
 def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
-    """Return the tree of the Math formula *text*, in the order that a CLICK computes it.
+    """Return the tree of the Math formula *text*, grouped the way a CLICK computes it.
 
-    In hex mode (*hex_mode*) a bare number is hex, as CLICK's dialog reads it: ``255`` is
-    0x255. Raise ValueError for text that is not a formula, such as ``^`` in hex mode.
+    *text* is the formula as CLICK's Math dialog shows it, such as ``DS1 - DS2 + DS3 * DS4``.
+    With *hex_mode* a bare number is hex. CLICK's dialog reads ``255`` in hex mode as 0x255 too.
 
-    Return None unless a CLICK reading has settled the order of every pair of operators in
-    each bracket scope. A scope is the whole formula outside brackets, the inside of one
-    bracket, or one argument of a function. So ``DS1 - DS2 + DS3 * DS4`` needs the pairs
-    ``- +``, ``- *`` and ``+ *``, and ``( DS1 - DS2 ) * 3`` needs none. A minus sign is an
-    operator too, of the kind :data:`NEGATE_ADDRESS`, :data:`NEGATE_BRACKET`,
-    :data:`NEGATE_FUNCTION`, :data:`NEGATE_POINTER`, :data:`NEGATE_PI`, :data:`NEGATE_MINUS`
-    or :data:`NEGATE_CONSTANT`.
+    Return None when the stored value can depend on an order of operators that no reading of
+    a CLICK has settled. ``- DS1 * DS2`` returns None, and ``( - DS1 ) * DS2`` returns a tree.
+    Brackets set the order in CLICK too.
 
-    A minus sign applies before every operator to its left in its scope, so it pairs only with
-    the operators to its right. A pair in :data:`SAME_VALUE_PAIRS` needs no reading. A pair in
-    :data:`SAME_VALUE_ON_PLAIN_OPERANDS` needs none when its two steps have plain operands. A
-    formula with the tree of one in :data:`READ_FORMULAS` is confirmed.
+    Raise ValueError for text that is not a formula, such as ``2 ^ 3`` in hex mode.
     """
+    # The pairs that a formula needs are those of each bracket scope: the formula outside
+    # brackets, the inside of one bracket, or one argument of a function. A minus sign is an
+    # operator of one of the NEGATE_* kinds. It applies before every operator to its left in
+    # its scope, so it pairs only with the operators to its right. A pair in SAME_VALUE_PAIRS
+    # needs no reading. A pair in SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps
+    # have plain operands. A formula with the tree of one in READ_FORMULAS needs none.
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
 

@@ -16,6 +16,7 @@
 ### What's new
 
 - `LiteralExpr` is importable from `pyrung`. Wrap a constant in it, and `math()` runs the operation on it at scan time.
+- `parse_click_formula()` from `pyrung.click` reads a CLICK Math formula into a tree, grouped the way a CLICK computes it.
 
 ### Behaviour changes
 

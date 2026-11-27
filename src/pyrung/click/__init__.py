@@ -232,6 +232,7 @@ from pyrung.click.codegen import (
     ladder_to_pyrung,
     ladder_to_pyrung_project,
 )
+from pyrung.click.codegen.formula import Formula, parse_click_formula
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import (
     CLICK_STEP_LIMIT,
@@ -327,6 +328,8 @@ __all__ = [
     "WorkspaceKind",
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
+    "parse_click_formula",
+    "Formula",
     "pyrung_to_ladder",
     "ClickValidationReport",
     "ClickFinding",

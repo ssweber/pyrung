@@ -1008,6 +1008,15 @@ def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_giv
     assert parse_click_formula(text, hex_mode=hex_mode) is not None
 
 
+def test_pyrung_click_exports_the_formula_parser() -> None:
+    import pyrung.click
+
+    assert pyrung.click.parse_click_formula is parse_click_formula
+    assert pyrung.click.parse_click_formula("- DS1 * DS2") is None
+    with pytest.raises(ValueError):
+        pyrung.click.parse_click_formula("2 ^ 3", hex_mode=True)
+
+
 def test_click_formula_parse_keeps_a_hex_minus_sign_before_a_constant_as_an_operator() -> None:
     # CLICK stores - 5h / DH1 as -#UH5#/#DH1 and - 5 / DS1 as #H-5#/#DS1.
     negate = parse_with_unconfirmed_pairs("- 5h / DH1", hex_mode=True)[0].left
