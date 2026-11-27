@@ -483,9 +483,9 @@ class _TranslatorMixin:
         return self._render_constant(value, path=path, source=source)
 
     def _render_arg(self, arg: Value | Span, *, path: str, source: Any) -> str:
-        """Return an instruction's operand as the export writes it.
+        """Return an instruction's operand as the export writes it, and refuse ``immediate()``.
 
-        Only a coil accepts ``immediate()``, and :meth:`_render_immediate_coil` renders it.
+        Only a coil's target takes ``immediate()``, and :meth:`_render_immediate_coil` renders it.
         """
         match arg:
             case TagArg(immediate=True) | RangeArg(immediate=True):

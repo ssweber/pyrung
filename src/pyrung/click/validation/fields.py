@@ -287,8 +287,8 @@ def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) 
         return exporter._render_operand(value, path=f"instruction.{attribute}", source=instruction)
     except _RenderError as exc:
         if isinstance(value, str) and '"' in value:
-            # Only a Fill refuses a quote in text. It hands laddercodec the quote doubled,
-            # which laddercodec refuses in its own words.
+            # Only a Fill refuses a quote in text. This function then hands laddercodec the
+            # text with each quote doubled, and laddercodec refuses it in its own words.
             return '"{}"'.format(value.replace('"', '""'))
         raise Unbuildable from exc
 
@@ -308,8 +308,8 @@ def render_arg(exporter: Any, arg: Value | Span, attribute: str, instruction: An
     except _RenderError as exc:
         match arg:
             case ConstArg(value=str() as text) if '"' in text:
-                # Only a Fill refuses a quote in text. It hands laddercodec the quote
-                # doubled. laddercodec then refuses the quote in its own words.
+                # Only a Fill refuses a quote in text. This function then hands laddercodec
+                # the text with each quote doubled, and laddercodec refuses it in its own words.
                 return '"{}"'.format(text.replace('"', '""'))
             case _:
                 raise Unbuildable from exc
@@ -356,8 +356,9 @@ def memory_types(operand: Any, resolver: _ResolutionCache) -> set[str]:
 def operand_object(value: Any) -> Any:
     """Return the tag, range, pointer, expression or constant inside a parsed operand.
 
-    The checks that read a condition's operands read an instruction's operands through
-    this function. It drops ``immediate()``, because those checks read the tag inside it.
+    The checks in this module read a condition's operands and an instruction's operands
+    alike. They call this function on an instruction's operand first. The function drops
+    ``immediate()``, because those checks read the tag inside it.
     Any value that is not a parsed operand comes back unchanged.
     """
     match value:
@@ -376,7 +377,11 @@ def operand_object(value: Any) -> Any:
 
 
 def _range_text(exporter: Any, span: BlockRange, path: str, instruction: Any) -> tuple[str, Any]:
-    """Return a range as the export writes it, and its problem, as ``_range_text`` does."""
+    """Return the range *span* as the export writes it, and its problem.
+
+    Both come from ``_block_range_text``. Raise :class:`Unbuildable` when the export
+    refuses the range.
+    """
     from pyrung.click.ladder.types import _RenderError
 
     try:
