@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.storage import CHAR_HOLDS, holds_char
@@ -23,24 +23,28 @@ from .base import (
 from .conversions import (
     _store_copy_value_to_tag_type,
 )
-from .data_transfer import _read
+from .data_transfer import _dest_tag, _read
 from .operands import (
     ConstArg,
+    Dest,
     EachOperand,
     ExprArg,
     NumberOperand,
     PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
     TagArg,
     Value,
     describe,
+    held,
+    parse_value,
 )
 from .resolvers import (
     _fn_name,
     _set_fault_address_error,
     _set_fault_out_of_range,
     reads_indexed_element,
-    resolve_tag_ctx,
-    resolve_tag_or_value_ctx,
 )
 from .utils import guard_oneshot_execution
 
@@ -51,14 +55,14 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
 
 
-def not_a_char_error(call: str, fn_name: str, key: str, target: Any) -> tuple[str, str]:
+def not_a_char_error(call: str, fn_name: str, key: str, target: Dest) -> tuple[str, str]:
     """Return the text before and after the value in the error for a result no Char holds.
 
     A function's result is known only at the scan.  The scan and the generated code both
     raise this text, as ``TypeError`` for a value that is not a str and as ``ValueError``
     for a str that is not one character.
     """
-    named = describe(target)
+    named = describe(held(target))
     return (
         f"{call}: {fn_name!r} returned ",
         f" for {key!r}. {named[0].upper()}{named[1:]} holds {CHAR_HOLDS}. Return one "
@@ -67,14 +71,40 @@ def not_a_char_error(call: str, fn_name: str, key: str, target: Any) -> tuple[st
 
 
 def _store_result(
-    ctx: ScanContext, call: str, fn: Callable[..., Any], key: str, value: Any, target: Any
+    ctx: ScanContext, call: str, fn: Callable[..., Any], key: str, value: Any, target: Dest
 ) -> None:
-    resolved = resolve_tag_ctx(target, ctx)
+    resolved = _dest_tag(target, ctx)
     if resolved.type is TagType.CHAR and not holds_char(value):
         before, after = not_a_char_error(call, _fn_name(fn), key, target)
         error = ValueError if isinstance(value, str) else TypeError
         raise error(before + repr(value) + after)
     ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(value, resolved))
+
+
+_OUTS = EachOperand(arg="outs")
+
+
+def parse_ins(call: str, ins: Any) -> dict[Any, Value | Span]:
+    """Return the ``ins`` of a function call with each value parsed.
+
+    The parse refuses no value.  The scan hands a constant, a range or any other object
+    to the function as it is.  The parse refuses *ins* only if it is not a mapping.
+    """
+    if not isinstance(ins, Mapping):
+        raise TypeError(f"{call} ins must be a dict, got {type(ins).__name__}")
+    return {key: parse_value(value) for key, value in ins.items()}
+
+
+def _read_in(value: Value | Span, ctx: ScanContext) -> Any:
+    """Return what the function gets for one of its ``ins`` on this scan."""
+    match value:
+        case TagArg() | PointerArg() | ExprArg() | ConstArg():
+            return _read(value, ctx)
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            # The function gets the range object.  The scan reads none of its tags.
+            return span
+        case _:
+            assert_never(value)
 
 
 class FunctionCallInstruction(OneShotMixin, Instruction):
@@ -84,7 +114,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     _writes = ("_outs",)
     _conditions = ()
     _structural_fields = ("_fn",)
-    _operands = {"_outs": EachOperand(arg="outs")}
+    _operands = {"_outs": _OUTS}
 
     def __init__(
         self,
@@ -96,12 +126,15 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     ):
         OneShotMixin.__init__(self, oneshot)
         self._fn = fn
-        self._ins = ins or {}
-        self._outs = outs or {}
+        self._ins = parse_ins("run_function()", ins or {})
+        self._outs: dict[Any, Dest] = _OUTS.parse("run_function()", "outs", outs or {})
+
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
+        kwargs = {name: _read_in(src, ctx) for name, src in self._ins.items()}
         result = ctx.call_user_function(self._fn, **kwargs)
         if not self._outs:
             return
@@ -128,7 +161,7 @@ class EnabledFunctionCallInstruction(Instruction):
     _writes = ("_outs",)
     _conditions = ("_enable_condition",)
     _structural_fields = ("_fn",)
-    _operands = {"_outs": EachOperand(arg="outs")}
+    _operands = {"_outs": _OUTS}
 
     def __init__(
         self,
@@ -139,12 +172,15 @@ class EnabledFunctionCallInstruction(Instruction):
         enable_condition: Condition | None,
     ):
         self._fn = fn
-        self._ins = ins or {}
-        self._outs = outs or {}
+        self._ins = parse_ins("run_enabled_function()", ins or {})
+        self._outs: dict[Any, Dest] = _OUTS.parse("run_enabled_function()", "outs", outs or {})
         self._enable_condition = enable_condition
 
+    def check_operands(self, call: str | None = None) -> None:
+        """Do nothing, because the builder parsed every operand."""
+
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
+        kwargs = {name: _read_in(src, ctx) for name, src in self._ins.items()}
         result = ctx.call_user_function(self._fn, enabled, **kwargs)
         if not self._outs:
             return

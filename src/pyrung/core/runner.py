@@ -692,6 +692,7 @@ def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any,
         EnabledFunctionCallInstruction,
         FunctionCallInstruction,
     )
+    from pyrung.core.instruction.operands import held
     from pyrung.core.program import Program
 
     if not isinstance(program, Program):
@@ -710,7 +711,7 @@ def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any,
             )
             continue
         for key, value in instruction._ins.items():
-            if not _hands_over_nothing_it_could_keep(value):
+            if not _hands_over_nothing_it_could_keep(held(value)):
                 found.append((instruction, f"ins[{key!r}] is an object it could change or keep"))
                 break
     return found

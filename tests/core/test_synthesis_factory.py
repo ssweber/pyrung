@@ -12,6 +12,7 @@ from pyrung.core.condition import BitCondition, CompareEq
 from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
 from pyrung.core.instruction.control import FunctionCallInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.operands import held
 from pyrung.core.instruction.out_variants import DebounceInstruction, FlasherInstruction
 from pyrung.core.synthesis import (
     Synthesis,
@@ -122,8 +123,8 @@ def test_function_rung_declares_dataflow() -> None:
     rung = function_rung(_fn, ins={"cur": cur}, outs={"result": out}, guard=BitCondition(en))
     (instr,) = rung._instructions
     assert isinstance(instr, FunctionCallInstruction)
-    assert instr._ins == {"cur": cur}
-    assert instr._outs == {"result": out}
+    assert {key: held(value) for key, value in instr._ins.items()} == {"cur": cur}
+    assert {key: held(value) for key, value in instr._outs.items()} == {"result": out}
     assert rung._conditions  # armed by the guard
 
 

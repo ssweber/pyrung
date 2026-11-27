@@ -63,7 +63,8 @@ def _iter_target_leaves(value: Any) -> Iterator[Any]:
         for item in value:
             yield from _iter_target_leaves(item)
         return
-    yield value
+    # The values of a function's outs are parsed operands.
+    yield as_authored(value)
 
 
 #: The values of each type whose text is the longest or the shortest that ``to_text()``

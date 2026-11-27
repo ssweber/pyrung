@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
+from typing import Any
+
 import pytest
 
 from pyrung.core import PLC, Block, Bool, Int, Program, TagType, run_function, rung
@@ -323,3 +326,33 @@ def test_run_function_function_exception_propagates():
 
     with pytest.raises(ValueError, match="boom"):
         runner.step()
+
+
+class _NoSignature:
+    """A callable whose signature ``inspect`` cannot read, so ``ins`` may be any mapping."""
+
+    __signature__ = "none"
+
+    def __call__(self, **kwargs: Any) -> dict[str, int]:
+        return {"out": kwargs["a"] + 1}
+
+
+def test_run_function_reads_and_writes_through_a_mapping_that_is_not_a_dict(runner_factory):
+    """The compiled kernel raised RuntimeError on these ``ins``."""
+    Enable = Bool("Enable")
+    Source = Int("Source")
+    Output = Int("Output")
+
+    with Program(strict=False) as logic:
+        with rung(Enable):
+            run_function(
+                _NoSignature(),
+                ins=MappingProxyType({"a": Source}),
+                outs=MappingProxyType({"out": Output}),
+            )
+
+    runner = runner_factory(logic)
+    runner.patch({"Enable": True, "Source": 4})
+    runner.step()
+
+    assert runner.current_state.tags["Output"] == 5

@@ -194,12 +194,12 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
         ins = getattr(instruction, "_ins", {})
         if isinstance(ins, dict):
             for key in sorted(ins):
-                walk(ins[key])
+                walk(as_authored(ins[key]))
 
         outs = getattr(instruction, "_outs", {})
         if isinstance(outs, dict):
             for key in sorted(outs):
-                walk(outs[key])
+                walk(as_authored(outs[key]))
 
     if hasattr(instruction, "oneshot"):
         walk(instruction.oneshot)
