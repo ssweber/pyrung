@@ -13,7 +13,8 @@ BEEFh, so a Math that writes nothing reads -16657.
   MOD that matches a division that rounds down gives 2 with no SC43.  ErrorCode adds 1 for
   SC43 after the division and 2 for SC43 after the MOD.  A CLICK reads -1, -1 and 3.
 
-The CLICK did not divide by a value below 0.
+No case divides by a value below 0.  Round b23 read four such formulas, and
+``tests/click/test_click_formula.py`` runs them on every backend.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
