@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.19.0 - 2026-11-26
+
+- Align the packaged debugger version with pyrung 0.19.0.
+
 ## 0.18.1 - 2026-11-25
 
 - Align the packaged debugger version with pyrung 0.18.1.

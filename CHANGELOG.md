@@ -13,14 +13,19 @@
 
 ## Unreleased
 
+## v0.19.0 (2026-11-26)
+
+Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT tag now holds only text. When you build the program, pyrung refuses each write that would store a number or a bit in a TXT tag. `ladder_to_pyrung()` now groups a Math formula in CLICK's order. `math()` now matches a CLICK on hex division, fault flags and the sign of a zero that it stores in a Real. Read Behaviour changes and Fixes first.
+
 ### What's new
 
 - `LiteralExpr` is importable from `pyrung`. Wrap a constant in it, and `math()` runs the operation on it at scan time.
-- `parse_click_formula()` from `pyrung.click` reads a CLICK Math formula into a tree, grouped the way a CLICK computes it.
+- `parse_click_formula()` from `pyrung.click` reads a CLICK Math formula into a `Formula` tree, grouped the way a CLICK computes it.
+- The `AGENTS.pyrung.md` file in a generated project now explains CLICK's order of operations in a Math formula and when to write `LiteralExpr`.
 
 ### Behaviour changes
 
-- `ladder_to_pyrung()` now raises `ValueError` for a `return()` in the main program and an `end()` in a subroutine (it imported both, and the code for a main `return()` failed to build).
+- `ladder_to_pyrung()` now raises `ValueError` for a `return()` in the main program and an `end()` in a subroutine (it imported both). The code for a main `return()` then failed to build.
   Use `end()` in the main program and `return()` in a subroutine.
 - `copy()` now raises `ValueError` when you build a program with a converter that cannot store into its target, such as `to_value` into a TXT (it built).
   Leave `convert` out, or copy into a tag type that the converter writes.
@@ -30,7 +35,7 @@
   Copy the value into one TXT with `copy()`, or fill a constant.
 - `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). CLICK accepts it.
   Copy the constant into one TXT with `copy()`.
-- A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT.
+- A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT. `fill(True, ...)` and `fill(False, ...)` still build, and they store "1" and "0".
   Copy the text "1" in a rung that has the Bool as its condition, and "0" in a rung that has its inverse.
 - pyrung now raises when you build a program with one of these forms (it stored a number or a bit in the TXT tag). A CLICK program cannot hold any of them.
   - `blockcopy()` into TXT from a range that is not TXT, or with `convert=`
@@ -41,9 +46,11 @@
   Store the number in a number tag, then `copy()` that tag into the TXT. The copy writes the number's text.
 - `send()` of TXT tags to a raw coil now raises when you build it, as CLICK's editor does (it sent True for each character).
   Send to a holding register.
-- A TXT holds one character with a code of 0..255. pyrung now raises when you build one of these forms (it raised at the scan, set the out-of-range flag, or stored the value whole).
-  - `fill()` of a value with more than one character, such as 12 or "AB", as CLICK's editor does
-  - a text constant with a character past code 255, such as "€"
+- `receive()` of an odd number of TXT tags from a raw holding or input register now raises `ValueError` when you build it, as CLICK's dialog does (it stored each register's number in one TXT). So does `send()` of an odd number of TXT tags to a raw holding register.
+  Receive or send an even number of TXT tags. Each register holds two characters.
+- A TXT holds one character with a code of 0..255. pyrung now raises when you build one of these forms.
+  - `fill()` of a value with more than one character, such as 12 or "AB", as CLICK's editor does (`fill(12, ...)` stored 12 in each TXT, and `fill("AB", ...)` raised at the scan)
+  - a text constant with a character past code 255, such as "€" (`copy()` stored it or set the out-of-range flag, and `fill()` raised at the scan)
 
   Fill one character, or `copy()` the value to write one character into each TXT.
 - A `Char` tag or a TXT block slot now raises when its default is not "" or one character with a code of 0..255 (it kept the value). `slot()` raises when you call it.
@@ -53,8 +60,7 @@
 
 ### Fixes
 
-- `math()` on `Word` tags only (CLICK's hex mode) now truncates each division, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
-- `check()` and `how()` no longer fail with `TypeError` on a program that stores a number in a TXT tag. pyrung refuses each such write when you build the program.
+- `math()` on `Word` tags only (CLICK's hex mode) now drops the fraction of each division of positive values, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
 - `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT).
 - `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
@@ -68,7 +74,7 @@
   - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DS1 * DS2` or `- 5h / DH1` in hex mode. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` now imports a minus sign before a constant in a hex Math as a CLICK runs it. `- 5h MOD DH1` with DH1 = 3h stores FFFEh (it stored 2h). `- 2h` sets SC43 (it set no flag).
 - `math()` into a `Real` now stores -0.0 where a CLICK does. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0).
-- `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. It stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
+- `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. `math()` then stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
 
 ## v0.18.1 (2026-11-25)
 
