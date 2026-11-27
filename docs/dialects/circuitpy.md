@@ -266,6 +266,7 @@ The P1AM-200 runs CircuitPython, which imposes limits beyond what the pyrung sim
 - **No TLS.** Modbus TCP and any network traffic run unencrypted. Keep the P1AM-200 on a trusted, isolated network.
 - **Single-threaded.** The scan loop is cooperative. Long-running `FunctionCallInstruction` callables block the entire scan (and may trip the watchdog).
 - **Limited memory.** CircuitPython has a small heap. Programs with many tags or large blocks may hit memory limits, so test on hardware early.
+- **No doubles.** A CLICK computes a `math()` into a `Real` in doubles. CircuitPython's floats have about 22 bits of precision, so `code.py` computes each integer step as an exact integer. A zero from integer steps is 0.0, where a CLICK can store -0.0 (`-DS[1]` with DS1 = 0).
 
 ## External resources
 

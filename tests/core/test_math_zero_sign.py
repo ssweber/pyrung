@@ -37,6 +37,12 @@ FORMULAS = [
     ("DF -0.0 MOD DF 0.0", lambda: MINUS_ZERO_R % ZERO_R, False),
 ]
 
+#: Known difference on CircuitPython: the board has no doubles, so code.py keeps integer
+#: steps exact. An integer 0 has no sign, so code.py stores +0.0 for these formulas.
+INTEGER_ZERO_ON_CODE_PY = frozenset(
+    {"- DS 0", "DS 0 * DS -5", "- DS 0 / DS 1", "- DS 0 MOD DS 1", "DS -5 MOD DS 5"}
+)
+
 
 def _program() -> tuple[Program, list[Real]]:
     dests = [Real(f"Dest{n}") for n in range(len(FORMULAS))]
@@ -64,8 +70,11 @@ def _signs(values) -> list[bool]:
 def test_each_backend_stores_the_zero_sign_that_a_click_stores(monkeypatch) -> None:
     program, dests = _program()
     results = _on_every_backend(program, monkeypatch, dests, scans=2)
-    want = [minus for _, _, minus in FORMULAS]
     for backend, values in results.items():
+        want = [
+            minus and not (backend == "circuitpy" and text in INTEGER_ZERO_ON_CODE_PY)
+            for text, _, minus in FORMULAS
+        ]
         got = _signs(values)
         wrong = [text for (text, _, _), g, w in zip(FORMULAS, got, want, strict=True) if g != w]
         assert not wrong, backend

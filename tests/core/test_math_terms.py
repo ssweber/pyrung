@@ -236,17 +236,21 @@ LARGE_POWERS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
 
 
 def _check_large_powers() -> None:
-    """Check each of :data:`LARGE_POWERS` on every engine. A child process runs this."""
+    """Check each of :data:`LARGE_POWERS` on the desktop engines. A child process runs this.
+
+    Known difference on CircuitPython: the board has no doubles, so code.py keeps integer
+    steps exact. It computes this power as a Python int, as for an Int destination.
+    """
     with pytest.MonkeyPatch.context() as monkeypatch:
         for name, (_build, _dest_type, stored, flags) in LARGE_POWERS.items():
-            for engine in ENGINES:
+            for engine in (engine for engine in ENGINES if not engine.startswith("circuitpy")):
                 prog, tags = _program(name, LARGE_POWERS)
                 actual = _first_scan(prog, engine, tags, monkeypatch)
                 assert actual["Dest"] == stored, (name, engine)
                 assert {code for code in FLAGS if actual[f"Saw{code}"]} == flags, (name, engine)
 
 
-def test_a_large_power_into_a_real_finishes_on_every_engine() -> None:
+def test_a_large_power_into_a_real_finishes_on_the_desktop_engines() -> None:
     # A hang would hold the GIL, so the check runs in a child process that a timeout can kill.
     code = "from tests.core.test_math_terms import _check_large_powers; _check_large_powers()"
     root = Path(__file__).resolve().parents[2]
