@@ -151,10 +151,15 @@ def _op_mod(a: Numeric, b: Numeric) -> Numeric:
     SC46, and the rest of the formula runs. A CLICK stored 1 for ``( DS1 MOD DS2 ) + DS3``
     with 5, 0 and 1, and 0 for a hex ``DH1 MOD DH2`` with 5h and 0h. Both set SC46
     (hardware, 2026-11-26). Into a DF the MOD is 0.0 (``7.5 MOD 0.0`` read 0.0).
+
+    A float 0 has the dividend's sign, as ``fmod`` gives it. A CLICK stored -0.0 for
+    ``DF -0.0 MOD DF 5.0`` (hardware, 2026-11-26).
     """
     if b == 0:
         raise MathDomainError("MOD by zero")
     remainder = abs(a) % abs(b)
+    if not remainder and isinstance(remainder, float):
+        return math.copysign(0.0, a)
     return -remainder if a < 0 else remainder
 
 
@@ -197,6 +202,52 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
 
 #: Maps each op of a formula to the op that ``math()`` runs in its place (``calc_form``).
 CALC_OPS: dict[Any, Any] = {operator.mod: _op_mod, _op_pow: _op_pow_calc}
+
+
+def _op_neg_real(a: Numeric) -> Numeric:
+    """Return ``-a``, with -0.0 for an integer 0.
+
+    A CLICK computes a DS of 0 as the double +0.0, so ``- DS1`` with DS1 = 0 stores -0.0
+    into a DF (hardware, 2026-11-26). An integer other than 0 stays an integer.
+    """
+    if a == 0 and isinstance(a, int):
+        return -0.0
+    return -a
+
+
+def _op_mul_real(a: Numeric, b: Numeric) -> Numeric:
+    """Return ``a * b``, with -0.0 for an integer 0 that has a negative factor.
+
+    ``DS1 * DS2`` with 0 and -5 stores -0.0 into a DF on a CLICK (hardware, 2026-11-26).
+    A float product already has the sign that a CLICK gives it.
+    """
+    product = a * b
+    if product == 0 and isinstance(product, int) and (a < 0 or b < 0):
+        return -0.0
+    return product
+
+
+def _op_mod_real(a: Numeric, b: Numeric) -> Numeric:
+    """Return ``a MOD b`` (:func:`_op_mod`), with -0.0 for an integer 0 of a negative dividend.
+
+    So ``-5 MOD 5`` is -0.0, as ``fmod`` gives it. A MOD by 0 raises, as in :func:`_op_mod`,
+    so the Math stores +0.0. A CLICK stored +0.0 for each MOD by zero (hardware,
+    2026-11-26).
+    """
+    remainder = _op_mod(a, b)
+    if remainder == 0 and isinstance(remainder, int) and a < 0:
+        return -0.0
+    return remainder
+
+
+#: Maps each op of a decimal Math into a Real to the op that gives a 0 the sign that a
+#: double gives it (``calc_form``). Python's ``+``, ``-``, ``/`` and ``**`` already give
+#: that sign, because an integer operand is never -0.0.
+REAL_CALC_OPS: dict[Any, Any] = {
+    operator.neg: _op_neg_real,
+    operator.mul: _op_mul_real,
+    _op_mod: _op_mod_real,
+}
 
 
 def bit_operand(value: Numeric) -> int:

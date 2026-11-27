@@ -430,11 +430,12 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] which stores raise SC43 (part `system`): a Math that wraps (`faults/math_store_out_of_range`); a Copy that clamps (`faults/copy_clamp_out_of_range`); RAND with equal bounds is a Math error (`faults/rand_wide_bounds_flags`) and with equal Real bounds writes 0 with no flag (part `control`, `paste_risk/rand_real_bounds`); RAND with bounds that differ draws over its whole constant bounds (an Int keeps a draw's low 16 bits with SC43), and from DFs, which CLICK's editor refuses typed in, writes 0 (`faults/rand_unequal_bounds`)
 - [x] a Copy through a pointer below its bank: SC44, destination untouched; past it: no flag, and no wrap or clamp into the bank (part `system`; `faults/pointer_past_bank`, `faults/pointer_past_bank_lands`)
 - [x] Inf and NaN in a Real (part `system`): ^ overflow (`faults/power_overflow_is_inf`), float32 intermediates (`faults/real_intermediate_range`), Inf/NaN arithmetic and NaN compares (`faults/inf_and_nan_arithmetic`), Math of Inf/NaN into an Int or a Dint (`faults/non_finite_math_into_int`), Copy of Inf/NaN into an Int (`faults/copy_non_finite_to_int`) and into text (`faults/copy_inf_to_text`), SIN(Inf) and SQRT(-Inf) (`faults/non_finite_functions`)
-- [ ] a Math step past the largest double or below the smallest normal one, inside a formula (`math_range/double_overflow`, probe)
-- [ ] a minus sign before a DF that holds Inf, NaN or 0, and before a DS that holds 0 (`math_range/minus_sign`, probe)
-- [ ] the sign of the 0 that a division or MOD by zero gives, with each sign of dividend (`math_range/by_zero`, probe)
-- [ ] the sign of the 0 of a sum, of a MOD of 0, and of -0.0 times or divided by a negative value (`math_range/zero_sum`, probe)
-- [ ] the zero signs in `PENDING_ZERO_SIGNS` (`tests/conformance/math/formula_values.py`) that no case reads yet. They wait for a part of their own after reading round b16, because follow5_reads is full
+- [x] a Math step past the largest double or below the smallest normal one, inside a formula (`math_range/double_overflow`, probe)
+- [x] a minus sign before a DF that holds Inf, NaN or 0, and before a DS that holds 0 (`math_range/minus_sign`, probe)
+- [x] the sign of the 0 that a division or MOD by zero gives, with each sign of dividend (`math_range/by_zero`, probe)
+- [x] the sign of the 0 of a sum, of a MOD of 0, and of -0.0 times or divided by a negative value (`math_range/zero_sum`, probe)
+- [ ] the zero signs in `PENDING_ZERO_SIGNS` (`tests/conformance/math/formula_values.py`) that no case reads yet. They need a part of their own, because follow5_reads is full
+- [ ] the order of a minus sign before a bracket with `/` and with MOD: `- ( DF 5.0 ) / DF 0.0` and `- ( DF 5.0 ) MOD DF 0.0` into a DF. +0.0 means that the minus sign applies first
 - [ ] a Modbus Send/Receive Slave ID out of range (SC43): needs a second Modbus device; a DF holding Inf or NaN read over Modbus or on the display: the harness reads slot DS only
 - [x] first scan after STOP->RUN: SD9 = 0 with SC3 on (`system/first_scan_counter_and_clock`); SD9's wrap (`system/scan_counter_wraps_to_zero`)
 - [x] edge and counter memory at STOP->RUN (`coils/edge_on_first_scan`, `counters/first_scan_input_already_on`)

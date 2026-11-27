@@ -16,6 +16,7 @@
 ### What's new
 
 - `LiteralExpr` is importable from `pyrung`. Wrap a constant in it, and `math()` runs the operation on it at scan time.
+- `parse_click_formula()` from `pyrung.click` reads a CLICK Math formula into a tree, grouped the way a CLICK computes it.
 
 ### Behaviour changes
 
@@ -64,7 +65,9 @@
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
-  - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `DF1 + DF2 + DF3` or `DS1 / DS2 MOD 3`. Add brackets in CLICK to set the order.
+  - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DS1 * DS2` or `- 5h / DH1` in hex mode. Add brackets in CLICK to set the order.
+- `ladder_to_pyrung()` now imports a minus sign before a constant in a hex Math as a CLICK runs it. `- 5h MOD DH1` with DH1 = 3h stores FFFEh (it stored 2h). `- 2h` sets SC43 (it set no flag).
+- `math()` into a `Real` now stores -0.0 where a CLICK does. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0).
 - `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. It stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
 
 ## v0.18.1 (2026-11-25)

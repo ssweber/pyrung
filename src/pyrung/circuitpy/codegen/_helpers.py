@@ -395,12 +395,41 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # A Math's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets SC46 in a Math.
+    # A float 0 has the dividend's sign.  The jit does not trace math.copysign, so the
+    # helper multiplies the dividend by 0.0.
     "_mod": [
         "def _mod(a, b, flags):",
         "    if b == 0:",
         "        return _term_fail(flags, 46)",
         "    r = abs(a) % abs(b)",
+        "    if r == 0 and type(r) is float:",
+        "        return a * 0.0",
         "    return -r if a < 0 else r",
+        "",
+    ],
+    # A decimal Math into a Real gives a 0 the sign that a double gives it (core
+    # REAL_CALC_OPS).  A MOD by 0 stays +0.0.
+    "_neg_real": [
+        "def _neg_real(a):",
+        "    if a == 0 and type(a) is not float:",
+        "        return -0.0",
+        "    return -a",
+        "",
+    ],
+    "_mul_real": [
+        "def _mul_real(a, b):",
+        "    p = a * b",
+        "    if p == 0 and type(p) is int and (a < 0 or b < 0):",
+        "        return -0.0",
+        "    return p",
+        "",
+    ],
+    "_mod_real": [
+        "def _mod_real(a, b, flags):",
+        "    r = _mod(a, b, flags)",
+        "    if r == 0 and type(r) is int and a < 0 and b != 0:",
+        "        return -0.0",
+        "    return r",
         "",
     ],
     # A Math step past 2 ** 53 becomes the double that a CLICK's Math holds (to_double).
@@ -561,6 +590,8 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
         needed.add("_format_int_text")
     if "_store_copy_value_to_type" in needed:
         needed.add("_store_real")
+    if "_mod_real" in needed:
+        needed.add("_mod")
     if "_permissive_op" in needed:
         needed.update({"_shift_count", "_math_func", "_pow", "_mod", "_pow_calc"})
     if needed & {"_rand_term", "_rand_draw", "_shift_count"}:

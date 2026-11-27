@@ -9,6 +9,7 @@ from pyrung.core.expression import (
     ABS_OF_TYPE,
     CALC_FAULTS,
     CALC_OPS,
+    REAL_CALC_OPS,
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
@@ -145,6 +146,7 @@ class _CalcForm:
     mask_bits: bool = False
     calc_ops: bool = True
     whole_division: bool = False
+    real_zeros: bool = False
 
     def cut(self, value: int) -> int:
         return value & 0xFFFF if self.unsigned else _int32(value)
@@ -183,6 +185,8 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             op = CALC_OPS.get(op, op)
             if form.whole_division and op is _op_div:
                 op = _op_hex_div
+            if form.real_zeros and not (_holds_double(left) or _holds_double(right)):
+                op = REAL_CALC_OPS.get(op, op)
         cls = CalcBinaryExpr if form.calc_ops else type(value)
         node = value
         if (
@@ -200,6 +204,8 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
         op = value.op
         if form.abs_ops and value.symbol == "abs" and isinstance(operand, TagExpr):
             op = ABS_OF_TYPE.get(operand.tag.type.name, op)
+        if form.calc_ops and form.real_zeros and not _holds_double(operand):
+            op = REAL_CALC_OPS.get(op, op)
         cls = CalcUnaryExpr if form.calc_ops else type(value)
         if operand is value.operand and op is value.op and type(value) is cls:
             return value
@@ -235,6 +241,35 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
     return value
 
 
+def _holds_double(value: Any) -> bool:
+    """Return whether *value* is a Real tag or a float constant, which always holds a double."""
+    if isinstance(value, LiteralExpr):
+        return isinstance(value.value, float)
+    return isinstance(value, TagExpr) and value.tag.type is TagType.REAL
+
+
+def may_be_text(value: Any) -> bool:
+    """Return True if *value* reads text, a Char tag or a pointer into Char tags anywhere.
+
+    Text that an expression builds, such as ``TXT1 + TXT2``, is text too.
+    """
+    if isinstance(value, ImmediateRef):
+        value = value.value
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
+        return value.block.type.name == "CHAR"
+    if isinstance(value, Tag):
+        return value.type.name == "CHAR"
+    if isinstance(value, LiteralExpr):
+        return may_be_text(value.value)
+    if isinstance(value, Expression):
+        # An operator's symbol, such as "+", is a str but not an operand.
+        parts = [part for part in vars(value).values() if not isinstance(part, str)]
+        return any(may_be_text(part) for part in parts)
+    if isinstance(value, (list, tuple)):
+        return any(may_be_text(part) for part in value)
+    return isinstance(value, str)
+
+
 def cut_int_constants(value: Any) -> Any:
     """Return *value* (a Math expression) with each integer constant cut to 32 bits, signed.
 
@@ -244,7 +279,7 @@ def cut_int_constants(value: Any) -> Any:
     return _rebuild(value, _CalcForm(calc_ops=False))
 
 
-def calc_form(expression: Any, mode: CalcMode) -> Any:
+def calc_form(expression: Any, mode: CalcMode, *, into_real: bool = False) -> Any:
     """Return *expression* as a CLICK Math in *mode* runs it (measured, 2026-11-11).
 
     - A decimal Math keeps each integer constant whole, whatever the destination
@@ -275,15 +310,19 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
       those 16 bits.  With DH1 = 2h, ``- DH1 OR 0h`` stores FFFEh and
       ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
       2026-11-26).  An operand past 16 bits gets the same cut, with no SC43.  So
-      ``DH1 * DH2 OR 0h`` with 100h and 100h stores 0000h.  That is pyrung's
-      assumption, and no reading covers it.
+      ``( DH1 * DH2 ) OR 0h`` with 100h and 100h stores 0000h (read, 2026-11-26).
+    - With *into_real*, for a decimal Math into a Real, a minus sign, ``*`` and MOD give a
+      0 the sign that a double gives it.  A CLICK computes a DS of 0 as the double +0.0,
+      so ``- DS1`` with DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5 stores -0.0
+      (read, 2026-11-26).  A step on a Real tag or a float constant needs no other op,
+      because Python computes it in doubles.
 
     Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
         form = _CalcForm(unsigned=True, mask_bits=True, whole_division=True)
     else:
-        form = _CalcForm(abs_ops=True)
+        form = _CalcForm(abs_ops=True, real_zeros=into_real)
     return _rebuild(expression, form)
 
 
@@ -410,7 +449,9 @@ class CalcInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.mode_inference = infer_calc_mode(expression, dest)
         self.mode = self.mode_inference.mode
-        self.expression = calc_form(expression, self.mode)
+        # Only a Real shows the sign of a 0.  Text keeps Python's ops, so "5" * 2 is "55".
+        into_real = getattr(dest, "type", None) is TagType.REAL and not may_be_text(expression)
+        self.expression = calc_form(expression, self.mode, into_real=into_real)
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
