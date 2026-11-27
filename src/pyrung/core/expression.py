@@ -637,12 +637,12 @@ class CalcUnaryExpr(UnaryExpr):
 
 
 class DoubleBinaryExpr(CalcBinaryExpr):
-    """A step of a decimal Math into a Real, which converts both operands to doubles.
+    """A step of a decimal Math into a Real. It converts both operands to doubles.
 
     A CLICK computes this Math in doubles, so a DS of 0 is the double +0.0. A product or
     a MOD can then give -0.0. ``DS1 * DS2`` with 0 and -5 stores -0.0 into a DF
     (hardware, 2026-11-26). ``calc_form`` builds this class for ``+``, ``-``, ``*``,
-    ``/``, MOD and ``^``. These are the operators of CLICK's decimal Math.
+    ``/``, MOD and ``**``. These are the operators of CLICK's decimal Math.
     """
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
@@ -1300,9 +1300,15 @@ INTEGER_TAG_TYPE_NAMES = frozenset({"BOOL", "INT", "DINT", "WORD"})
 def may_be_float(expr: Any) -> bool:
     """Return False only when *expr* is integer-valued, so it is never Inf or NaN.
 
-    A REAL operand, a float constant, a ``/``, a ``**``, a math function or a step of a
-    decimal Math into a Real can make a float, and a float can be Inf or NaN
-    (``Inf - Inf``). This function treats anything it does not recognise as a float.
+    A float can be Inf or NaN (``Inf - Inf``). These can make one:
+
+    - a REAL operand or a float constant;
+    - a ``/`` or a ``**``;
+    - a math function.
+
+    This function treats anything it does not recognise as a float. It reads the
+    formula's operands, not how a Math computes them. So ``A + 1`` with an Int A is
+    integer-valued even in a Math into a Real, which computes the sum in doubles.
     """
     from pyrung.core.tag import ImmediateRef
 
@@ -1311,8 +1317,6 @@ def may_be_float(expr: Any) -> bool:
         return tag.type.name not in INTEGER_TAG_TYPE_NAMES
     if isinstance(expr, LiteralExpr):
         return isinstance(expr.value, float)
-    if isinstance(expr, (DoubleBinaryExpr, DoubleUnaryExpr)):
-        return True
     if isinstance(expr, BinaryExpr):
         return expr.symbol in ("/", "**") or may_be_float(expr.left) or may_be_float(expr.right)
     if isinstance(expr, UnaryExpr):

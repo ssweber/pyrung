@@ -334,12 +334,13 @@ def calc_form(expression: Any, mode: CalcMode, *, into_real: bool = False) -> An
       ``( ( 0h - DH1 ) OR 0h ) + 1h`` stores FFFFh.  Neither raises SC43 (read,
       2026-11-26).  An operand past 16 bits gets the same cut, with no SC43.  So
       ``( DH1 * DH2 ) OR 0h`` with 100h and 100h stores 0000h (read, 2026-11-26).
-    - With *into_real*, for a decimal Math into a Real, each ``+``, ``-``, ``*``, ``/``,
-      ``%``, ``**``, minus sign, plus sign and ``abs()`` converts its operands to doubles
-      (``DoubleBinaryExpr``, ``DoubleUnaryExpr``).  A CLICK computes a DS of 0 as the
-      double +0.0, so ``- DS1`` with DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5
-      stores -0.0 (read, 2026-11-26).  The other ops, such as ``//`` and ``&``, are not
-      in CLICK's decimal Math.  They do not convert their operands.
+    - With *into_real* (a decimal Math into a Real), each operator of CLICK's decimal
+      Math converts its operands to doubles (``DoubleBinaryExpr``, ``DoubleUnaryExpr``).
+      These are ``+``, ``-``, ``*``, ``/``, ``%``, ``**``, a minus or plus sign and
+      ``abs()``.  A CLICK computes a DS of 0 as the double +0.0, so ``- DS1`` with
+      DS1 = 0 stores -0.0 and ``DS1 * DS2`` with 0 and -5 stores -0.0 (read,
+      2026-11-26).  The other ops, such as ``//`` and ``&``, are not in CLICK's decimal
+      Math.  They do not convert their operands.
 
     Return *expression* itself when nothing changes (no operation in it).
     """

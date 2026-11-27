@@ -125,6 +125,13 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
         float("-inf"),
         {43},
     ),
+    # A left shift of a double near the float range passes it, so the shift is Inf, as
+    # an integer step past 2 ** 1024 is. A bit operation on that Inf is 0 with SC43.
+    "double_shifted_past_floats": (lambda: ((DINT_TOP**32) << 60) + 1, Real, float("inf"), {43}),
+    "double_lsh_past_floats": (lambda: lsh(DINT_TOP**33, 64) - DINT_TOP, Real, float("inf"), {43}),
+    "double_shifted_into_and": (lambda: ((DINT_TOP**32) << 60) & 1, Real, 0.0, {43}),
+    "real_lsh_past_floats": (lambda: lsh(BIG**8, 64) + 1, Real, float("inf"), {43}),
+    "real_lsh_past_floats_into_and": (lambda: (lsh(BIG**8, 64) & 1) + 2, Int, 2, {43}),
     "no_error": (lambda: SEVEN / 2 + 5, Real, 8.5, set()),
 }
 
@@ -221,7 +228,7 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
 
 
 #: A power with a large integer exponent, into a Real. The Math computes it in doubles,
-#: so it is +Inf with SC43. As a Python int, 5 ** (2 ** 31 - 1) takes hours.
+#: so it overflows to Inf and sets SC43. As a Python int, 5 ** (2 ** 31 - 1) takes hours.
 LARGE_POWERS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "five_to_dint_top": (lambda: 5**DINT_TOP, Real, float("inf"), {43}),
     "minus_five_to_dint_top": (lambda: -5 * 5**DINT_TOP, Real, float("-inf"), {43}),

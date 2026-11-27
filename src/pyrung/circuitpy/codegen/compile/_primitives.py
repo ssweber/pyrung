@@ -595,7 +595,7 @@ def _int_bound(expr: Any) -> float:
         if symbol in ("&", "|", "^"):
             return 2 * max(left, right) + 1
         if symbol == "<<" and _small_count_literal(expr.right):
-            return left * (1 << expr.right.value)
+            return _shifted_bound(expr.left, left, expr.right.value)
         if symbol == "**" and _small_count_literal(expr.right):
             return left**expr.right.value
         return math.inf
@@ -609,7 +609,7 @@ def _int_bound(expr: Any) -> float:
         if expr.name == "rsh":
             return _int_bound(expr.value)
         if _small_count_literal(expr.count):
-            return _int_bound(expr.value) * (1 << expr.count.value)
+            return _shifted_bound(expr.value, _int_bound(expr.value), expr.count.value)
         return math.inf
     if isinstance(expr, RandIntExpr):
         return 1 << 31
@@ -618,6 +618,18 @@ def _int_bound(expr: Any) -> float:
     if isinstance(expr, RangeAggregateExpr):
         return max((_TYPE_BOUNDS.get(tag.type, math.inf) for tag in expr.block_range), default=0)
     return math.inf
+
+
+def _shifted_bound(value: Any, bound: float, count: int) -> float:
+    """Return the bound of *value*, whose bound is *bound*, shifted left by *count* bits.
+
+    A float operand has a bound of 0, but ``int()`` of a float can be near 2 ** 1024.
+    Shifted left, it can pass the float range, so the shift has no bound and goes
+    through ``_dbl``.
+    """
+    if _may_be_float(value):
+        return math.inf
+    return bound * (1 << count)
 
 
 def _small_count_literal(expr: Any) -> bool:
@@ -641,10 +653,10 @@ def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> s
 
 
 def _float_without_call(expr: Any, compiled: str) -> str | None:
-    """Return *expr*, compiled as *compiled*, as a float with no ``float()`` call.
+    """Return code for *expr* that is already a float, or None.
 
-    A constant renders as a float literal, and a Real tag always holds a float.  Return
-    None for any other operand.
+    A constant becomes a float literal.  A Real tag holds a float, so *compiled* is
+    returned as it is.
     """
     if isinstance(expr, LiteralExpr):
         return _compile_constant(float(expr.value))
@@ -753,7 +765,20 @@ def _permissive_op(
     return f"_permissive_op({op!r}, {left}, {right}{tail})"
 
 
-_may_be_float = may_be_float
+def _may_be_float(expr: Any) -> bool:
+    """Return whether *expr* can compile to a float, so it may be Inf or NaN.
+
+    This is the core's ``may_be_float``, which reads only the formula's operands.  A
+    double step (``DoubleBinaryExpr``, ``DoubleUnaryExpr``) always gives a float, even
+    from Int operands, so an operation on it needs the guard of a float operand.
+    """
+    if isinstance(expr, (DoubleBinaryExpr, DoubleUnaryExpr)):
+        return True
+    if isinstance(expr, BinaryExpr):
+        return expr.symbol in ("/", "**") or _may_be_float(expr.left) or _may_be_float(expr.right)
+    if isinstance(expr, UnaryExpr):
+        return expr.symbol != "~" and _may_be_float(expr.operand)
+    return may_be_float(expr)
 
 
 def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
