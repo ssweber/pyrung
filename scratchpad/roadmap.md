@@ -486,10 +486,14 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
-- **The sign of an integer 0 stored into a Real.** In four formulas, pyrung stores +0.0 when it applies the minus
-  sign first and -0.0 when it applies it last. Two are `- DS1 / DS2` with (0, 1) and `- DS1 MOD DS2` with (0.0, 1.0).
-  Fix it once round b16 reads `math_range/minus_sign`. Then the 27 zero-sign rows that `PENDING_ZERO_SIGNS` marks
-  "no probe yet" need conformance cases in a part of their own.
+- **The sign of a zero in a product after a minus sign.** pyrung stores the zero sign that a CLICK stores in each
+  runtime (round b16, `math_range/minus_sign` and `zero_sum`). `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on
+  import. Their pairs need the 14 zero-sign rows that `PENDING_ZERO_SIGNS` lists, in a conformance part of their own.
+  `- ( DF1 ) / DF2` and `- ( DF1 ) MOD DF2` need an order probe. With 5.0 and 0.0 into a DF, +0.0 means that the
+  minus sign applies first.
+- **Two open questions about the formula parser.** The parser drops a unary `+`, and no reading shows whether CLICK
+  keeps it as a token. `pyrung.click` exports `parse_click_formula` and `Formula` but not the node classes, such as
+  `BinaryOp`. Export them if ClickNick needs to check a node's class.
 - **A Math step past 2\*\*53 is rounded to a double.** The rounded value can land just past an exact corner, as in
   `13 ** (A + 15)`. No false domain was found (math-flags review, 2026-11-26).
 - **The jit declines a scan that calls a helper with a default argument.** Four CircuitPython helpers take
