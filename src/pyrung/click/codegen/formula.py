@@ -36,10 +36,9 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 #: is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
 
-#: A minus sign before a constant in hex mode, as an operator in :data:`CONFIRMED_PAIRS`. CLICK
-#: stores it in its project as an operator of its own. laddercodec decodes ``- 5h / DH1`` as
-#: ``-#UH5#/#DH1``, the same form as ``- DH1 / DH2``. No reading has run one before another
-#: operator.
+#: A minus sign before a constant in hex mode, as an operator in :data:`CONFIRMED_PAIRS`.
+#: laddercodec encodes it as an operator of its own, ``-#UH5#/#DH1``, the same form as
+#: ``- DH1 / DH2``. No CLICK reading has confirmed that form yet (round b20 Part A).
 NEGATE_CONSTANT = "a minus sign before a hex constant"
 
 #: A minus sign before a bracket, and before a function, as operators in

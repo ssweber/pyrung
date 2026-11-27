@@ -493,7 +493,7 @@ All [nothing] unless marked.
   minus sign applies first.
 - **A Math pair read in one mode only.** The pair lists in `click/codegen/formula.py` have no mode. pyrung assumes
   that one parser sets the order in both modes. Read a hex case of a pair read only in decimal, and the reverse:
-  - hex `DH1 MOD DH2 MOD DH3` with 7h, 5h and 3h stores 2h from the left and 1h from the right;
+  - hex `DH1 MOD DH2 MOD DH3` with 7h, 5h and 3h stores 2h from the left and 1h from the right.
   - decimal `DS1 / DS2 MOD 3` with 7 and 2, into a DF, stores 0.5 from the left and 3.5 from the right.
 - **`math_range/minus_sign` and `zero_sum` need a CLICK run.** Their expectations changed to round b16's readings,
   so their hashes changed. Run them on a CLICK to confirm them at the new hashes.
