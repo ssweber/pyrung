@@ -487,22 +487,24 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 All [nothing] unless marked.
 
 - **The sign of a zero in a product after a minus sign.** `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on import.
-  Round b20 read the product of a zero and a number at 5.0 and -5.0 only, and each gave the sign that a double gives.
+  The readings show the sign of the 0 of a product of a zero and a number only at 5.0, -5.0 and -1.0. Each gave the
+  sign that a double gives.
   The 9 rows that `PENDING_ZERO_SIGNS` lists need every value of their class. Sam decides whether one value stands for
   its class. If it does, both decimal pairs join `SAME_VALUE_ON_PLAIN_OPERANDS`. No conformance case reads these rows.
 - **A hex minus sign before `*` or `/`.** `- 5h * DH1`, `- DH1 * DH2`, `- ( DH1 ) * DH2` and `- 5h / DH1` warn on
   import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. No reading shows a hex `/` of a
   negative value whose quotient has a fraction, such as -5h / 2h.
-- **A plus sign in a Math formula.** Each formula with a plus warns on import, and the import keeps the plus. The
-  one exception is a decimal plus before a constant, which CLICK stores in the constant (H+5).
-  - In hex mode CLICK stores a plus as a token of its own. Round b20 read `+ 5h * DH401` only. With 1h in DH1,
-    `+ ( 0h - DH1 ) + 1h` stores 0h with no SC43 if the plus cuts its operand to 16 bits.
-  - No reading shows a decimal plus before an address or a bracket. Round b22 Part B reads both.
-  - pyrung's export writes a plus with no space, such as `+DS1 * 2` and `+5h * DH1`. pyrung imports that text again.
-    Round b22 Part B asks whether CLICK takes it.
+- **A hex `/` of a negative value stores what a CLICK does not.** With 1h in DH1, `( 0h - DH1 ) / 2h` stored FFFFh
+  with SC43 on a CLICK (round b21, n4). pyrung stores 0h with no SC43 on every backend. Two readings fit. The
+  quotient rounds down, or the division works on 32 unsigned bits. `( 0h - DH1 ) / 3h` tells them apart: FFFFh or
+  5555h, each with SC43.
+- **A decimal plus before an address or a bracket.** No reading shows one. The import keeps the plus, and warns
+  when the plus meets another operator. Round b22 Part B reads `+ DS1 * 2` and `+ ( DS1 - 3 ) * 2`.
+  - pyrung's export writes the plus with no space, such as `+DS1 * 2`. pyrung imports that text again. Round b22
+    Part B asks whether CLICK takes it.
 - **A Math pair read in one mode only.** The pair lists in `click/codegen/formula.py` have no mode. pyrung assumes
   that one parser sets the order in both modes. Round b20 checked two pairs, MOD MOD in hex and `/` MOD in decimal.
-  Each had the order of the other mode. Most other pairs were read in one mode only.
+  Each ran left to right, as round b16 read it in the other mode. Most other pairs were read in one mode only.
 - **`math_range/minus_sign` and `zero_sum` need a CLICK run.** Their expectations changed to round b16's readings,
   so their hashes changed. Run them on a CLICK to confirm them at the new hashes.
 - **The formula parser's node classes.** `pyrung.click` exports `parse_click_formula` and `Formula` but not the node

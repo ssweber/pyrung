@@ -230,6 +230,12 @@ READINGS: list[tuple[str, str, bool, dict[str, float], float]] = [
     # CLICK stored the decimal plus in the constant, H+5, and the hex plus as a token of its own.
     ("b20-d_dec", "+ 5 * DS401", False, {"DS401": 3}, 15),
     ("b20-d_hex", "+ 5h * DH401", True, {"DH401": 3}, 0x000F),
+    # Round b21. Each hex plus stored what the formula stores without it.
+    ("b21-p1", "+ ( 0h - DH421 ) + 1h", True, {"DH421": 1}, 0x0000),
+    ("b21-p2", "+ 0h - DH421 + 1h", True, {"DH421": 1}, 0x0000),
+    ("b21-p3", "+ ( 0h - DH421 ) * 2h", True, {"DH421": 1}, 0xFFFE),
+    ("b21-p2b", "+ 0h - DH422 + 1h", True, {"DH422": 2}, 0xFFFF),
+    ("b21-p3b", "+ ( 0h - DH421 ) * 1h", True, {"DH421": 1}, 0xFFFF),
     ("b20-e_hex", "DH411 MOD DH412 MOD DH413", True, {"DH411": 7, "DH412": 5, "DH413": 3}, 2),
     ("b20-e_dec", "DS411 / DS412 MOD 3", False, {"DS411": 7, "DS412": 2}, 0.5),
 ]
@@ -434,15 +440,16 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 # - A DF at -0.0 (_REAL_GRID). The model reads it as a double. A DF holds -0.0 from
 #   0.0 * -1.0 (``real_bits/minus_zero_math``).
 # - A minus sign before any operand that is 0. A minus sign before +0.0 gives -0.0
-#   (``math_range/minus_sign``), and the model reads it. No reading shows a minus sign before
-#   -0.0, so the model leaves it unread.
+#   (``math_range/minus_sign``), and one before -0.0 gives +0.0 (b20 c13). The model reads
+#   both.
 # - A 0 that a step makes. The model reads the zeros in ``formula_values.ZEROS_READ``, each at
 #   its exact operands. It leaves every other 0 of a step unread, with the sign of a ^ or SQRT
 #   of 0.
 # - A division or MOD by zero, and SQRT of a negative (the stand-in SQRT ( DS4 ) at -1). Each
 #   gives 0 with SC40 or SC46, and the rest of the formula runs (``math_terms/error_terms``).
 #   A division or MOD by zero of 5.0, -5.0, 0.0 or -0.0 gives +0.0 (``math_range/by_zero``),
-#   and the model reads those four dividends only. No reading shows the sign of the 0 of SQRT.
+#   and the model reads those four dividends only. SQRT ( -5.0 ) gives +0.0 (b20 c14). No
+#   reading shows the sign of the 0 of SQRT at another negative value, or of SQRT of 0.
 # - A pointer. A Copy through one past its bank raises SC44 (``faults/pointer_past_bank``), and
 #   no reading shows one in a Math. The model leaves each pointer unread.
 # - Reals that cancel: 1.0 with 1.0E+17 and 1.0E+30, with both signs (_REAL_GRID). The model
@@ -647,10 +654,10 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
         texts = [f"{bank}1 {a} {bank}2 {b} {bank}3" for a in ops for b in ops]
         texts += [f"- {bank}1 {b} {bank}2" for b in ops]
         texts += [f"- ( {bank}1 ) {b} {bank}2" for b in ops]
-        # A decimal plus before a constant has no node, so a stand-in for the register would
-        # drop it. A bracket keeps it.
-        plus = f"+ {bank}1" if hex_mode else f"+ ( {bank}1 )"
-        texts += [f"{plus} {b} {bank}2" for b in ops]
+        if not hex_mode:
+            # A decimal plus before a constant has no node, so a stand-in for the register would
+            # drop it. A bracket keeps it.
+            texts += [f"+ ( {bank}1 ) {b} {bank}2" for b in ops]
         if hex_mode:
             # The pair holds for every constant, so it comes with small and large ones.
             texts += [f"- {c} {b} {bank}2" for c in ("0h", "5h", "8000h", "FFFFh") for b in ops]
@@ -896,15 +903,10 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         ("- 5h / DH1", True, [(NEGATE_CONSTANT, "/")]),
         ("- 5h * DH1", True, [(NEGATE_CONSTANT, "*")]),
         ("- 5 / DH1", True, [(NEGATE_CONSTANT, "/")]),
-        # Round b20 read a hex plus before 5h only. No reading shows whether it cuts its operand
-        # to 16 bits.
-        ("+ 5h * DH1", True, [(PLUS_SIGN, "*")]),
-        ("+ ( 0h - DH1 ) + 1h", True, [(PLUS_SIGN, "+")]),
-        ("+ 0h - DH1 + 1h", True, [(PLUS_SIGN, "-"), (PLUS_SIGN, "+")]),
-        ("- + 5h * DH1", True, [(NEGATE_PLUS, "*"), (PLUS_SIGN, "*")]),
         # Round b20 read a decimal plus before a constant only.
         ("+ DS1 * 2", False, [(PLUS_SIGN, "*")]),
         ("+ ( DS1 - 3 ) * 2", False, [(PLUS_SIGN, "*")]),
+        ("- + DS1 * 2", False, [(NEGATE_PLUS, "*"), (PLUS_SIGN, "*")]),
         # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
         ("- ( DH1 ) * DH2", True, [(NEGATE_BRACKET, "*")]),
@@ -996,8 +998,11 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DH1 ) MOD 7h", True),
         ("- ( DH1 * DH2 ) MOD DH3", True),
         ("DH1 MOD DH2 MOD DH3", True),
-        # A decimal CLICK stores a plus before a constant in the constant.
+        ("- ( DF1 ) / DF2 ^ DF3", False),
+        # A decimal CLICK stores a plus before a constant in the constant. A hex plus changes no
+        # value (round b21).
         ("+ 5 * DS1", False),
+        ("+ 5h * DH1", True),
         # A bracket gives the order. In decimal mode the minus sign is part of the constant.
         ("( - 5h ) / DH1", True),
         ("- 5 / DS1", False),
@@ -1028,25 +1033,41 @@ def test_click_formula_parse_keeps_a_hex_minus_sign_before_a_constant_as_an_oper
     assert folded == Number(-5)
 
 
-def test_click_formula_parse_keeps_a_plus_sign_as_an_operator() -> None:
-    # Round b20 read + 5 * DS401 and + 5h * DH401 with 3 in the register. CLICK stored the
-    # decimal plus in the constant (H+5#*#DS401) and the hex plus as a token of its own
-    # (+#UH5#*#DH401). Each stored 15.
-    assert parse_click_formula("+ 5 * DS1") == parse_click_formula("5 * DS1")
-    tree = parse_with_unconfirmed_pairs("+ 5h * DH1", hex_mode=True)[0]
-    assert tree == BinaryOp("*", formula_module.Plus(Number(5)), Address("DH", 1))
-    # If a hex plus cuts its operand to 16 bits, as AND does, these two differ with 1h in DH1.
-    # The first stores 0h with no SC43, and the second sets SC43.
-    bracket, plain = (
-        parse_with_unconfirmed_pairs(text, hex_mode=True)
-        for text in ("+ ( 0h - DH1 ) + 1h", "+ 0h - DH1 + 1h")
+@pytest.mark.parametrize(
+    ("text", "without"),
+    [
+        # Round b21 read each formula with 1h in DH1, and each stored what it stores without
+        # the plus.
+        ("+ ( 0h - DH1 ) + 1h", "( 0h - DH1 ) + 1h"),
+        ("+ 0h - DH1 + 1h", "0h - DH1 + 1h"),
+        ("+ ( 0h - DH1 ) * 2h", "( 0h - DH1 ) * 2h"),
+        # Round b20 read it before a constant.
+        ("+ 5h * DH1", "5h * DH1"),
+        # A plus alone, on the right of an operator, alone in a bracket and in a function.
+        ("+ ( 0h - DH1 )", "( 0h - DH1 )"),
+        ("1h + + ( 0h - DH1 )", "1h + ( 0h - DH1 )"),
+        ("( + ( 0h - DH1 ) ) + 1h", "( ( 0h - DH1 ) ) + 1h"),
+        ("LSH ( + ( 0h - DH1 ) , 1h )", "LSH ( ( 0h - DH1 ) , 1h )"),
+        ("- + 5h * DH1", "- 5h * DH1"),
+    ],
+)
+def test_click_formula_parse_drops_a_hex_plus_sign(text: str, without: str) -> None:
+    # In hex mode CLICK stores the plus as a token of its own (+#(#UH0#-#DH421#)#+#UH1), and it
+    # changes no value or flag.
+    assert parse_with_unconfirmed_pairs(text, hex_mode=True) == parse_with_unconfirmed_pairs(
+        without, hex_mode=True
     )
-    assert bracket[0] != plain[0]
-    assert bracket[1] and plain[1]
+
+
+def test_click_formula_parse_keeps_a_decimal_plus_sign_before_an_address_or_a_bracket() -> None:
+    # Round b20 read + 5 * DS401 with 3 in DS401. CLICK stored the plus in the constant
+    # (H+5#*#DS401), and stored 15.
+    assert parse_click_formula("+ 5 * DS1") == parse_click_formula("5 * DS1")
     # No reading shows a decimal plus before an address or a bracket.
     assert parse_with_unconfirmed_pairs("+ DS1 * 2")[0] == BinaryOp(
         "*", formula_module.Plus(Address("DS", 1)), Number(2)
     )
+    assert parse_click_formula("+ ( DS1 - 3 ) * 2") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1104,16 +1125,13 @@ def test_imported_formula_brackets_what_click_groups(token: str, line: str) -> N
 @pytest.mark.parametrize(
     ("token", "line"),
     [
-        ("math(+ 5h * DH1,DH2,mode=hex)", "math(+LiteralExpr(0x5) * DH1, DH2)"),
-        ("math(+ ( 0h - DH1 ) + 1h,DH2,mode=hex)", "math(+(0x0 - DH1) + 0x1, DH2)"),
         ("math(+ DS1 * 2,DS2)", "math(+DS1 * 2, DS2)"),
         ("math(+ ( DS1 - 3 ) * 2,DS2)", "math(+(DS1 - 3) * 2, DS2)"),
     ],
 )
-def test_imported_formula_keeps_a_plus_sign(token: str, line: str) -> None:
-    # No reading shows whether a hex plus cuts its operand to 16 bits, or what a decimal plus
-    # before an address or a bracket does. So the import keeps the plus as a step of the scan,
-    # and warns.
+def test_imported_formula_keeps_a_decimal_plus_sign(token: str, line: str) -> None:
+    # No reading shows what a decimal plus before an address or a bracket does. So the import
+    # keeps the plus as a step of the scan, and warns.
     with pytest.warns(UserWarning, match=PLUS_SIGN):
         source = ladder_to_pyrung(_bundle(token))
     assert _math_line(source) == line
@@ -1127,14 +1145,25 @@ def test_imported_formula_keeps_a_plus_sign(token: str, line: str) -> None:
 
 def test_imported_formula_names_a_minus_sign_before_a_plus_sign() -> None:
     with pytest.warns(UserWarning) as caught:
-        source = ladder_to_pyrung(_bundle("math(- + 5h * DH1,DH2,mode=hex)"))
+        source = ladder_to_pyrung(_bundle("math(- + DS1 * 2,DS2)"))
     assert any(f"uses {NEGATE_PLUS} and '*'" in str(w.message) for w in caught)
-    assert _math_line(source) == "math(-+LiteralExpr(0x5) * DH1, DH2)"
+    assert _math_line(source) == "math(-+DS1 * 2, DS2)"
 
 
-def test_imported_formula_drops_a_decimal_plus_sign() -> None:
-    # A decimal CLICK stores + 5 as the constant H+5.
-    assert _math_line(ladder_to_pyrung(_bundle("math(+ 5 * DS1,DS2)"))) == "math(5 * DS1, DS2)"
+@pytest.mark.parametrize(
+    ("token", "line"),
+    [
+        # A decimal CLICK stores + 5 as the constant H+5.
+        ("math(+ 5 * DS1,DS2)", "math(5 * DS1, DS2)"),
+        # A hex plus changes no value (rounds b20 and b21).
+        ("math(+ 5h * DH1,DH2,mode=hex)", "math(0x5 * DH1, DH2)"),
+        ("math(+ ( 0h - DH1 ) + 1h,DH2,mode=hex)", "math((0x0 - DH1) + 0x1, DH2)"),
+    ],
+)
+def test_imported_formula_drops_a_plus_sign(token: str, line: str) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _math_line(ladder_to_pyrung(_bundle(token))) == line
 
 
 @pytest.mark.parametrize("operand", ['DS1 XOR "a"', "DS1..DS2 MOD 2", "DS1 ^ none"])
@@ -1221,7 +1250,6 @@ def test_imported_constants_compute_what_math_computes(
         ("- DF2 * 4", "DF3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
         ("- ( DF1 ) * DF2", "DF3", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
         ("- 5h / DH1", "DH2,mode=hex", f"{NEGATE_CONSTANT} and '/'", "the minus sign first"),
-        ("+ 5h * DH1", "DH2,mode=hex", f"{PLUS_SIGN} and '*'", "the plus sign first"),
         ("+ DS1 * 2", "DS2", f"{PLUS_SIGN} and '*'", "the plus sign first"),
     ],
 )
@@ -1419,6 +1447,52 @@ def test_imported_formula_stores_what_round_b20_read(
         assert got == want, backend
         # == cannot tell -0.0 from +0.0, so compare the sign too.
         assert math.copysign(1, got[0]) == math.copysign(1, stored), backend
+
+
+#: Reading round b21, on the same CLICK on 2026-11-26: (case, formula as CLICK displays it,
+#: register values, destination, value the PLC stored, whether SC43 was on after the Math).
+#: SC40 and SC46 stayed off. Each n case is its p case without the plus.
+ROUND_B21_READINGS: list[tuple[str, str, dict[str, int], str, int, bool]] = [
+    ("b21-p1", "+ ( 0h - DH421 ) + 1h", {"DH421": 1}, "DH1", 0x0000, False),
+    ("b21-p2", "+ 0h - DH421 + 1h", {"DH421": 1}, "DH2", 0x0000, False),
+    ("b21-p3", "+ ( 0h - DH421 ) * 2h", {"DH421": 1}, "DH3", 0xFFFE, True),
+    ("b21-p2b", "+ 0h - DH422 + 1h", {"DH422": 2}, "DH4", 0xFFFF, True),
+    ("b21-p3b", "+ ( 0h - DH421 ) * 1h", {"DH421": 1}, "DH5", 0xFFFF, True),
+    ("b21-p4", "+ ( 0h - DH421 ) / 2h", {"DH421": 1}, "DH6", 0xFFFF, True),
+    ("b21-n1", "( 0h - DH421 ) + 1h", {"DH421": 1}, "DH7", 0x0000, False),
+    ("b21-n2", "0h - DH421 + 1h", {"DH421": 1}, "DH8", 0x0000, False),
+    ("b21-n3", "( 0h - DH421 ) * 2h", {"DH421": 1}, "DH9", 0xFFFE, True),
+    ("b21-n2b", "0h - DH422 + 1h", {"DH422": 2}, "DH10", 0xFFFF, True),
+    ("b21-n3b", "( 0h - DH421 ) * 1h", {"DH421": 1}, "DH11", 0xFFFF, True),
+    ("b21-n4", "( 0h - DH421 ) / 2h", {"DH421": 1}, "DH12", 0xFFFF, True),
+]
+
+#: pyrung's hex ``/`` rounds -1 / 2h toward 0, so it stores 0h with no SC43.
+_B21_DIVISION = pytest.mark.xfail(
+    strict=True, reason="pyrung stores 0h for a hex -1 / 2h, and a CLICK stored FFFFh with SC43"
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "registers", "dest", "stored", "out_of_range"),
+    [
+        pytest.param(*reading[1:], id=reading[0], marks=_B21_DIVISION)
+        if reading[1].endswith("/ 2h")
+        else pytest.param(*reading[1:], id=reading[0])
+        for reading in ROUND_B21_READINGS
+    ],
+)
+def test_imported_formula_stores_what_round_b21_read(
+    text: str, registers: dict[str, int], dest: str, stored: int, out_of_range: bool, monkeypatch
+) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        source = ladder_to_pyrung(_bundle(*_b20_rungs(text, True, registers, dest)))
+    ns = exec_with_source(source)
+    faults = [getattr(system.fault, name) for name in (_SC40, _SC43, _SC46)]
+    results = _on_every_backend(ns["logic"], monkeypatch, [ns[dest], *faults], scans=1)
+    for backend, got in results.items():
+        assert got == (stored, False, out_of_range, False), backend
 
 
 @pytest.mark.parametrize(

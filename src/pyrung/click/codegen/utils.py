@@ -585,9 +585,10 @@ def _render_parsed_formula(
         if isinstance(node, (Negate, Plus)):
             operand, strength = render(node.operand)
             if _is_python_number(node.operand):
-                # Python would fold the sign into the constant when it loads the file. A hex
-                # Math reads a negative constant as its 16 bits, so - 5h / DH1 would divide
-                # FFFBh. A LiteralExpr keeps the sign a step of the scan.
+                # Python would fold the minus sign into the constant when it loads the file. A
+                # hex Math reads a negative constant as its 16 bits, so - 5h / DH1 would divide
+                # FFFBh. A LiteralExpr keeps the minus sign a step of the scan. Before a plus,
+                # it keeps the plus in the export.
                 operand, strength = f"LiteralExpr({operand})", _ATOM_STRENGTH
                 collection.used_expr_funcs.add("LiteralExpr")
             if strength < _UNARY_STRENGTH:

@@ -117,7 +117,7 @@ def click_steps(
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
     - a pointer
-    - a plus sign, except a hex plus before the constant 5h
+    - a decimal plus before an address or a bracket
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -194,13 +194,6 @@ class _Guard:
                 self.flags.add("math_operation_error")
                 return 0.0
         return math.sqrt(x)
-
-    def plus(self, operand: Formula) -> None:
-        # CLICK stores a hex plus as a token of its own (+#UH5#*#DH401). Round b20 read it before
-        # 5h only, so no reading shows whether it cuts a value past FFFFh or below 0h to 16 bits.
-        # No reading shows a decimal plus before an address or a bracket.
-        if not (self.hex_mode and operand == Number(5) and not operand.bracketed):
-            raise Unread(f"a plus before {operand}")
 
     def operands(self, *values: float) -> None:
         # A DF can hold Inf and NaN. 3.0E+38 * 10 stores Inf
@@ -415,7 +408,9 @@ def _value(
     if isinstance(node, Plus):
         operand = _value(node.operand, hex_mode, registers, guard)
         if guard is not None:
-            guard.plus(node.operand)
+            # The parse keeps a plus only in decimal mode, before an address or a bracket. No
+            # reading shows one.
+            raise Unread("a decimal plus before an address or a bracket")
         return operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)
