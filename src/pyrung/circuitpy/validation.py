@@ -10,7 +10,8 @@ from pyrung.circuitpy.p1am import is_board_tag
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import Expression
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import RangeArg, TagArg
+from pyrung.core.instruction.resolvers import operand_object
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -116,6 +117,19 @@ def _collect_hw_blocks(hw: P1AM) -> set[int]:
     return block_ids
 
 
+def _operand_object(value: Any) -> Any:
+    """Return the object inside a parsed operand, and any other value unchanged.
+
+    The check skips an operand in ``immediate()``, as it skips a contact in
+    ``immediate()``.  So the function returns None for one.
+    """
+    match value:
+        case TagArg(immediate=True) | RangeArg(immediate=True):
+            return None
+        case _:
+            return operand_object(value)
+
+
 def _extract_io_tags(instruction: Any) -> list[Tag]:
     found: list[Tag] = []
     seen_values: set[int] = set()
@@ -123,7 +137,7 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
 
     def walk(value: Any) -> None:
         # A drum's outputs and presets are tuples of parsed operands.
-        value = as_authored(value)
+        value = _operand_object(value)
         value_id = id(value)
         if value_id in seen_values:
             return
@@ -190,18 +204,18 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
         return found
 
     for field_name in fields:
-        walk(as_authored(getattr(instruction, field_name)))
+        walk(getattr(instruction, field_name))
 
     if instruction_type in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
         ins = getattr(instruction, "_ins", {})
         if isinstance(ins, dict):
             for key in sorted(ins):
-                walk(as_authored(ins[key]))
+                walk(ins[key])
 
         outs = getattr(instruction, "_outs", {})
         if isinstance(outs, dict):
             for key in sorted(outs):
-                walk(as_authored(outs[key]))
+                walk(outs[key])
 
     if hasattr(instruction, "oneshot"):
         walk(instruction.oneshot)
