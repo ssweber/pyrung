@@ -222,8 +222,8 @@ class TestShiftInstruction:
             with rung(Data):
                 shift(Cb.select(1, 4)).clock(Clock).reset(Reset)
 
-        # The start state holds every slot, because only the interpreted runner adds an
-        # unwritten Stray to the state. The comparison of the two runners would fail on that.
+        # PLC puts an unwritten Stray into its state, and CompiledPLC does not. The start
+        # state holds all four slots, so the two states match before the shift writes them.
         start = SystemState().with_tags({"Cb1": False, "Stray": 0, "Cb3": False, "Cb4": False})
         runner = runner_factory(logic, initial_state=start)
         seen = []
