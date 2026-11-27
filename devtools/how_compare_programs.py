@@ -40,7 +40,8 @@ Groups (this is the brief for the tool, written after two branches regressed how
     relations  facts read from the generated code: an off delay asked for Acc from power-up,
                before its enable was ever on, and a counter whose reset is latched on
     enums      a copy and a fill of an IntEnum member, and a copy of sqrt() of a tag: the
-               value each one stores, and a value that no copy stores
+               value each one stores, a value that no copy stores, and an IntEnum request
+               that the ladder clears
 
 Cases marked fast=False only run with --full.  The case name is its key.  The tool compares
 two runs by name, so give a new case a name that no case has used, and never rename a case.
@@ -1996,3 +1997,29 @@ _add("enums", "enums/State set to an IntEnum member", lambda: _enum_copy(3))
 _add("enums", "enums/State at a value no copy stores", lambda: _enum_copy(5))
 _add("enums", "enums/a fill of an IntEnum member", _enum_fill)
 _add("enums", "enums/a copy of sqrt() of an input", _sqrt_copy)
+
+
+class _Cmd(IntEnum):
+    NONE = 0
+    START = 1
+
+
+def _enum_request_cleared():
+    """The operator sets Request to Cmd.START, and the ladder clears it to Cmd.NONE.
+
+    Running follows Request == Cmd.START for the scan before the clear.  Preset copies
+    Cmd.START into Nudged, which is also written from outside.
+    """
+    request, nudged, running = Int("Request"), Int("Nudged", external=True), Bool("Running")
+    with Program(strict=False) as prog:
+        with rung(request == _Cmd.START):
+            out(running)
+            copy(_Cmd.NONE, request)
+        with rung(Bool("Preset")):
+            copy(_Cmd.START, nudged)
+        with rung(nudged == 1):
+            out(Bool("Seen"))
+    return dict(plc=PLC(prog, dt=0.01), targets=(running,), goal=_tag_goal(running))
+
+
+_add("enums", "enums/an IntEnum request that the ladder clears", _enum_request_cleared)

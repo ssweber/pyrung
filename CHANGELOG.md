@@ -15,7 +15,7 @@
 
 ### Fixes
 
-- `how()` now reads a `copy()` or `fill()` of an `IntEnum` member, such as `Mode.RUN`, as its number. 0.19.0 read the member's name as a tag name. A plan could then wait for a tag `RUN` that does not exist.
+- `how()` now finds a plan through an `IntEnum` command register that the ladder clears, such as `copy(Cmd.NONE, Request)`. It reads a `copy()` or `fill()` of an `IntEnum` member as a copy of its number. 0.19.0 read the member's name as a tag name. It found no plan through such a register, and its plans could wait for a tag `RUN` that does not exist.
 
 ## v0.19.0 (2026-11-27)
 

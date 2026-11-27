@@ -178,3 +178,24 @@ class TestLiteralWrite:
                 copy(sqrt(Int("Level")), Int("Root"))
 
         assert _literal_write(prog.rungs[0], "Root") is None
+
+    def test_intenum_request_that_the_ladder_clears_is_a_lever(self) -> None:
+        """The ladder only clears Request, with a copy of Cmd.NONE, so the operator sets it."""
+
+        class Cmd(IntEnum):
+            NONE = 0
+            START = 1
+
+        request, nudged = Int("Request"), Int("Nudged", external=True)
+        prog = Program(strict=False)
+        with prog:
+            with rung(request == Cmd.START):
+                out(Bool("Running"))
+                copy(Cmd.NONE, request)
+            with rung(Bool("Preset")):
+                copy(Cmd.START, nudged)
+            with rung(nudged == 1):
+                out(Bool("Seen"))
+
+        assert "Request" in _clear_only(prog)
+        assert {"Request", "Nudged"} <= _steerable(prog)
