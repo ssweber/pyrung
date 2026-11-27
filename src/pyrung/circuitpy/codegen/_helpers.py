@@ -355,7 +355,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # A hex Math's / (core _op_hex_div) rounds the quotient down.  A division by 0 is 0 and
-    # sets SC40.  q // 1 rounds a float down where math.floor would stop the jit's trace.
+    # sets SC40.  The helper rounds a float with q // 1, because the jit's trace stops at a
+    # call to math.floor.
     "_hex_div": [
         "def _hex_div(a, b, flags):",
         "    if b == 0:",

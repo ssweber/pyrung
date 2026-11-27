@@ -11,15 +11,7 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
-## Unreleased
-
-### Fixes
-
-- A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets SC43 on `CompiledPLC` and in the generated CircuitPython code. 0.19.0 raised an error there.
-- `math()` into a Real in `PLC` and `CompiledPLC` now stores Inf and sets SC43 for a power with a huge exponent, such as `5 ** DD1` with DD1 = 2147483647 (it hung).
-- `CompiledPLC` and the generated CircuitPython code now store what `PLC` stores for a bit operation on a large `Real` in `math()`.
-
-## v0.19.0 (2026-11-26)
+## v0.19.0 (2026-11-27)
 
 Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT tag now holds only text. When you build the program, pyrung refuses each write that would store a number or a bit in a TXT tag. `ladder_to_pyrung()` now groups a Math formula in CLICK's order. `math()` now matches a CLICK on hex division, fault flags and the sign of a zero that it stores in a Real. Read Behaviour changes and Fixes first.
 
@@ -41,7 +33,7 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
   Copy the value into one TXT with `copy()`, or fill a constant.
 - `fill()` of a Real constant, such as 1.5, into TXT tags now raises `ValueError` when you build it (it stored the number). CLICK accepts it.
   Copy the constant into one TXT with `copy()`.
-- A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT. `fill(True, ...)` and `fill(False, ...)` still build, and they store "1" and "0".
+- A Bool tag copied or filled into TXT tags now raises `ValueError` when you build it, as CLICK's editor does (it stored the Bool). So does `copy(True, ...)` into a TXT. `fill(True, ...)` and `fill(False, ...)` still build, and they now store "1" and "0" (they stored the Bool).
   Copy the text "1" in a rung that has the Bool as its condition, and "0" in a rung that has its inverse.
 - pyrung now raises when you build a program with one of these forms (it stored a number or a bit in the TXT tag). A CLICK program cannot hold any of them.
   - `blockcopy()` into TXT from a range that is not TXT, or with `convert=`
@@ -67,20 +59,20 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
 ### Fixes
 
 - `math()` on `Word` tags only (CLICK's hex mode) now rounds each quotient down, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with DH1 = 7 and DH2 = 2 now stores 6 (it stored 7). `math((0 - DH[1]) / 3, DH[2])` with DH1 = 1 now stores FFFFh and sets `system.fault.out_of_range` (it stored 0).
-- `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT).
-- `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
+- `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT). `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
 - `math()` on `Word` tags only now treats the result of an AND, OR or XOR as 16 unsigned bits, as a CLICK does. `math(-DH[1] | 0, DH[2])` with DH1 = 2 stores FFFEh and sets no flag (it set SC43).
-- `check()` no longer reports a comparison as always false when a `math()` stores the compared value with an AND, OR or XOR, a power of a negative number, or a `//` whose divisor can be 0.
-- `check()` no longer raises `OverflowError` on a `math()` with a very large left shift or power, such as `1 << N` with N = 2000.
+- `check()` no longer reports a comparison as always false when a `math()` stores the compared value with an AND, OR or XOR, a power of a negative number, or a `//` whose divisor can be 0. `check()` also no longer raises `OverflowError` on a `math()` with a very large left shift or power, such as `1 << N` with N = 2000.
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
-- `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
   - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DF1 * DF2` or `- DH1 * DH2` in hex mode. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` now imports a minus sign before a constant in a hex Math as a CLICK runs it. `- 5h MOD DH1` with DH1 = 3h stores FFFEh (it stored 2h). `- 2h` sets SC43 (it set no flag).
 - `math()` into a `Real` now stores -0.0 as a CLICK does, in `PLC` and `CompiledPLC`. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0). The generated CircuitPython code still stores 0.0.
+- `math()` into a `Real` in `PLC` and `CompiledPLC` now stores Inf and sets `system.fault.out_of_range` for a power with a huge exponent, such as `5 ** DD[1]` with DD1 = 2147483647 (it hung).
+- `CompiledPLC` and the generated CircuitPython code now store what `PLC` stores for a bit operation on a large `Real` in `math()`. `math((DF[1] ^ 5) & 1, DS[1])` with DF1 = 1e38 stores 0 (`CompiledPLC` and the generated code stored 1).
 - `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. `math()` then stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
+- A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets `system.fault.out_of_range` on `CompiledPLC` and in the generated CircuitPython code, as it does on `PLC` (it raised an error).
 
 ## v0.18.1 (2026-11-25)
 

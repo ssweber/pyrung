@@ -254,7 +254,8 @@ READINGS: list[tuple[str, str, bool, dict[str, float], float]] = [
     ("b23-d2", "( 0h - 7h ) / ( 0h - 2h )", True, {}, 0x0003),
     ("b23-m1", "5h MOD ( 0h - 3h )", True, {}, 0x0002),
     ("b23-m2", "( 0h - 7h ) MOD ( 0h - 2h )", True, {}, 0xFFFF),
-    # Round b24. A product of two DHs stays whole, and a plus keeps the sign of -0.0.
+    # Round b24. Products of two and three FFFFh values stay whole, and a plus keeps the sign
+    # of -0.0.
     ("b24-w1", "DH1 * DH2 MOD 7h", True, {"DH1": 0xFFFF, "DH2": 0xFFFF}, 0x0001),
     ("b24-w2", "- DH1 * DH2 MOD 7h", True, {"DH1": 0xFFFF, "DH2": 0xFFFF}, 0xFFFF),
     ("b24-w3", "DH1 * DH2 * DH1 MOD FBh", True, {"DH1": 0xFFFF, "DH2": 0xFFFF}, 0x0013),
@@ -1538,8 +1539,8 @@ ROUND_B22_READINGS: list[tuple[str, str, bool, dict[str, float], str, float, set
 _B24_DH = {"DH1": 0xFFFF, "DH2": 0xFFFF}
 
 #: Round b24, on the same CLICK on 2026-11-27, in the shape of :data:`ROUND_B20_READINGS`. The
-#: w cases multiply FFFFh by itself two to five times. A CLICK rounds w4's and w5's products to
-#: a double. z1 puts a plus before -0.0.
+#: w cases multiply two to five FFFFh values. A CLICK rounds w4's and w5's products to a
+#: double. z1 puts a plus before -0.0.
 ROUND_B24_READINGS: list[tuple[str, str, bool, dict[str, float], str, float, set[str]]] = [
     ("b24-w1", "DH1 * DH2 MOD 7h", True, _B24_DH, "DH4", 0x0001, set()),
     ("b24-w2", "- DH1 * DH2 MOD 7h", True, _B24_DH, "DH5", 0xFFFF, {_SC43}),
