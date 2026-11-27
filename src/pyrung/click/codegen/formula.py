@@ -128,9 +128,7 @@ CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = ()
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
 #: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
 #: readings.
-READ_FORMULAS: tuple[tuple[str, bool], ...] = (
-    ("- DS1 * 3", False),
-)
+READ_FORMULAS: tuple[tuple[str, bool], ...] = (("- DS1 * 3", False),)
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
 #: CLICK, as (first operator, second operator, hex mode) in the order that the formula writes
