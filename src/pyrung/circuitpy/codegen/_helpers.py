@@ -465,21 +465,22 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # ** in a Math (core _op_pow_calc): 0 ^ 0 is 0 with no flag.  0 to a negative power
-    # is +Inf.  A complex result is 0, and it sets SC46 in a Math.  An integer power
-    # past the double range is +/-Inf, and the log test spares computing it
-    # (core int_power_past_doubles).
+    # is +Inf.  A complex result is 0, and it sets SC46 in a Math.  The helper returns
+    # +/-Inf for an integer power past the double range.  It reads only a log and never
+    # computes that power (core int_power_past_doubles).  An exponent too large for a
+    # float makes the log raise OverflowError.  The power is then 0 with SC43, as in the
+    # core.
     "_pow_calc": [
         "def _pow_calc(base, exp, flags=None):",
         "    if base == 0 and exp <= 0:",
         '        return 0 if exp == 0 else float("inf")',
-        "    if (",
-        "        type(base) is int",
-        "        and type(exp) is int",
-        "        and exp > 0",
-        "        and abs(base) > 1",
-        f"        and math.log(abs(base)) * exp > {POW_LOG_LIMIT!r}",
-        "    ):",
-        '        return float("-inf") if base < 0 and exp % 2 else float("inf")',
+        "    if type(base) is int and type(exp) is int and exp > 0 and abs(base) > 1:",
+        "        try:",
+        f"            past = math.log(abs(base)) * exp > {POW_LOG_LIMIT!r}",
+        "        except OverflowError:",
+        "            return _term_fail(flags, 43)",
+        "        if past:",
+        '            return float("-inf") if base < 0 and exp % 2 else float("inf")',
         "    try:",
         "        return _pow(base, exp)",
         "    except _MathDomainError:",
