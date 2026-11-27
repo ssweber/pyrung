@@ -52,7 +52,10 @@ Their builder calls ``parse()`` on each declaration, which returns one of the re
 below or raises the refusal.  ``search()`` passes the value of its comparison to
 :func:`parse_value`.  That function refuses nothing.  The timers, the counters and the
 drums parse in their own ``__init__``, and so do the presets of the coils.  The
-instruction then holds only results.
+instruction then holds only results, except in six fields of three coils.
+``debounce()`` and ``flasher()`` hold ``on_done``, ``on_acc``, ``off_done`` and
+``off_acc`` as plain tags.  ``timed()`` holds ``timer_done`` and ``timer_acc`` as plain
+tags.
 ``execute()``, the code generator and the CLICK export match on them and never test the
 raw value again.  A reader that takes the operands of every instruction calls
 :func:`as_authored` on each.
