@@ -267,7 +267,7 @@ def _zero_is_read(op: str, a: float, b: float) -> bool:
     Every product of a zero and a finite value is read. Each gave the sign that a double
     gives: a zero times each zero, and a zero times 5.0, 0.5, 3.0 and 1.0E+30 with each sign,
     in either order (``real_bits/minus_zero_math``, ``math_range/minus_sign``, rounds b20 and
-    b22). Those values stand for every value of their class.
+    b22). Sam ruled on 2026-11-27 that a few readings may stand for every value of a class.
     """
     if op == "*" and (a == 0 or b == 0):
         return True
@@ -329,8 +329,8 @@ def unread_zero_signs(node: Formula, registers: dict[str, float]) -> set[str]:
 #: - ``+0.0`` and ``-0.0`` are the two zeros;
 #: - ``+x`` is a value above 0, and ``-x`` is a value below 0.
 #:
-#: Each row maps to the readings that show one value of its class. A row is read only when a
-#: reading or a ruling shows that every value of the class gives the same sign.
+#: Each row maps to the readings that show one value of its class. Sam ruled on 2026-11-27
+#: that a few readings may stand for every value of a class.
 #:
 #: No pair waits on a zero sign now. The two decimal pairs of a minus sign with ``*`` waited
 #: on the 0 of a product and of SQRT of a negative value. Round b22 read both at more values,
