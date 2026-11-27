@@ -36,15 +36,16 @@ These instructions parse their operands instead:
 - ``copy()``, ``fill()`` and ``blockcopy()``;
 - ``pack_bits()``, ``pack_words()``, ``pack_text()``, ``unpack_to_bits()`` and
   ``unpack_to_words()``;
-- ``math()``;
+- ``math()`` and ``search()``;
 - the coils ``out()``, ``latch()``, ``reset()``, ``toggle()``, ``debounce()``,
   ``flasher()`` and ``timed()``.  Each coil parses only its target.
 
 Their builder calls ``parse()`` on each declaration, which returns one of the results
-below or raises the refusal.  The instruction then holds only results.  ``execute()``,
-the code generator and the CLICK export match on them and never test the raw value
-again.  A reader that takes the operands of every instruction calls :func:`as_authored`
-on each.
+below or raises the refusal.  ``search()`` passes the value of its comparison to
+:func:`parse_value`, which refuses nothing.  The instruction then holds only results.
+``execute()``, the code generator and the CLICK export match on them and never test the
+raw value again.  A reader that takes the operands of every instruction calls
+:func:`as_authored` on each.
 """
 
 from __future__ import annotations

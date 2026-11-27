@@ -496,23 +496,23 @@ class _InstructionMixin:
                 kw["continuous"] = "1"
             kw.update(oneshot_kw)
             range_str = self._render_run(
-                instruction.search_range,
+                held(instruction.search_range),
                 path=f"{path}.search_range",
                 instruction=instruction,
             )
             with self._hex_constants("exact" if self._is_hex_bank_operand(range_str) else None):
                 value_str = self._render_operand(
-                    instruction.value, path=f"{path}.value", source=instruction
+                    held(instruction.value), path=f"{path}.value", source=instruction
                 )
             comparison = f"{range_str} {instruction.condition} {value_str}"
             return self._fn(
                 "search",
                 comparison,
                 result=self._render_operand(
-                    instruction.result, path=f"{path}.result", source=instruction
+                    instruction.result.tag, path=f"{path}.result", source=instruction
                 ),
                 found=self._render_operand(
-                    instruction.found, path=f"{path}.found", source=instruction
+                    instruction.found.tag, path=f"{path}.found", source=instruction
                 ),
                 **kw,
             )
