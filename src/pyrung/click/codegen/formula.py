@@ -61,8 +61,8 @@ NEGATE_PLUS = "a minus sign before a plus sign"
 #: b20 read it before 5h, and round b21 read it before a bracket and before 0h. The plus did
 #: not cut its operand to 16 bits in any case that a CLICK ran (b21). A plus that does not cut
 #: changes nothing in any grouping. So the parse drops every hex plus. Round b22 read one
-#: before an address (``+ DH401 * 2h``). No round read one before a function or a pointer.
-#: The drop there rests on rounds b21 and b22.
+#: before an address (``+ DH401 * 2h``). No round read one before or inside a function, or
+#: before a pointer. The drop there rests on rounds b21 and b22.
 #:
 #: In decimal mode CLICK stores a plus before a constant in the constant (H+5). The parse
 #: drops that plus. It also drops a plus before an address or a bracket, which changed

@@ -498,9 +498,9 @@ All [nothing] unless marked.
   bracket (rounds b22 and b24).
   - A case clicky could run: `+ SQRT ( DF110 )` and `+ PI * DF110`, each with -0.0 staged in DF110, into a DF.
 - **A Math whose formula is a single DF drops the sign of -0.0 on a CLICK.** `DF110` with -0.0 stored +0.0 (round
-  b24 z0). pyrung stores -0.0. Sam ruled that the edge is too small to special-case, so pyrung keeps -0.0
-  (2026-11-27). `+ DF110` stored -0.0 (z1), and the import drops the plus, so `+ DF1` imports as `math(DF1, ...)` and
-  stores what a CLICK stores.
+  b24 z0). pyrung stores -0.0. Sam ruled that the edge is too small to special-case (2026-11-27). pyrung keeps
+  -0.0. `+ DF110` stored -0.0 (z1). The import drops the plus, so `+ DF1` imports as `math(DF1, ...)`, which stores
+  what a CLICK stores.
 - **A minus sign or a plus before a pointer imports as code that fails to load.** `- DS[DS1] * 2` imports as
   `-ds[DS1] * 2`, and Python raises `TypeError` (bad operand type for unary -: 'IndirectRef'). The plus does the
   same.
