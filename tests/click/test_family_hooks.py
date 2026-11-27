@@ -239,8 +239,8 @@ _DRUM_FIELDS = {
 
 def _drum_operands(instruction: Any) -> list[Operand]:
     """Return the outputs and the completion flag of event_drum(), each output a value."""
-    outputs = tuple(("outputs", tag) for tag in instruction.outputs)
-    flag = (("completion_flag", instruction.completion_flag),)
+    outputs = tuple(("outputs", tag) for tag in instruction.output_tags)
+    flag = (("completion_flag", instruction.completion_flag.tag),)
     return [Operand("outputs", "drum output", outputs), Operand("completion_flag", "flag", flag)]
 
 
@@ -249,8 +249,8 @@ def _drum_call(instruction: Any) -> Call:
     return call_of(
         "event_drum",
         [
-            ("outputs", [operand_name(tag) for tag in instruction.outputs], "keyword"),
-            ("completion_flag", operand_name(instruction.completion_flag), "keyword"),
+            ("outputs", [operand_name(tag) for tag in instruction.output_tags], "keyword"),
+            ("completion_flag", operand_name(instruction.completion_flag.tag), "keyword"),
         ],
     )
 

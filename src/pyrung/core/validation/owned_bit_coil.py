@@ -70,7 +70,7 @@ def check_owned_bit_coils(program: Program) -> None:
     owners: dict[str, str] = {}
     for instr in instructions:
         label = _OWNERS.get(type(instr).__name__)
-        done = getattr(instr, "done_bit", None)
+        done = as_authored(getattr(instr, "done_bit", None))
         if label is not None and done is not None:
             owners.setdefault(done.name, label)
     if not owners:

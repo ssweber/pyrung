@@ -69,6 +69,7 @@ from pyrung.core.analysis.write_sites import instruction_write_targets, instruct
 from pyrung.core.crossing import CrossingContext, Literal
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
+from pyrung.core.instruction.operands import as_authored
 from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.memory_block import Block, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.synthesis import coil_timer
@@ -308,7 +309,7 @@ class _LinkProof:
             (node_index, instr)
             for node_index in writers
             for instr in getattr(self.facts.rung_of(node_index), "_instructions", ())
-            if isinstance(instr, OnDelayInstruction) and instr.done_bit.name == tag
+            if isinstance(instr, OnDelayInstruction) and as_authored(instr.done_bit).name == tag
         ]
         if not found:
             return NotImplemented
@@ -321,7 +322,7 @@ class _LinkProof:
             return None
         node_index, timer = found[0]
         node = pdg.rung_nodes[node_index]
-        acc = timer.accumulator.name
+        acc = as_authored(timer.accumulator).name
         if self._rung_also_writes(node_index, timer, (acc, tag)):
             return None
         # Skipped scans would hold the count, as a retentive timer does.
@@ -329,7 +330,7 @@ class _LinkProof:
             node.subroutine is not None
             or node.guard_reads
             or timer.reset_condition is not None
-            or not isinstance(timer.preset, int)
+            or not isinstance(preset := as_authored(timer.preset), int)
             or pdg.writers_of.get(acc, frozenset()) != writers
             or acc in self.facts.free
             or self.facts._writable_through_pointer(acc)
@@ -337,7 +338,7 @@ class _LinkProof:
             return None
         per_ms = timer.unit.dt_to_units(0.001)
         counted = self.facts.snapshot.get(acc) or 0
-        room_ms = (timer.preset - counted) / per_ms
+        room_ms = (preset - counted) / per_ms
         return self._dwell_limited(self._condition_of(node_index), room_ms, stack)
 
     def _rung_also_writes(self, node_index: int, timer: Any, tags: tuple[str, ...]) -> bool:

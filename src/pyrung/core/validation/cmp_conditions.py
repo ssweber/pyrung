@@ -691,12 +691,12 @@ def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
             continue
         # _collect_write_sites emits Done and Acc sites (a drum's outputs, step
         # and flag too).  Keep the accumulator site as the instruction anchor.
-        if site.target_name != instr.accumulator.name:
+        if site.target_name != as_authored(instr.accumulator).name:
             continue
         seen.add(id(instr))
         presets = instr.presets if isinstance(instr, _TimedDrumInstruction) else (instr.preset,)
         named: set[str] = set()
-        for preset in presets:
+        for preset in map(as_authored, presets):
             if isinstance(preset, Tag) and preset.name not in named:
                 if _tag_stays_zero(preset, graph):
                     sites.append((site, preset, instr))
@@ -1204,7 +1204,7 @@ def validate_cmp_conditions(
 
     preset_sites = _preset_sites(program, graph)
     zero_preset_pairs = {
-        (instr.accumulator.name, preset.name) for _site, preset, instr in preset_sites
+        (as_authored(instr.accumulator).name, preset.name) for _site, preset, instr in preset_sites
     }
     for site, preset, _instr in preset_sites:
         findings.append(

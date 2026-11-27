@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Literal, assert_never
 
 from pyrung.circuitpy.codegen._constants import _DINT_MAX, _DINT_MIN, _INT_MAX
 from pyrung.circuitpy.codegen._util import _bool_literal
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg
 from pyrung.core.relations.records import (
     Compare,
     Const,
@@ -37,6 +38,14 @@ from pyrung.core.relations.records import (
     Updated,
 )
 from pyrung.core.tag import Tag
+
+if TYPE_CHECKING:
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+
+    Accumulating = (
+        OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction
+    )
 from pyrung.core.time_mode import TimeUnit
 
 Quote = Literal["repr", "double"]
@@ -262,9 +271,15 @@ def emit_count(
     return [*lines, f"_acc = {_saturate('_acc + _delta', _DINT_MAX, _DINT_MIN)}"]
 
 
-def _operand(owner: Any, field: str) -> Term:
-    name = getattr(getattr(owner, field), "name", None)
-    return Setting(field) if name is None else TagValue(name)
+def _preset_term(preset: Preset) -> Term:
+    """Return what the recorder names a preset: a tag's value, or the ``preset`` setting."""
+    match preset:
+        case TagArg(tag=tag):
+            return TagValue(tag.name)
+        case ConstArg():
+            return Setting("preset")
+        case _:
+            assert_never(preset)
 
 
 def emit_done(
@@ -273,7 +288,7 @@ def emit_done(
     op: str,
     preset: str,
     *,
-    owner: Any,
+    owner: Accumulating,
     ctx: CodegenContext,
     preset_key: str | None,
     frac: bool = False,
@@ -286,17 +301,17 @@ def emit_done(
     Acc's fraction before the compare.  The off delay writes the compare without brackets
     (``paren=False``).
     """
-    acc_name = owner.accumulator.name
+    acc_name = owner.accumulator.tag.name
     lines = [f"_preset = int({preset})"]
     if preset_key is not None:
         lines.append(emit_mem_set(preset_key, "_preset", quote="double"))
     if frac:
-        lines.append(emit_frac(owner.accumulator, "_new_frac", ctx=ctx))
-    compare = Compare(Updated(acc_name), op, _operand(owner, "preset"))
+        lines.append(emit_frac(owner.accumulator.tag, "_new_frac", ctx=ctx))
+    compare = Compare(Updated(acc_name), op, _preset_term(owner.preset))
     done_value = emit_cmp("_acc", op, "_preset", paren=paren)
     return [
         *lines,
-        emit_store(done, done_value, ctx=ctx, dst=owner.done_bit.name, term=compare),
+        emit_store(done, done_value, ctx=ctx, dst=owner.done_bit.tag.name, term=compare),
         emit_store(acc, "_acc", ctx=ctx, dst=acc_name, term=Updated(acc_name)),
     ]
 
@@ -305,7 +320,7 @@ def emit_acc_rest(
     done: str,
     acc: str,
     *,
-    owner: Any,
+    owner: Accumulating,
     ctx: CodegenContext,
     frac: bool = False,
     done_value: bool = False,
@@ -314,12 +329,12 @@ def emit_acc_rest(
 
     With *frac*, the lines also clear the fraction of the owner's Acc.
     """
-    lines = [emit_frac(owner.accumulator, "0", ctx=ctx)] if frac else []
+    lines = [emit_frac(owner.accumulator.tag, "0", ctx=ctx)] if frac else []
     done_text = str(done_value)
     return [
         *lines,
-        emit_store(done, done_text, ctx=ctx, dst=owner.done_bit.name, term=Const(done_value)),
-        emit_store(acc, "0", ctx=ctx, dst=owner.accumulator.name, term=Const(0)),
+        emit_store(done, done_text, ctx=ctx, dst=owner.done_bit.tag.name, term=Const(done_value)),
+        emit_store(acc, "0", ctx=ctx, dst=owner.accumulator.tag.name, term=Const(0)),
     ]
 
 

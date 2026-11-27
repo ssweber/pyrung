@@ -26,7 +26,7 @@ from pyrung.core.condition import (
     Condition,
     NormallyClosedCondition,
 )
-from pyrung.core.instruction.operands import held
+from pyrung.core.instruction.operands import as_authored, held
 from pyrung.core.tag import ImmediateRef, Tag
 
 if TYPE_CHECKING:
@@ -117,20 +117,20 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
     elif isinstance(instr, TimedInstruction):
         targets = [instr.target.tag.name, instr.timer_acc.name]
     elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
-        targets = [instr.done_bit.name, instr.accumulator.name]
+        targets = [as_authored(instr.done_bit).name, as_authored(instr.accumulator).name]
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):
-        targets = [instr.done_bit.name, instr.accumulator.name]
+        targets = [as_authored(instr.done_bit).name, as_authored(instr.accumulator).name]
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
     elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
-        targets = [t.name for t in instr.outputs]
-        targets.append(instr.current_step.name)
-        targets.append(instr.completion_flag.name)
-        targets.append(instr.accumulator.name)
+        targets = [t.name for t in map(as_authored, instr.outputs)]
+        targets.append(as_authored(instr.current_step).name)
+        targets.append(as_authored(instr.completion_flag).name)
+        targets.append(as_authored(instr.accumulator).name)
     elif isinstance(instr, EventDrumInstruction):
-        targets = [t.name for t in instr.outputs]
-        targets.append(instr.current_step.name)
-        targets.append(instr.completion_flag.name)
+        targets = [t.name for t in map(as_authored, instr.outputs)]
+        targets.append(as_authored(instr.current_step).name)
+        targets.append(as_authored(instr.completion_flag).name)
     elif isinstance(instr, ModbusSendInstruction):
         targets = [
             instr.sending.name,

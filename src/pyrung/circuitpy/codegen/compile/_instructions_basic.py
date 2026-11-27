@@ -70,6 +70,7 @@ from ._primitives import (
     _compile_copy_source,
     _compile_guarded_instruction,
     _compile_lvalue,
+    _compile_preset,
     _compile_set_address_error_fault_body,
     _compile_set_out_of_range_fault_body,
     _compile_target_write_lines,
@@ -96,10 +97,12 @@ def _compile_status_bit_lines(
     lines: list[str] = []
     sp = " " * indent
     for attr, val_expr in values.items():
-        tag = getattr(instr, attr, None)
-        if tag is not None:
-            lvalue = _compile_lvalue(tag, ctx)
-            lines.append(f"{sp}{emit_store(lvalue, val_expr, ctx=ctx, dst=tag.name, term=None)}")
+        status: TagArg | None = getattr(instr, attr)
+        if status is not None:
+            lvalue = _compile_lvalue(status.tag, ctx)
+            lines.append(
+                f"{sp}{emit_store(lvalue, val_expr, ctx=ctx, dst=status.tag.name, term=None)}"
+            )
     return lines
 
 
@@ -194,11 +197,11 @@ def _compile_on_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done_write = _compile_lvalue(instr.done_bit, ctx)
-    acc_read = _compile_value(instr.accumulator, ctx)
-    acc_write = _compile_lvalue(instr.accumulator, ctx)
-    acc = instr.accumulator
-    preset = _compile_value(instr.preset, ctx)
+    done_write = _compile_lvalue(instr.done_bit.tag, ctx)
+    acc = instr.accumulator.tag
+    acc_read = _compile_value(acc, ctx)
+    acc_write = _compile_lvalue(acc, ctx)
+    preset = _compile_preset(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
@@ -221,7 +224,7 @@ def _compile_on_delay_instruction(
     run = emit_if_enabled(enabled_expr, run, otherwise=otherwise, fold=False)
     lines = [f"{sp}{line}" for line in _rest_or_run(reset_expr, rest, run)]
     # Status bits: computed after all branches using final tag values
-    done_read = _compile_value(instr.done_bit, ctx)
+    done_read = _compile_value(instr.done_bit.tag, ctx)
     if reset_expr is not None:
         tt_expr = f"bool({enabled_expr}) and not bool({reset_expr}) and not {done_read}"
     else:
@@ -240,13 +243,13 @@ def _compile_off_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done_read = _compile_value(instr.done_bit, ctx)
-    done_write = _compile_lvalue(instr.done_bit, ctx)
-    acc_read = _compile_value(instr.accumulator, ctx)
-    acc_write = _compile_lvalue(instr.accumulator, ctx)
-    acc = instr.accumulator
-    armed_key = tof_armed_key(instr.accumulator.name)
-    preset = _compile_value(instr.preset, ctx)
+    done_read = _compile_value(instr.done_bit.tag, ctx)
+    done_write = _compile_lvalue(instr.done_bit.tag, ctx)
+    acc = instr.accumulator.tag
+    acc_read = _compile_value(acc, ctx)
+    acc_write = _compile_lvalue(acc, ctx)
+    armed_key = tof_armed_key(acc.name)
+    preset = _compile_preset(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
@@ -299,7 +302,7 @@ def _preset_key(
 
     Return None unless the kernel is built with ``proof_metadata``.
     """
-    return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
+    return prove_effective_preset_key(instr.done_bit.tag.name) if ctx.proof_metadata else None
 
 
 def _count_edge_lines(
@@ -326,10 +329,10 @@ def _compile_count_up_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done_write = _compile_lvalue(instr.done_bit, ctx)
-    acc_read = _compile_value(instr.accumulator, ctx)
-    acc_write = _compile_lvalue(instr.accumulator, ctx)
-    preset = _compile_value(instr.preset, ctx)
+    done_write = _compile_lvalue(instr.done_bit.tag, ctx)
+    acc_read = _compile_value(instr.accumulator.tag, ctx)
+    acc_write = _compile_lvalue(instr.accumulator.tag, ctx)
+    preset = _compile_preset(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     site = ctx.state_key_for(instr)
@@ -346,7 +349,7 @@ def _compile_count_up_instruction(
     rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx)
     down_edge = None if down_expr is None else "_cd_edge"
     run = [
-        *emit_count(instr.accumulator, acc_read, up="_cu_edge", down=down_edge, ctx=ctx),
+        *emit_count(instr.accumulator.tag, acc_read, up="_cu_edge", down=down_edge, ctx=ctx),
         *emit_done(
             done_write,
             acc_write,
@@ -375,17 +378,17 @@ def _compile_count_down_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done_write = _compile_lvalue(instr.done_bit, ctx)
-    acc_read = _compile_value(instr.accumulator, ctx)
-    acc_write = _compile_lvalue(instr.accumulator, ctx)
-    preset = _compile_value(instr.preset, ctx)
+    done_write = _compile_lvalue(instr.done_bit.tag, ctx)
+    acc_read = _compile_value(instr.accumulator.tag, ctx)
+    acc_write = _compile_lvalue(instr.accumulator.tag, ctx)
+    preset = _compile_preset(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
     lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent, ctx)
     rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx)
     run = [
-        *emit_count(instr.accumulator, acc_read, up=None, down="_cd_edge", ctx=ctx),
+        *emit_count(instr.accumulator.tag, acc_read, up=None, down="_cd_edge", ctx=ctx),
         *emit_done(
             done_write,
             acc_write,

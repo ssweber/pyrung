@@ -9,7 +9,7 @@ from typing import Any
 
 from laddercodec import Counter
 
-from ..fields import Family, refusals_of, render_operand
+from ..fields import Family, refusals_of, render_operand, render_preset
 from ..resolve import _ResolutionCache
 
 # The argument of the pyrung call that holds each field of laddercodec's Counter. The
@@ -40,13 +40,10 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the Counter that the export writes."""
 
-    def render(attribute: str) -> str:
-        return render_operand(exporter, getattr(instruction, attribute), attribute, instruction)
-
     is_up = type(instruction).__name__ == "CountUpInstruction"
-    done = render("done_bit")
-    accumulator = render("accumulator")
-    preset = render("preset")
+    done = render_operand(exporter, instruction.done_bit.tag, "done_bit", instruction)
+    accumulator = render_operand(exporter, instruction.accumulator.tag, "accumulator", instruction)
+    preset = render_preset(exporter, instruction.preset, "preset", instruction)
     down_enabled = is_up and instruction.down_condition is not None
     return refusals_of(
         lambda: Counter(

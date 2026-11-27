@@ -18,13 +18,13 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from laddercodec import Code, FieldError, LaddercodecError
 from pyclickplc.addresses import format_address_display, parse_address
 
 from pyrung.core.expression import Expression
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg, as_authored
 from pyrung.core.memory_block import BlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation._common import instruction_frame
@@ -279,6 +279,17 @@ def render_operand(exporter: Any, value: Any, attribute: str, instruction: Any) 
             # which laddercodec refuses in its own words.
             return '"{}"'.format(value.replace('"', '""'))
         raise Unbuildable from exc
+
+
+def render_preset(exporter: Any, preset: Preset, attribute: str, instruction: Any) -> str:
+    """Return the preset or the step in *attribute* of *instruction* as the export writes it."""
+    match preset:
+        case TagArg(tag=tag):
+            return render_operand(exporter, tag, attribute, instruction)
+        case ConstArg(value=value):
+            return render_operand(exporter, value, attribute, instruction)
+        case _:
+            assert_never(preset)
 
 
 def split_range(text: str) -> tuple[str, str]:

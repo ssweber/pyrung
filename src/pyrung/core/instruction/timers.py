@@ -16,12 +16,14 @@ from .advance import (
     recorded_prepare,
 )
 from .base import Instruction
+from .operands import Preset, TagArg, inner
 from .utils import (
     elapsed_units,
     instruction_condition_view,
+    parse_preset,
     resolve_preset_ctx,
+    status_arg,
     to_condition,
-    validate_preset,
 )
 
 if TYPE_CHECKING:
@@ -92,14 +94,14 @@ class OnDelayInstruction(Instruction):
         en_bit: Tag | None = None,
         tt_bit: Tag | None = None,
     ):
-        validate_preset(preset, label="on_delay() preset")
-        self.done_bit = done_bit
-        self.accumulator = accumulator
-        self.preset = preset
+        parsed: Preset = parse_preset(preset, label="on_delay() preset")
+        self.done_bit = TagArg(done_bit)
+        self.accumulator = TagArg(accumulator)
+        self.preset = parsed
         self.unit = _parse_time_unit(unit)
         self.has_reset = reset_condition is not None
-        self.en_bit = en_bit
-        self.tt_bit = tt_bit
+        self.en_bit = status_arg(en_bit)
+        self.tt_bit = status_arg(tt_bit)
 
         # Convert Tags to Conditions if needed
         self.enable_condition = to_condition(enable_condition)
@@ -108,19 +110,21 @@ class OnDelayInstruction(Instruction):
     def _status_tags(self, en: bool, tt: bool) -> dict[str, bool]:
         tags: dict[str, bool] = {}
         if self.en_bit is not None:
-            tags[self.en_bit.name] = en
+            tags[self.en_bit.tag.name] = en
         if self.tt_bit is not None:
-            tags[self.tt_bit.name] = tt
+            tags[self.tt_bit.tag.name] = tt
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        frac_key = f"_frac:{self.accumulator.name}"
+        acc = self.accumulator.tag.name
+        done = self.done_bit.tag.name
+        frac_key = f"_frac:{acc}"
         condition_view = instruction_condition_view(ctx, self)
 
         reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
             condition_view
         )
-        acc_value = ctx.get_tag(self.accumulator.name, 0)
+        acc_value = ctx.get_tag(acc, 0)
         frac = ctx.get_memory(frac_key, 0)
         dt = ctx.get_memory("_dt", 0.0)
         sp = resolve_preset_ctx(self.preset, ctx)
@@ -129,8 +133,8 @@ class OnDelayInstruction(Instruction):
             ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
-                    self.done_bit.name: False,
-                    self.accumulator.name: 0,
+                    done: False,
+                    acc: 0,
                     **self._status_tags(enabled, False),
                 }
             )
@@ -141,8 +145,8 @@ class OnDelayInstruction(Instruction):
             done_value = acc_value >= sp
             ctx.set_tags(
                 {
-                    self.done_bit.name: done_value,
-                    self.accumulator.name: acc_value,
+                    done: done_value,
+                    acc: acc_value,
                     **self._status_tags(True, not done_value),
                 }
             )
@@ -150,8 +154,8 @@ class OnDelayInstruction(Instruction):
             ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
-                    self.done_bit.name: False,
-                    self.accumulator.name: 0,
+                    done: False,
+                    acc: 0,
                     **self._status_tags(False, False),
                 }
             )
@@ -169,17 +173,16 @@ class OnDelayInstruction(Instruction):
             if self.reset_condition is not None
             else ConditionDemand(self.enable_condition, False)
         )
+        tt_bit = None if self.tt_bit is None else self.tt_bit.tag
         channels = tuple(
-            tag for tag in (self.accumulator, self.done_bit, self.tt_bit) if tag is not None
+            tag for tag in (self.accumulator.tag, self.done_bit.tag, tt_bit) if tag is not None
         )
         return monotone_profile(
             channels=channels,
-            accumulator=self.accumulator,
-            done=self.done_bit,
-            progress=(
-                ConditionDemand(to_condition(self.tt_bit)) if self.tt_bit is not None else None
-            ),
-            preset=self.preset,
+            accumulator=self.accumulator.tag,
+            done=self.done_bit.tag,
+            progress=(ConditionDemand(to_condition(tt_bit)) if tt_bit is not None else None),
+            preset=inner(self.preset),
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
             advance=ConditionDemand(self.enable_condition),
@@ -235,13 +238,13 @@ class OffDelayInstruction(Instruction):
         en_bit: Tag | None = None,
         tt_bit: Tag | None = None,
     ):
-        validate_preset(preset, label="off_delay() preset")
-        self.done_bit = done_bit
-        self.accumulator = accumulator
-        self.preset = preset
+        parsed: Preset = parse_preset(preset, label="off_delay() preset")
+        self.done_bit = TagArg(done_bit)
+        self.accumulator = TagArg(accumulator)
+        self.preset = parsed
         self.unit = _parse_time_unit(unit)
-        self.en_bit = en_bit
-        self.tt_bit = tt_bit
+        self.en_bit = status_arg(en_bit)
+        self.tt_bit = status_arg(tt_bit)
 
         # Convert Tags to Conditions if needed
         self.enable_condition = to_condition(enable_condition)
@@ -249,14 +252,16 @@ class OffDelayInstruction(Instruction):
     def _status_tags(self, en: bool, tt: bool) -> dict[str, bool]:
         tags: dict[str, bool] = {}
         if self.en_bit is not None:
-            tags[self.en_bit.name] = en
+            tags[self.en_bit.tag.name] = en
         if self.tt_bit is not None:
-            tags[self.tt_bit.name] = tt
+            tags[self.tt_bit.tag.name] = tt
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        frac_key = f"_frac:{self.accumulator.name}"
-        armed_key = tof_armed_key(self.accumulator.name)
+        acc = self.accumulator.tag.name
+        done = self.done_bit.tag.name
+        frac_key = f"_frac:{acc}"
+        armed_key = tof_armed_key(acc)
         armed = ctx.get_memory(armed_key, False)
 
         if enabled:
@@ -266,16 +271,16 @@ class OffDelayInstruction(Instruction):
             ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
-                    self.done_bit.name: True,
-                    self.accumulator.name: 0,
+                    done: True,
+                    acc: 0,
                     **self._status_tags(True, False),
                 }
             )
         else:
-            acc_value = ctx.get_tag(self.accumulator.name, 0)
+            acc_value = ctx.get_tag(acc, 0)
 
             # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
-            if not armed and acc_value == 0 and not ctx.get_tag(self.done_bit.name, False):
+            if not armed and acc_value == 0 and not ctx.get_tag(done, False):
                 status = self._status_tags(False, False)
                 if status:
                     ctx.set_tags(status)
@@ -294,30 +299,29 @@ class OffDelayInstruction(Instruction):
             acc_value = min(acc_value + int_units, 32767)
 
             # Done is True while acc < preset, False when acc >= preset
-            done = acc_value < sp
+            done_value = acc_value < sp
 
             ctx.set_memory(frac_key, new_frac)
             # TOF TT: timing while disabled and done is still True
             ctx.set_tags(
                 {
-                    self.done_bit.name: done,
-                    self.accumulator.name: acc_value,
-                    **self._status_tags(False, done),
+                    done: done_value,
+                    acc: acc_value,
+                    **self._status_tags(False, done_value),
                 }
             )
 
     def advance_profile(self) -> AdvanceProfile:
+        tt_bit = None if self.tt_bit is None else self.tt_bit.tag
         channels = tuple(
-            tag for tag in (self.accumulator, self.done_bit, self.tt_bit) if tag is not None
+            tag for tag in (self.accumulator.tag, self.done_bit.tag, tt_bit) if tag is not None
         )
         return monotone_profile(
             channels=channels,
-            accumulator=self.accumulator,
-            done=self.done_bit,
-            progress=(
-                ConditionDemand(to_condition(self.tt_bit)) if self.tt_bit is not None else None
-            ),
-            preset=self.preset,
+            accumulator=self.accumulator.tag,
+            done=self.done_bit.tag,
+            progress=(ConditionDemand(to_condition(tt_bit)) if tt_bit is not None else None),
+            preset=inner(self.preset),
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
             advance=ConditionDemand(self.enable_condition, False),

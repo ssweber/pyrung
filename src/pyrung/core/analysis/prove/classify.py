@@ -274,7 +274,7 @@ def _collect_implicit_edge_condition_exprs(
             if targets is None:
                 continue
             if hasattr(targets, "__iter__") and not isinstance(targets, str):
-                for t in targets:
+                for t in map(as_authored, targets):
                     if hasattr(t, "name") and t.name in upstream:
                         return True
             elif hasattr(targets, "name") and targets.name in upstream:
@@ -1353,11 +1353,11 @@ def _domain_from_drum_instruction(
 ) -> tuple[Any, ...] | None:
     """Infer target domain for drum instruction outputs."""
     step_count = len(instr.pattern)
-    if target_name == instr.current_step.name:
+    if target_name == as_authored(instr.current_step).name:
         return tuple(range(1, step_count + 1))
-    if target_name == instr.completion_flag.name:
+    if target_name == as_authored(instr.completion_flag).name:
         return (False, True)
-    for out_tag in instr.outputs:
+    for out_tag in map(as_authored, instr.outputs):
         if target_name == out_tag.name:
             return (False, True)
     return None
@@ -2887,7 +2887,7 @@ def _accumulator_names(program: Program) -> set[str]:
     return {
         accumulator.name
         for instr in walk_instructions(program)
-        if isinstance(accumulator := getattr(instr, "accumulator", None), Tag)
+        if isinstance(accumulator := as_authored(getattr(instr, "accumulator", None)), Tag)
     }
 
 
@@ -2943,7 +2943,7 @@ def _acc_start_values(
         for name, _itype in _all_write_targets(instr):
             if name not in wanted or name in unknown:
                 continue
-            accumulator = getattr(instr, "accumulator", None)
+            accumulator = as_authored(getattr(instr, "accumulator", None))
             if isinstance(instr, owner_types) and getattr(accumulator, "name", None) == name:
                 owners[name] = owners.get(name, 0) + 1
                 if isinstance(instr, CountUpInstruction) and instr.down_condition is not None:
@@ -2998,7 +2998,8 @@ def _lowest_held(
     if name not in _accumulator_names(program) or graph.unlisted_writers_of(name):
         return lowest
     counts_down = any(
-        isinstance(instr, CountDownInstruction) and getattr(instr.accumulator, "name", None) == name
+        isinstance(instr, CountDownInstruction)
+        and getattr(as_authored(instr.accumulator), "name", None) == name
         for instr in walk_instructions(program)
     )
     starts = _acc_start_values(
@@ -3311,12 +3312,12 @@ def _unmodeled_accumulators(program: Program) -> dict[str, str]:
     out: dict[str, str] = {}
     for instr in walk_instructions(program):
         if isinstance(instr, TimeEventDrumInstruction):
-            out[instr.accumulator.name] = "time_event_drum"
+            out[as_authored(instr.accumulator).name] = "time_event_drum"
         elif isinstance(instr, TimeDrumInstruction):
             # Its completion flag can be on without its time up.
             reason = _drum_flag_without_its_time(instr, program)
             if reason is not None:
-                out[instr.accumulator.name] = f"time_drum ({reason})"
+                out[as_authored(instr.accumulator).name] = f"time_drum ({reason})"
         elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
             verb = "debounce" if isinstance(instr, DebounceInstruction) else "flasher"
             out[instr.on_acc.name] = verb

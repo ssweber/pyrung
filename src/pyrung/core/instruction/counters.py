@@ -17,11 +17,13 @@ from .base import Instruction
 from .conversions import (
     _clamp_dint,
 )
+from .operands import Preset, TagArg, inner
 from .utils import (
     instruction_condition_view,
+    parse_preset,
     resolve_preset_ctx,
+    status_arg,
     to_condition,
-    validate_preset,
 )
 
 if TYPE_CHECKING:
@@ -100,12 +102,12 @@ class CountUpInstruction(Instruction):
         cu_bit: Tag | None = None,
         cd_bit: Tag | None = None,
     ):
-        validate_preset(preset, label="count_up() preset")
-        self.done_bit = done_bit
-        self.accumulator = accumulator
-        self.preset = preset
-        self.cu_bit = cu_bit
-        self.cd_bit = cd_bit
+        parsed: Preset = parse_preset(preset, label="count_up() preset")
+        self.done_bit = TagArg(done_bit)
+        self.accumulator = TagArg(accumulator)
+        self.preset = parsed
+        self.cu_bit = status_arg(cu_bit)
+        self.cd_bit = status_arg(cd_bit)
 
         # Convert Tags to Conditions if needed
         self.up_condition = to_condition(up_condition)
@@ -115,9 +117,9 @@ class CountUpInstruction(Instruction):
     def _status_tags(self, cu: bool, cd: bool) -> dict[str, bool]:
         tags: dict[str, bool] = {}
         if self.cu_bit is not None:
-            tags[self.cu_bit.name] = cu
+            tags[self.cu_bit.tag.name] = cu
         if self.cd_bit is not None:
-            tags[self.cd_bit.name] = cd
+            tags[self.cd_bit.tag.name] = cd
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -133,14 +135,16 @@ class CountUpInstruction(Instruction):
         down_edge = self.down_condition is not None and count_edge(
             ctx, self.memory_key(COUNT_DOWN_MEMORY), bool(down_active)
         )
-        acc_value = ctx.get_tag(self.accumulator.name, 0)
+        acc = self.accumulator.tag.name
+        done = self.done_bit.tag.name
+        acc_value = ctx.get_tag(acc, 0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
             ctx.set_tags(
                 {
-                    self.done_bit.name: False,
-                    self.accumulator.name: 0,
+                    done: False,
+                    acc: 0,
                     **self._status_tags(enabled, down_active),
                 }
             )
@@ -149,8 +153,8 @@ class CountUpInstruction(Instruction):
             acc_value = _clamp_dint(acc_value + delta)
             ctx.set_tags(
                 {
-                    self.done_bit.name: acc_value >= sp,
-                    self.accumulator.name: acc_value,
+                    done: acc_value >= sp,
+                    acc: acc_value,
                     **self._status_tags(enabled, down_active),
                 }
             )
@@ -160,11 +164,11 @@ class CountUpInstruction(Instruction):
 
     def advance_profile(self) -> AdvanceProfile:
         return monotone_profile(
-            channels=(self.accumulator, self.done_bit),
-            accumulator=self.accumulator,
-            done=self.done_bit,
+            channels=(self.accumulator.tag, self.done_bit.tag),
+            accumulator=self.accumulator.tag,
+            done=self.done_bit.tag,
             progress=None,
-            preset=self.preset,
+            preset=inner(self.preset),
             direction=1,
             # One count per rising edge: an on scan, then an off scan.
             rate_per_scan=lambda _dt: 0.5,
@@ -225,12 +229,12 @@ class CountDownInstruction(Instruction):
         cu_bit: Tag | None = None,
         cd_bit: Tag | None = None,
     ):
-        validate_preset(preset, label="count_down() preset")
-        self.done_bit = done_bit
-        self.accumulator = accumulator
-        self.preset = preset
-        self.cu_bit = cu_bit
-        self.cd_bit = cd_bit
+        parsed: Preset = parse_preset(preset, label="count_down() preset")
+        self.done_bit = TagArg(done_bit)
+        self.accumulator = TagArg(accumulator)
+        self.preset = parsed
+        self.cu_bit = status_arg(cu_bit)
+        self.cd_bit = status_arg(cd_bit)
 
         # Convert Tags to Conditions if needed
         self.down_condition = to_condition(down_condition)
@@ -239,9 +243,9 @@ class CountDownInstruction(Instruction):
     def _status_tags(self, cu: bool, cd: bool) -> dict[str, bool]:
         tags: dict[str, bool] = {}
         if self.cu_bit is not None:
-            tags[self.cu_bit.name] = cu
+            tags[self.cu_bit.tag.name] = cu
         if self.cd_bit is not None:
-            tags[self.cd_bit.name] = cd
+            tags[self.cd_bit.tag.name] = cd
         return tags
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -251,14 +255,16 @@ class CountDownInstruction(Instruction):
             condition_view
         )
         down_edge = count_edge(ctx, self.memory_key(COUNT_DOWN_MEMORY), bool(enabled))
-        acc_value = ctx.get_tag(self.accumulator.name, 0)
+        acc = self.accumulator.tag.name
+        done = self.done_bit.tag.name
+        acc_value = ctx.get_tag(acc, 0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
             ctx.set_tags(
                 {
-                    self.done_bit.name: False,
-                    self.accumulator.name: 0,
+                    done: False,
+                    acc: 0,
                     **self._status_tags(False, enabled),
                 }
             )
@@ -268,8 +274,8 @@ class CountDownInstruction(Instruction):
             acc_value = _clamp_dint(acc_value)
             ctx.set_tags(
                 {
-                    self.done_bit.name: acc_value <= sp,
-                    self.accumulator.name: acc_value,
+                    done: acc_value <= sp,
+                    acc: acc_value,
                     **self._status_tags(False, enabled),
                 }
             )
@@ -279,11 +285,11 @@ class CountDownInstruction(Instruction):
 
     def advance_profile(self) -> AdvanceProfile:
         return monotone_profile(
-            channels=(self.accumulator, self.done_bit),
-            accumulator=self.accumulator,
-            done=self.done_bit,
+            channels=(self.accumulator.tag, self.done_bit.tag),
+            accumulator=self.accumulator.tag,
+            done=self.done_bit.tag,
             progress=None,
-            preset=self.preset,
+            preset=inner(self.preset),
             direction=-1,
             rate_per_scan=lambda _dt: 0.5,
             advance=ConditionDemand(self.down_condition),

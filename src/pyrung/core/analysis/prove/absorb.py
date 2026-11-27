@@ -101,13 +101,13 @@ def _drum_flag_without_its_time(drum: Any, program: Program) -> str | None:
     """
     from pyrung.core.validation._common import walk_instructions
 
-    step_name = drum.current_step.name
-    flag_name = drum.completion_flag.name
+    step_name = as_authored(drum.current_step).name
+    flag_name = as_authored(drum.completion_flag).name
     if drum.jump_condition is not None:
         return "its jump keeps the completion flag on"
     if drum.jog_condition is not None:
         return "its jog can complete it before its time is up"
-    if bool(drum.completion_flag.default):
+    if bool(as_authored(drum.completion_flag).default):
         return f"its completion flag {flag_name} starts on"
     for instr in walk_instructions(program):
         if instr is drum:
@@ -149,20 +149,22 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             if _drum_flag_without_its_time(instr, program) is not None:
                 # Tracked exactly: the tri-state would hide its time.
                 continue
-            done_name = instr.completion_flag.name
-            pairs[done_name] = instr.accumulator.name
+            done_name = as_authored(instr.completion_flag).name
+            pairs[done_name] = as_authored(instr.accumulator).name
             kinds[done_name] = _DONE_KIND_TIME_DRUM
             preset_tags[done_name] = f"__drum_preset:{done_name}"
             continue
         else:
             continue
 
-        pairs[instr.done_bit.name] = instr.accumulator.name
-        kinds[instr.done_bit.name] = kind
-        if isinstance(instr.preset, Tag):
-            preset_tags[instr.done_bit.name] = instr.preset.name
-        elif isinstance(instr.preset, (int, float)):
-            presets[instr.done_bit.name] = int(instr.preset)
+        done_name = as_authored(instr.done_bit).name
+        pairs[done_name] = as_authored(instr.accumulator).name
+        kinds[done_name] = kind
+        preset = as_authored(instr.preset)
+        if isinstance(preset, Tag):
+            preset_tags[done_name] = preset.name
+        elif isinstance(preset, (int, float)):
+            presets[done_name] = int(preset)
 
     return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
 
@@ -329,7 +331,7 @@ def _leg_reads(program: Program) -> _LegReads:
             continue
         for leg in relations.snapshot_fields:
             snapshot.update(_extract_tag_names(getattr(instr, leg), {}))
-        refs = resets.setdefault(instr.accumulator.name, set())
+        refs = resets.setdefault(as_authored(instr.accumulator).name, set())
         for leg in relations.zeroing_fields:
             refs.update(_extract_tag_names(getattr(instr, leg), {}))
     found = _LegReads(
@@ -494,8 +496,8 @@ def _all_atoms_absorbed(
 
 def _is_matching_timer_preset_read(instr: Any, done_name: str, acc_name: str) -> bool:
     return (
-        getattr(getattr(instr, "done_bit", None), "name", None) == done_name
-        and getattr(getattr(instr, "accumulator", None), "name", None) == acc_name
+        getattr(as_authored(getattr(instr, "done_bit", None)), "name", None) == done_name
+        and getattr(as_authored(getattr(instr, "accumulator", None)), "name", None) == acc_name
     )
 
 
@@ -989,9 +991,9 @@ def _is_matching_owner_preset_read(instr: Any, threshold_name: str, acc_name: st
     """Allow a threshold tag to also be the owning timer/counter preset."""
     from pyrung.core.tag import Tag
 
-    if getattr(getattr(instr, "accumulator", None), "name", None) != acc_name:
+    if getattr(as_authored(getattr(instr, "accumulator", None)), "name", None) != acc_name:
         return False
-    preset = getattr(instr, "preset", None)
+    preset = as_authored(getattr(instr, "preset", None))
     return isinstance(preset, Tag) and preset.name == threshold_name
 
 
@@ -1194,16 +1196,16 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
-            acc_name = instr.accumulator.name
+            acc_name = as_authored(instr.accumulator).name
             kind = _DONE_KIND_ON_DELAY
         elif isinstance(instr, OffDelayInstruction):
-            acc_name = instr.accumulator.name
+            acc_name = as_authored(instr.accumulator).name
             kind = _DONE_KIND_OFF_DELAY
         elif isinstance(instr, CountUpInstruction):
-            acc_name = instr.accumulator.name
+            acc_name = as_authored(instr.accumulator).name
             kind = _DONE_KIND_COUNT_UP
         elif isinstance(instr, CountDownInstruction):
-            acc_name = instr.accumulator.name
+            acc_name = as_authored(instr.accumulator).name
             kind = _DONE_KIND_COUNT_DOWN
         else:
             continue
@@ -1236,14 +1238,24 @@ def _acc_has_only_owner_writes(
 
         is_owner = False
         if kind == _DONE_KIND_ON_DELAY:
-            is_owner = isinstance(instr, OnDelayInstruction) and instr.accumulator.name == acc_name
+            is_owner = (
+                isinstance(instr, OnDelayInstruction)
+                and as_authored(instr.accumulator).name == acc_name
+            )
         elif kind == _DONE_KIND_OFF_DELAY:
-            is_owner = isinstance(instr, OffDelayInstruction) and instr.accumulator.name == acc_name
+            is_owner = (
+                isinstance(instr, OffDelayInstruction)
+                and as_authored(instr.accumulator).name == acc_name
+            )
         elif kind == _DONE_KIND_COUNT_UP:
-            is_owner = isinstance(instr, CountUpInstruction) and instr.accumulator.name == acc_name
+            is_owner = (
+                isinstance(instr, CountUpInstruction)
+                and as_authored(instr.accumulator).name == acc_name
+            )
         elif kind == _DONE_KIND_COUNT_DOWN:
             is_owner = (
-                isinstance(instr, CountDownInstruction) and instr.accumulator.name == acc_name
+                isinstance(instr, CountDownInstruction)
+                and as_authored(instr.accumulator).name == acc_name
             )
         if not is_owner:
             if kind in {

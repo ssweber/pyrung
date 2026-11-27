@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from laddercodec import Timer, TimeUnit
 
-from ..fields import Family, refusals_of, render_operand
+from ..fields import Family, refusals_of, render_operand, render_preset
 from ..resolve import _ResolutionCache
 
 # The argument of the pyrung call that holds each field of laddercodec's Timer. The timer's
@@ -42,14 +42,11 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the Timer that the export writes."""
 
-    def render(attribute: str) -> str:
-        return render_operand(exporter, getattr(instruction, attribute), attribute, instruction)
-
     kind = "on_delay" if type(instruction).__name__ == "OnDelayInstruction" else "off_delay"
-    done = render("done_bit")
-    accumulator = render("accumulator")
-    preset = render("preset")
-    unit = render("unit")
+    done = render_operand(exporter, instruction.done_bit.tag, "done_bit", instruction)
+    accumulator = render_operand(exporter, instruction.accumulator.tag, "accumulator", instruction)
+    preset = render_preset(exporter, instruction.preset, "preset", instruction)
+    unit = render_operand(exporter, instruction.unit, "unit", instruction)
     retained = instruction.reset_condition is not None if kind == "on_delay" else False
     return refusals_of(
         lambda: Timer(

@@ -29,6 +29,7 @@ from pyrung.core import (
 )
 from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.counters import CountUpInstruction
+from pyrung.core.instruction.operands import ConstArg
 from pyrung.core.relations import Relations, relations_for
 from pyrung.core.relations._guards import Atom, Not, Opaque, Placed, place, uncovered
 from pyrung.core.relations._render import render
@@ -149,7 +150,7 @@ def test_completion_boundary_agrees_with_the_recorded_compare(name: str) -> None
     expected_op = complement[compare.op] if name == "Tof" else compare.op
     assert boundary.op == expected_op
     if isinstance(compare.right, Setting):
-        assert boundary.bound == getattr(instruction, compare.right.field)
+        assert boundary.bound == getattr(instruction, compare.right.field).value
     else:
         assert boundary.bound == Preset.name
 
@@ -252,7 +253,7 @@ def test_an_integer_preset_changes_only_its_number_in_the_code(name: str) -> Non
     texts = set()
     for preset in (0, 1, -1, 100, 32767, 40000, -40000, 2**31 - 1, 2**31, -(2**31)):
         instruction = copy_module.copy(SHAPES[name])
-        instruction.preset = preset
+        instruction.preset = ConstArg(preset)
         source = render(instruction, record=False).source
         assert f"int({preset!r})" in source
         texts.add(source.replace(f"int({preset!r})", "int(PRESET)"))

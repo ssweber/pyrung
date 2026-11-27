@@ -27,7 +27,7 @@ from pyrung.core.instruction import (
     ToggleInstruction,
 )
 from pyrung.core.instruction.operands import CoilBitOperand
-from pyrung.core.instruction.utils import validate_preset
+from pyrung.core.instruction.utils import parse_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
 from pyrung.core.tag import ImmediateRef, Tag, TagType
@@ -890,7 +890,9 @@ def count_up(
         Builder for chaining .down() and .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_up")
-    validate_preset(preset, label="count_up() preset")
+    # The instruction parses the preset again when it is built.  This parse refuses a
+    # wrong preset at the count_up() call.
+    parse_preset(preset, label="count_up() preset")
     cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     up_condition, source_file, source_line = _capture_rung_condition_and_source("count_up")
     return CountUpBuilder(
@@ -930,7 +932,9 @@ def count_down(
         Builder for chaining .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_down")
-    validate_preset(preset, label="count_down() preset")
+    # The instruction parses the preset again when it is built.  This parse refuses a
+    # wrong preset at the count_down() call.
+    parse_preset(preset, label="count_down() preset")
     cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     down_condition, source_file, source_line = _capture_rung_condition_and_source("count_down")
     return CountDownBuilder(
@@ -1113,7 +1117,9 @@ def on_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "on_delay")
-    validate_preset(preset, label="on_delay() preset")
+    # The instruction parses the preset again when it is built.  This parse refuses a
+    # wrong preset at the on_delay() call.
+    parse_preset(preset, label="on_delay() preset")
     en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
@@ -1158,7 +1164,9 @@ def off_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "off_delay")
-    validate_preset(preset, label="off_delay() preset")
+    # The instruction parses the preset again when it is built.  This parse refuses a
+    # wrong preset at the off_delay() call.
+    parse_preset(preset, label="off_delay() preset")
     en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
@@ -1193,7 +1201,7 @@ def _out_phase(
         raise TypeError(f"{func_name}() {side}= takes (timer, preset), got {phase!r}.")
     timer, preset = phase
     done_bit, accumulator = _extract_done_acc(timer, func_name)
-    validate_preset(preset, label=preset_label or f"{func_name}() {side} preset")
+    parse_preset(preset, label=preset_label or f"{func_name}() {side} preset")
     return done_bit, accumulator, preset
 
 

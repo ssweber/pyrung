@@ -59,6 +59,7 @@ from ._emit import (
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_lvalue,
+    _compile_preset,
     _compile_range_flush,
     _compile_range_setup,
     _compile_set_out_of_range_fault_body,
@@ -487,9 +488,9 @@ def _compile_drum_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
 
-    step_write = _compile_lvalue(instr.current_step, ctx)
-    flag_write = _compile_lvalue(instr.completion_flag, ctx)
-    output_symbols = [_compile_lvalue(tag, ctx) for tag in instr.outputs]
+    step_write = _compile_lvalue(instr.current_step.tag, ctx)
+    flag_write = _compile_lvalue(instr.completion_flag.tag, ctx)
+    output_symbols = [_compile_lvalue(tag, ctx) for tag in instr.output_tags]
     pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
     step_count = len(instr.pattern)
     key_base = ctx.state_key_for(instr)
@@ -502,15 +503,15 @@ def _compile_drum_instruction(
     clear_time: list[str] = []
     if not isinstance(instr, EventDrumInstruction):
         clear_time = [
-            f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
-            emit_frac(instr.accumulator, "0", quote="repr"),
+            f"{_compile_lvalue(instr.accumulator.tag, ctx)} = 0",
+            emit_frac(instr.accumulator.tag, "0", quote="repr"),
         ]
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
     # The pins, read before the drum writes anything.
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
-        f"_step_raw = int({_compile_value(instr.current_step, ctx)})",
+        f"_step_raw = int({_compile_value(instr.current_step.tag, ctx)})",
         "_step = _step_raw",
         f"_invalid = {emit_cmp('_step', '<', '1')} or {emit_cmp('_step', '>', str(step_count))}",
         "if _invalid:",
@@ -518,6 +519,7 @@ def _compile_drum_instruction(
     ]
     if has_jump:
         assert instr.jump_condition is not None
+        assert instr.jump_step is not None
         jump_expr = _get_condition_snapshot(instr, "jump_condition", ctx) or compile_condition(
             instr.jump_condition, ctx
         )
@@ -526,7 +528,7 @@ def _compile_drum_instruction(
                 f"_jump_curr = bool({jump_expr})",
                 f"_jump_edge = {emit_rise('_jump_curr', jump_prev_key, paren=True)}",
                 "if _jump_edge:",
-                f"    _jump_target = int({_compile_value(instr.jump_step, ctx)})",
+                f"    _jump_target = int({_compile_preset(instr.jump_step, ctx)})",
             ]
         )
     if has_jog:
@@ -545,7 +547,7 @@ def _compile_drum_instruction(
     )
     lines.append(f"_reset_active = bool({reset_expr})")
 
-    flag_on = emit_truth(_compile_value(instr.completion_flag, ctx))
+    flag_on = emit_truth(_compile_value(instr.completion_flag.tag, ctx))
     write_row = [
         f"_row = {pattern_literal}[_step - 1]",
         *(f"{symbol} = bool(_row[{idx}])" for idx, symbol in enumerate(output_symbols)),
@@ -649,7 +651,7 @@ def _drum_end_lines(
         ]
 
     preset_exprs = [
-        None if preset is None else f"int({_compile_value(preset, ctx)})"
+        None if preset is None else f"int({_compile_preset(preset, ctx)})"
         for preset in instr.presets
     ]
     tick = _drum_tick_lines(instr, ctx)
@@ -659,7 +661,7 @@ def _drum_end_lines(
             *tick,
         ]
         if ctx.proof_metadata:
-            preset_key = prove_effective_preset_key(instr.completion_flag.name)
+            preset_key = prove_effective_preset_key(instr.completion_flag.tag.name)
             lines.append(emit_mem_set(preset_key, "_limit"))
         lines.append(f"_end_met = {emit_reached('_acc', '_limit')}")
         return lines
@@ -691,12 +693,11 @@ def _drum_tick_lines(
     instr: TimeDrumInstruction | TimeEventDrumInstruction, ctx: CodegenContext
 ) -> list[str]:
     """Add this scan's time to Acc; the step's preset, ``_limit``, is the tick's limit."""
-    acc_write = _compile_lvalue(instr.accumulator, ctx)
-    acc_read = _compile_value(instr.accumulator, ctx)
-    max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
-    tick = emit_tick(
-        instr.accumulator, instr.unit, ctx, acc_read=acc_read, max_acc=max_acc, frac_first=True
-    )
+    acc = instr.accumulator.tag
+    acc_write = _compile_lvalue(acc, ctx)
+    acc_read = _compile_value(acc, ctx)
+    max_acc = _INT_MAX if acc.type == TagType.INT else _DINT_MAX
+    tick = emit_tick(acc, instr.unit, ctx, acc_read=acc_read, max_acc=max_acc, frac_first=True)
     return [*tick, f"{acc_write} = _acc"]
 
 

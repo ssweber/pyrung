@@ -122,6 +122,8 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
     seen_tags: set[int] = set()
 
     def walk(value: Any) -> None:
+        # A drum's outputs and presets are tuples of parsed operands.
+        value = as_authored(value)
         value_id = id(value)
         if value_id in seen_values:
             return

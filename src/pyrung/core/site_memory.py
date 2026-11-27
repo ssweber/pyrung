@@ -224,7 +224,8 @@ def _timer_carries(instr: Instruction) -> tuple[tuple[str, int], ...]:
     if not isinstance(unit, TimeUnit):
         return ()
     accumulators = (
-        getattr(instr, f, None) for f in ("accumulator", "on_acc", "off_acc", "timer_acc")
+        as_authored(getattr(instr, f, None))
+        for f in ("accumulator", "on_acc", "off_acc", "timer_acc")
     )
     return tuple((f"_frac:{acc.name}", unit.ns) for acc in accumulators if acc is not None)
 

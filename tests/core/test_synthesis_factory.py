@@ -46,7 +46,11 @@ def test_bool_feedback_rungs_are_one_debounce_coil() -> None:
     assert isinstance(coil, DebounceInstruction)
     assert coil.target.tag is Fb
     assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
-    assert (coil.on_preset, coil.off_preset, coil.unit.name) == (200, 100, "Tms")
+    assert (coil.on_preset.value, coil.off_preset.value, coil.unit.name) == (
+        200,
+        100,
+        "Tms",
+    )
     (power,) = rung._conditions
     assert isinstance(power, BitCondition)
     assert power._resolved_tag is En
@@ -78,7 +82,7 @@ def test_pulse_feedback_rungs_are_one_flasher_coil() -> None:
     assert coil.target.tag is Fb
     assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
     # One unit for both sides, as on a CLICK: 8 ms rounds up to a second.
-    assert (coil.on_preset, coil.off_preset, coil.unit.name) == (1, 40, "Ts")
+    assert (coil.on_preset.value, coil.off_preset.value, coil.unit.name) == (1, 40, "Ts")
 
 
 def test_copy_hold_rung_steady_vs_guarded() -> None:
