@@ -14,12 +14,13 @@ past the destination's range set SC43.
   1870418611, which reads 1.  A store that saturates gives 2147483647, which reads 2.  Into
   a DS (Result2) its low 16 bits are 21171.  A store that saturates gives 32767.
 - ``double_low_bits``: ``3 ^ 35`` is 50031545098999707, past 2 ** 53.  The nearest double
-  is 50031545098999712.  Into a DD (Result1) the double's low 32 bits are -651126888, which
+  is 50031545098999704.  Into a DD (Result1) the double's low 32 bits are -651126888, which
   reads 1.  The exact power's low 32 bits are -651126885, which reads 2.  Into a DS
   (Result2) the double gives -26728 and the exact power -26725.  code.py computes the
   exact power and then rounds it to a float.  On a desktop that float is a double, so the
-  ``circuitpy`` target stores what a CLICK stores.  The P1AM-200's float has about 22 bits,
-  so the board stores 0 into the DD.
+  ``circuitpy`` target stores what a CLICK stores.  The P1AM-200's float has about 22 bits.
+  ``test_board_math.py`` works out that the board stores 0 into the DD.  No one has read
+  that value on a P1AM-200.
 - ``infinite_power``: ``5 ^ DD`` with DD = 2147483647 is past the double range.  Into a DD
   (Result1) it stores 0.  The exact power's low 32 bits would be -858993459.  Into a DF
   (Result2) it stores +Inf, which reads 1.  Into a DS (Result3) it stores 0.
@@ -130,7 +131,7 @@ group = Group(
             expect={"Result1": 1, "Result2": 21171, "ErrorCode": 3},
         ),
         case(
-            "A Math computes 3 ^ 35 as a double, 50031545098999712. A DD keeps the double's "
+            "A Math computes 3 ^ 35 as a double, 50031545098999704. A DD keeps the double's "
             "low 32 bits, -651126888 (Result1 = 1). A DS keeps its low 16 bits "
             "(Result2 = -26728). Each store sets SC43 (ErrorCode = 3). A CLICK read these in "
             "round b27.",
