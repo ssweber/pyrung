@@ -10,11 +10,12 @@ inverse is exact).
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, assert_never
 
 from pyrung.core.instruction.conversions import copy_store_transform
-from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-from pyrung.core.tag import TagType
+from pyrung.core.instruction.operands import PointerRangeArg, RangeArg, Span
+from pyrung.core.memory_block import BlockRange
+from pyrung.core.tag import Tag, TagType
 
 
 def type_bounds(tag_type: TagType | None) -> tuple[int, int] | None:
@@ -85,19 +86,28 @@ def range_subset(inner: TagType | None, outer: TagType | None) -> bool:
     return olo <= lo and hi <= ohi
 
 
-def range_tags(block_range: Any) -> list[Any] | None:
-    """The element tags of a *static* block range, or ``None`` if indirect.
+def range_tags(block_range: BlockRange) -> list[Tag] | None:
+    """Return the element tags of a range with fixed ends, or ``None`` if they cannot be listed.
 
-    Used by the value-clamping and pack/unpack crossings to align a target slot
-    with its source slot without a ``ScanContext``; an indirect / unresolvable
-    range yields ``None`` (the caller falls through to the idx-chase).
+    The value-clamping and pack/unpack crossings use them to align a target slot
+    with its source slot without a ``ScanContext``.  The caller falls through on
+    ``None``.
     """
-    if isinstance(block_range, (IndirectRef, IndirectExprRef)):
-        return None
-    tags_fn = getattr(block_range, "tags", None)
-    if tags_fn is None:
-        return None
     try:
-        return list(tags_fn())
+        return list(block_range.tags())
     except (TypeError, IndexError):
         return None
+
+
+def fixed_tags(span: Span) -> list[Tag] | None:
+    """Return the tags of *span*, or ``None`` for a range with pointers or an ``immediate()`` one.
+
+    The crossings fall through on ``None``.
+    """
+    match span:
+        case RangeArg(span=fixed, immediate=False):
+            return range_tags(fixed)
+        case RangeArg() | PointerRangeArg():
+            return None
+        case _:
+            assert_never(span)

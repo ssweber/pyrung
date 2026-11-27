@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any, assert_never
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
-from pyrung.core.analysis.crossings._ranges import range_tags
+from pyrung.core.analysis.crossings._ranges import fixed_tags
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
     Constraint,
@@ -36,9 +36,6 @@ from pyrung.core.crossing import (
 from pyrung.core.instruction.operands import (
     Dest,
     PointerArg,
-    PointerRangeArg,
-    RangeArg,
-    Span,
     TagArg,
 )
 from pyrung.core.instruction.packing import (
@@ -97,20 +94,6 @@ def _plain_tag(register: Dest) -> Tag | None:
             assert_never(register)
 
 
-def _fixed_tags(span: Span) -> list[Any] | None:
-    """Return the tags of *span*, or ``None`` for a range with pointers or an ``immediate()`` one.
-
-    The crossings fall through on ``None``.
-    """
-    match span:
-        case RangeArg(span=fixed, immediate=False):
-            return range_tags(fixed)
-        case RangeArg() | PointerRangeArg():
-            return None
-        case _:
-            assert_never(span)
-
-
 class PackBitsCrossing(BaseCrossing):
     """Reverse ``pack_bits``: each destination bit fans out to its source bit-tag."""
 
@@ -127,7 +110,7 @@ class PackBitsCrossing(BaseCrossing):
         pattern = _unsigned(value, width)
         if pattern is None:
             return REVERSE_FALLTHROUGH
-        bit_tags = _fixed_tags(instr.bit_block)
+        bit_tags = fixed_tags(instr.bit_block)
         if not bit_tags:
             return REVERSE_FALLTHROUGH
         n = len(bit_tags)
@@ -154,7 +137,7 @@ class PackWordsCrossing(BaseCrossing):
         pattern = _unsigned(value, 32)
         if pattern is None:
             return REVERSE_FALLTHROUGH
-        word_tags = _fixed_tags(instr.word_block)
+        word_tags = fixed_tags(instr.word_block)
         if not word_tags or len(word_tags) != 2:
             return REVERSE_FALLTHROUGH
         lo, hi = word_tags
@@ -181,7 +164,7 @@ class UnpackToBitsCrossing(BaseCrossing):
         src_name = getattr(source, "name", None)
         if src_name is None or _width(_tag_type(source)) is None:
             return REVERSE_FALLTHROUGH  # REAL / indirect source -> defer
-        bit_tags = _fixed_tags(instr.bit_block)
+        bit_tags = fixed_tags(instr.bit_block)
         if not bit_tags:
             return REVERSE_FALLTHROUGH
         for k, bit in enumerate(bit_tags):
@@ -205,7 +188,7 @@ class UnpackToWordsCrossing(BaseCrossing):
         src_name = getattr(source, "name", None)
         if src_name is None or _tag_type(source) != TagType.DINT:
             return REVERSE_FALLTHROUGH  # REAL / indirect source -> defer
-        word_tags = _fixed_tags(instr.word_block)
+        word_tags = fixed_tags(instr.word_block)
         if not word_tags or len(word_tags) != 2:
             return REVERSE_FALLTHROUGH
         for k, word in enumerate(word_tags):
