@@ -32,10 +32,10 @@ from __future__ import annotations
 import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never, cast
 
 from pyrung.core.analysis.simplified import Atom, Expr
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, Value
 from pyrung.core.tag import TagType, tag_written_from_outside
 
 from .expr import _build_atom_index, _collect_atoms_for_tag
@@ -101,13 +101,13 @@ def _drum_flag_without_its_time(drum: Any, program: Program) -> str | None:
     """
     from pyrung.core.validation._common import walk_instructions
 
-    step_name = as_authored(drum.current_step).name
-    flag_name = as_authored(drum.completion_flag).name
+    step_name = drum.current_step.tag.name
+    flag_name = drum.completion_flag.tag.name
     if drum.jump_condition is not None:
         return "its jump keeps the completion flag on"
     if drum.jog_condition is not None:
         return "its jog can complete it before its time is up"
-    if bool(as_authored(drum.completion_flag).default):
+    if bool(drum.completion_flag.tag.default):
         return f"its completion flag {flag_name} starts on"
     for instr in walk_instructions(program):
         if instr is drum:
@@ -128,7 +128,6 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
-    from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
 
     pairs: dict[str, str] = {}
@@ -149,22 +148,24 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             if _drum_flag_without_its_time(instr, program) is not None:
                 # Tracked exactly: the tri-state would hide its time.
                 continue
-            done_name = as_authored(instr.completion_flag).name
-            pairs[done_name] = as_authored(instr.accumulator).name
+            done_name = instr.completion_flag.tag.name
+            pairs[done_name] = instr.accumulator.tag.name
             kinds[done_name] = _DONE_KIND_TIME_DRUM
             preset_tags[done_name] = f"__drum_preset:{done_name}"
             continue
         else:
             continue
 
-        done_name = as_authored(instr.done_bit).name
-        pairs[done_name] = as_authored(instr.accumulator).name
+        done_name = instr.done_bit.tag.name
+        pairs[done_name] = instr.accumulator.tag.name
         kinds[done_name] = kind
-        preset = as_authored(instr.preset)
-        if isinstance(preset, Tag):
-            preset_tags[done_name] = preset.name
-        elif isinstance(preset, (int, float)):
-            presets[done_name] = int(preset)
+        match instr.preset:
+            case TagArg(tag=preset_tag):
+                preset_tags[done_name] = preset_tag.name
+            case ConstArg(value=value):
+                presets[done_name] = int(cast(int, value))
+            case _:
+                assert_never(instr.preset)
 
     return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
 
@@ -280,8 +281,7 @@ def _has_forbidden_data_read(
 
     for instr in walk_instructions(program):
         for field_name in getattr(type(instr), "_reads", ()):
-            value = as_authored(getattr(instr, field_name))
-            reads = _extract_tag_names(value, {})
+            reads = _extract_tag_names(getattr(instr, field_name), {})
             if tag_name not in reads:
                 continue
             if allowed is not None and allowed(instr):
@@ -331,7 +331,7 @@ def _leg_reads(program: Program) -> _LegReads:
             continue
         for leg in relations.snapshot_fields:
             snapshot.update(_extract_tag_names(getattr(instr, leg), {}))
-        refs = resets.setdefault(as_authored(instr.accumulator).name, set())
+        refs = resets.setdefault(instr.accumulator.tag.name, set())
         for leg in relations.zeroing_fields:
             refs.update(_extract_tag_names(getattr(instr, leg), {}))
     found = _LegReads(
@@ -494,10 +494,23 @@ def _all_atoms_absorbed(
     )
 
 
+def _field_tag_name(instr: Any, field_name: str) -> str | None:
+    """Return the name of the tag in the field *field_name* of *instr*, or None.
+
+    Timers, counters and drums hold their done bit, accumulator and tag preset as a
+    ``TagArg``.  Any other value, or no such field, gives None.
+    """
+    match getattr(instr, field_name, None):
+        case TagArg(tag=tag):
+            return tag.name
+        case _:
+            return None
+
+
 def _is_matching_timer_preset_read(instr: Any, done_name: str, acc_name: str) -> bool:
     return (
-        getattr(as_authored(getattr(instr, "done_bit", None)), "name", None) == done_name
-        and getattr(as_authored(getattr(instr, "accumulator", None)), "name", None) == acc_name
+        _field_tag_name(instr, "done_bit") == done_name
+        and _field_tag_name(instr, "accumulator") == acc_name
     )
 
 
@@ -989,27 +1002,28 @@ def _threshold_tag_name(spec: _ThresholdAtomSpec) -> str | None:
 
 def _is_matching_owner_preset_read(instr: Any, threshold_name: str, acc_name: str) -> bool:
     """Allow a threshold tag to also be the owning timer/counter preset."""
-    from pyrung.core.tag import Tag
-
-    if getattr(as_authored(getattr(instr, "accumulator", None)), "name", None) != acc_name:
+    if _field_tag_name(instr, "accumulator") != acc_name:
         return False
-    preset = as_authored(getattr(instr, "preset", None))
-    return isinstance(preset, Tag) and preset.name == threshold_name
+    return _field_tag_name(instr, "preset") == threshold_name
 
 
 def _direct_write_target(instr: Any) -> Any:
     """Return a direct Tag write target for copy/Math-like instructions."""
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.tag import Tag
 
     if isinstance(instr, CopyInstruction):
-        target = as_authored(instr.target)
-    elif isinstance(instr, CalcInstruction):
-        target = as_authored(instr.dest)
-    else:
-        return None
-    return target if isinstance(target, Tag) else None
+        match instr.target:
+            # An immediate() destination is no direct tag write for these readers.
+            case TagArg(tag=tag, immediate=False):
+                return tag
+            case TagArg() | PointerArg():
+                return None
+            case _:
+                assert_never(instr.target)
+    if isinstance(instr, CalcInstruction):
+        return instr.dest.tag
+    return None
 
 
 def _is_zero_literal(value: Any) -> bool:
@@ -1034,6 +1048,23 @@ def _literal_expr_value(value: Any) -> Any:
     from pyrung.core.expression import LiteralExpr
 
     return value.value if isinstance(value, LiteralExpr) else None
+
+
+def _constant_or_expression(source: Value) -> object | None:
+    """Return the constant or the expression in the source of a copy.
+
+    Return None for a tag or a pointer.  The progress readers below look only for a
+    constant or an expression.
+    """
+    match source:
+        case ConstArg(value=value):
+            return value
+        case ExprArg(expr=expr):
+            return expr
+        case TagArg() | PointerArg():
+            return None
+        case _:
+            assert_never(source)
 
 
 def _normalized_copy_literal_int_value(source: Any, target: Any) -> int | None:
@@ -1071,7 +1102,7 @@ def _stable_int_tag_value(
         target = _direct_write_target(instr)
         if target is None or target.name != tag_name:
             return None
-        value = _normalized_copy_literal_int_value(as_authored(instr.source), target)
+        value = _normalized_copy_literal_int_value(_constant_or_expression(instr.source), target)
         if value is None:
             return None
         if stable_value is None:
@@ -1146,7 +1177,9 @@ def _int_progress_write_delta(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        source = as_authored(instr.source)
+        source = _constant_or_expression(instr.source)
+        if source is None:
+            return None
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
@@ -1181,7 +1214,7 @@ def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
         target is not None
         and target.name == tag_name
         and instr.convert is None
-        and _is_zero_literal(as_authored(instr.source))
+        and _is_zero_literal(_constant_or_expression(instr.source))
     )
 
 
@@ -1196,16 +1229,16 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
-            acc_name = as_authored(instr.accumulator).name
+            acc_name = instr.accumulator.tag.name
             kind = _DONE_KIND_ON_DELAY
         elif isinstance(instr, OffDelayInstruction):
-            acc_name = as_authored(instr.accumulator).name
+            acc_name = instr.accumulator.tag.name
             kind = _DONE_KIND_OFF_DELAY
         elif isinstance(instr, CountUpInstruction):
-            acc_name = as_authored(instr.accumulator).name
+            acc_name = instr.accumulator.tag.name
             kind = _DONE_KIND_COUNT_UP
         elif isinstance(instr, CountDownInstruction):
-            acc_name = as_authored(instr.accumulator).name
+            acc_name = instr.accumulator.tag.name
             kind = _DONE_KIND_COUNT_DOWN
         else:
             continue
@@ -1239,23 +1272,19 @@ def _acc_has_only_owner_writes(
         is_owner = False
         if kind == _DONE_KIND_ON_DELAY:
             is_owner = (
-                isinstance(instr, OnDelayInstruction)
-                and as_authored(instr.accumulator).name == acc_name
+                isinstance(instr, OnDelayInstruction) and instr.accumulator.tag.name == acc_name
             )
         elif kind == _DONE_KIND_OFF_DELAY:
             is_owner = (
-                isinstance(instr, OffDelayInstruction)
-                and as_authored(instr.accumulator).name == acc_name
+                isinstance(instr, OffDelayInstruction) and instr.accumulator.tag.name == acc_name
             )
         elif kind == _DONE_KIND_COUNT_UP:
             is_owner = (
-                isinstance(instr, CountUpInstruction)
-                and as_authored(instr.accumulator).name == acc_name
+                isinstance(instr, CountUpInstruction) and instr.accumulator.tag.name == acc_name
             )
         elif kind == _DONE_KIND_COUNT_DOWN:
             is_owner = (
-                isinstance(instr, CountDownInstruction)
-                and as_authored(instr.accumulator).name == acc_name
+                isinstance(instr, CountDownInstruction) and instr.accumulator.tag.name == acc_name
             )
         if not is_owner:
             if kind in {
@@ -1419,7 +1448,9 @@ def _numeric_progress_write_direction(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        source = as_authored(instr.source)
+        source = _constant_or_expression(instr.source)
+        if source is None:
+            return None
     elif isinstance(instr, CalcInstruction):
         source = instr.expression
     else:
