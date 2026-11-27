@@ -16,12 +16,12 @@ from pyrung.core.instruction.control import (
     ReturnInstruction,
     iter_loop_body_rungs,
 )
-from pyrung.core.instruction.operands import as_authored, held
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import rung_label
 from pyrung.core.validation.walker import ProgramLocation
 
+from .families.math import _formula_expression
 from .findings import (
     CLK_EXPR_ONLY_IN_MATH,
     CLK_FORLOOP_INNER_ONESHOT,
@@ -537,9 +537,7 @@ def _evaluate_text_windows(
         _text_literal_compares(rung._conditions[rung._branch_condition_start :], compares)
         for instruction in rung._instructions:
             for field_name in getattr(type(instruction), "_conditions", ()):
-                _text_literal_compares(
-                    as_authored(getattr(instruction, field_name, None)), compares
-                )
+                _text_literal_compares(getattr(instruction, field_name, None), compares)
         for written, tags in compares:
             if id(written) in seen:
                 continue
@@ -564,7 +562,7 @@ def _evaluate_instruction_portability(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
     if instruction_type == "CalcInstruction":
-        if _expr_contains_floor_div(held(instruction.source_expression)):
+        if _expr_contains_floor_div(_formula_expression(instruction.source_expression)):
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)
             findings.append(
