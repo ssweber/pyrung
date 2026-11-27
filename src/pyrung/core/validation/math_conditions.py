@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.condition import CompareNe
 from pyrung.core.expression import (
@@ -16,7 +16,14 @@ from pyrung.core.expression import (
 )
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
-from pyrung.core.instruction.operands import held
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    TagArg,
+)
 from pyrung.core.validation._common import (
     RungLoc,
     _conjunction_satisfiable,
@@ -140,7 +147,13 @@ def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any, index: int)
     code, _ = render_instruction(instr, dest)
     # The formula runs its constants as a CLICK Math cuts them (calc_form).
     # Show the divisor as written.
-    written = list(_division_nodes(held(instr.source_expression)))
+    match instr.source_expression:
+        case ExprArg(expr=expr):
+            written = list(_division_nodes(expr))
+        case TagArg() | PointerArg() | ConstArg() | RangeArg() | PointerRangeArg():
+            written = []
+        case _:
+            assert_never(instr.source_expression)
     token = render_expr(denominator)
     label = "divisor is always 0"
     if len(written) == len(list(_division_nodes(instr.expression))):

@@ -63,7 +63,7 @@ message without changing the verdict.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.affine import extract_forward_affine
 from pyrung.core.analysis.write_sites import instruction_written_tags
@@ -83,7 +83,7 @@ from pyrung.core.expression import (
     LiteralExpr,
     TagExpr,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, ExprArg, TagArg
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
     RungLoc,
@@ -475,15 +475,6 @@ def _calc_derived_names(program: Program) -> set[str]:
     return names
 
 
-def _real_dest(instr: Any) -> Tag | None:
-    dest = as_authored(getattr(instr, "dest", None))
-    if isinstance(dest, ImmediateRef):
-        dest = dest.value
-    if isinstance(dest, Tag) and dest.type is TagType.REAL:
-        return dest
-    return None
-
-
 def _computed_real_names(program: Program) -> set[str]:
     """Return the names of the REAL tags that the ladder computes.
 
@@ -498,20 +489,16 @@ def _computed_real_names(program: Program) -> set[str]:
     names: set[str] = set()
     copies: list[tuple[str, str]] = []
     for instr in walk_instructions(program):
-        dest = _real_dest(instr)
-        if dest is None:
-            continue
-        if isinstance(instr, CalcInstruction):
-            if may_be_float(instr.expression):
-                names.add(dest.name)
-        elif isinstance(instr, CopyInstruction):
-            source = as_authored(instr.source)
-            if isinstance(source, ImmediateRef):
-                source = source.value
-            if isinstance(source, Tag) and source.type is TagType.REAL:
-                copies.append((source.name, dest.name))
-            elif isinstance(source, Expression) and may_be_float(source):
-                names.add(dest.name)
+        match instr:
+            case CalcInstruction(dest=TagArg(tag=dest)) if dest.type is TagType.REAL:
+                if may_be_float(instr.expression):
+                    names.add(dest.name)
+            case CopyInstruction(dest=TagArg(tag=dest)) if dest.type is TagType.REAL:
+                match instr.source:
+                    case TagArg(tag=source) if source.type is TagType.REAL:
+                        copies.append((source.name, dest.name))
+                    case ExprArg(expr=expr) if may_be_float(expr):
+                        names.add(dest.name)
     changed = True
     while changed:
         changed = False
@@ -691,16 +678,21 @@ def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
             continue
         # _collect_write_sites emits Done and Acc sites (a drum's outputs, step
         # and flag too).  Keep the accumulator site as the instruction anchor.
-        if site.target_name != as_authored(instr.accumulator).name:
+        if site.target_name != instr.accumulator.tag.name:
             continue
         seen.add(id(instr))
         presets = instr.presets if isinstance(instr, _TimedDrumInstruction) else (instr.preset,)
         named: set[str] = set()
-        for preset in map(as_authored, presets):
-            if isinstance(preset, Tag) and preset.name not in named:
-                if _tag_stays_zero(preset, graph):
-                    sites.append((site, preset, instr))
-                named.add(preset.name)
+        for preset in presets:
+            match preset:
+                case TagArg(tag=tag) if tag.name not in named:
+                    if _tag_stays_zero(tag, graph):
+                        sites.append((site, tag, instr))
+                    named.add(tag.name)
+                case TagArg() | ConstArg() | None:
+                    pass
+                case _:
+                    assert_never(preset)
     return sites
 
 
@@ -1204,7 +1196,7 @@ def validate_cmp_conditions(
 
     preset_sites = _preset_sites(program, graph)
     zero_preset_pairs = {
-        (as_authored(instr.accumulator).name, preset.name) for _site, preset, instr in preset_sites
+        (instr.accumulator.tag.name, preset.name) for _site, preset, instr in preset_sites
     }
     for site, preset, _instr in preset_sites:
         findings.append(

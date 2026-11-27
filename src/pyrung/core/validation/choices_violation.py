@@ -10,10 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.write_sites import static_write_target_tags
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg
 from pyrung.core.tag import Tag
-from pyrung.core.validation._common import WriteSite, site_frame
+from pyrung.core.validation._common import WriteSite, operand_tags, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.severity import Severity
@@ -70,25 +69,14 @@ def _literal_copy_targets(instr: Any) -> list[tuple[Tag, str, Any]]:
     slot's own choices count."""
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
-    itype = type(instr).__name__
-
-    if isinstance(instr, CopyInstruction):
-        source = as_authored(instr.source)
-        if isinstance(source, (Tag, type(None))) or hasattr(source, "_pyrung_structure_runtime"):
-            return []  # dynamic source
-        if isinstance(source, (int, float, str)):
-            return [
-                (tag, itype, source) for tag in static_write_target_tags(as_authored(instr.dest))
-            ]
-
-    if isinstance(instr, FillInstruction):
-        source = as_authored(instr.value)
-        if isinstance(source, (int, float, str)):
-            return [
-                (tag, itype, source) for tag in static_write_target_tags(as_authored(instr.dest))
-            ]
-
-    return []
+    match instr:
+        case (
+            CopyInstruction(source=ConstArg(value=int() | float() | str() as value), dest=dest)
+            | FillInstruction(value=ConstArg(value=int() | float() | str() as value), dest=dest)
+        ):
+            return [(tag, type(instr).__name__, value) for tag in operand_tags(dest)]
+        case _:
+            return []
 
 
 # ---------------------------------------------------------------------------

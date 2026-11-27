@@ -7,7 +7,7 @@ we never mistake merely writing a pointer for establishing a valid address.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.affine import extract_forward_affine
 from pyrung.core.analysis.pdg import _extract_reads_from_condition
@@ -21,9 +21,8 @@ from pyrung.core.instruction.conversions import (
     copy_source_kind,
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
 from pyrung.core.rung import Rung
-from pyrung.core.tag import ImmediateRef, Tag
 
 if TYPE_CHECKING:
     from pyrung.core.validation.context import ValidationContext
@@ -87,22 +86,24 @@ def site_evidence(
         changed = writes(instr)
         guards[:] = [g for g in guards if not (_extract_reads_from_condition(g, {}) & changed)]
         new: Values = None
-        target = (
-            as_authored(instr.dest)
-            if isinstance(instr, (CopyInstruction, CalcInstruction))
-            else None
-        )
-        if isinstance(target, ImmediateRef):
-            target = target.value
-        if isinstance(instr, CopyInstruction) and isinstance(target, Tag) and instr.convert is None:
-            source = as_authored(instr.source)
-            if isinstance(source, ImmediateRef):
-                source = source.value
-            values = env.get(source.name) if isinstance(source, Tag) else (source,)
+        target = None
+        match instr:
+            case CopyInstruction(dest=TagArg(tag=tag)) | CalcInstruction(dest=TagArg(tag=tag)):
+                target = tag
+        if isinstance(instr, CopyInstruction) and target is not None and instr.convert is None:
+            match instr.source:
+                case TagArg(tag=source):
+                    values = env.get(source.name)
+                case ConstArg(value=value):
+                    values = (value,)
+                case PointerArg() | ExprArg():
+                    values = None
+                case _:
+                    assert_never(instr.source)
             if values is not None and all(isinstance(v, (int, float, bool)) for v in values):
-                kind = copy_source_kind(source)
+                kind = copy_source_kind(instr.source)
                 new = tuple(_store_copy_value_to_tag_type(v, target, kind) for v in values)
-        elif isinstance(instr, CalcInstruction) and isinstance(target, Tag):
+        elif isinstance(instr, CalcInstruction) and target is not None:
             affine = extract_forward_affine(instr)
             if affine is not None:
                 source_name, scale, offset = affine
@@ -114,7 +115,7 @@ def site_evidence(
                     )
         guaranteed = guaranteed and not getattr(instr, "_oneshot", False)
         for name in changed:
-            assigned = new if isinstance(target, Tag) and target.name == name else None
+            assigned = new if target is not None and target.name == name else None
             env[name] = assigned if guaranteed else _union(env.get(name), assigned)
         if pointer_name in changed and guaranteed:
             default_possible = False

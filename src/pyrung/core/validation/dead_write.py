@@ -15,8 +15,7 @@ from pyrung.core.instruction.control import (
     FunctionCallInstruction,
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.operands import as_authored
-from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+from pyrung.core.instruction.operands import PointerArg
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation._common import WriteSite, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
@@ -124,9 +123,7 @@ def _guaranteed_write(site: _SimpleSite, rung: Rung) -> bool:
     if rung._conditions:
         return False
     if isinstance(instr, CopyInstruction):
-        return instr.convert is None and not isinstance(
-            as_authored(instr.source), (IndirectRef, IndirectExprRef)
-        )
+        return instr.convert is None and not isinstance(instr.source, PointerArg)
     return isinstance(instr, (CalcInstruction, LatchInstruction, ResetInstruction))
 
 
