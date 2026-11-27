@@ -26,7 +26,6 @@ from pyrung.click.codegen.formula import (
     _RANGE_AGG_TO_METHOD,
     _TIER_OF,
     _WORD_OPS,
-    PLUS_SIGN,
     Address,
     BinaryOp,
     Call,
@@ -34,7 +33,6 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
-    Plus,
     Pointer,
     RangeCall,
     parse_with_unconfirmed_pairs,
@@ -582,19 +580,17 @@ def _render_parsed_formula(
                 node.first.bank, node.first.index, node.last.index, collection
             )
             return f"{block}.{_RANGE_AGG_TO_METHOD[node.name]}()", _ATOM_STRENGTH
-        if isinstance(node, (Negate, Plus)):
+        if isinstance(node, Negate):
             operand, strength = render(node.operand)
             if _is_python_number(node.operand):
                 # Python would fold the minus sign into the constant when it loads the file. A
                 # hex Math reads a negative constant as its 16 bits, so - 5h / DH1 would divide
-                # FFFBh. A LiteralExpr keeps the minus sign a step of the scan. Before a plus,
-                # it keeps the plus in the export.
+                # FFFBh. A LiteralExpr keeps the minus sign a step of the scan.
                 operand, strength = f"LiteralExpr({operand})", _ATOM_STRENGTH
                 collection.used_expr_funcs.add("LiteralExpr")
             if strength < _UNARY_STRENGTH:
                 operand = f"({operand})"
-            sign = "-" if isinstance(node, Negate) else "+"
-            return f"{sign}{operand}", _UNARY_STRENGTH
+            return f"-{operand}", _UNARY_STRENGTH
         symbol, strength = _PYTHON_BINARY_OPS[node.op]
         left, left_strength = render(node.left)
         right, right_strength = render(node.right)
@@ -638,13 +634,13 @@ def _is_python_number(node: Formula) -> bool:
 
 def _has_constant_operation(node: Formula) -> bool:
     """Return whether the rendered *node* has an operation between two plain numbers, or a
-    sign before one.
+    minus sign before one.
     """
     if isinstance(node, BinaryOp):
         if _is_python_number(node.left) and _is_python_number(node.right):
             return True
         return _has_constant_operation(node.left) or _has_constant_operation(node.right)
-    if isinstance(node, (Negate, Plus)):
+    if isinstance(node, Negate):
         return _is_python_number(node.operand) or _has_constant_operation(node.operand)
     if isinstance(node, Call):
         return any(_has_constant_operation(arg) for arg in node.args)
@@ -680,8 +676,6 @@ def _operator_words(operator: str) -> str:
 
 def _guessed_order(first: str, second: str) -> str:
     """Return the words that say how pyrung orders two operators that no reading has ordered."""
-    if first == PLUS_SIGN:
-        return "the plus sign first"
     if first not in _TIER_OF:
         return "the minus sign first"
     if _TIER_OF[first] == _TIER_OF[second]:

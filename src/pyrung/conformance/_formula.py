@@ -23,7 +23,6 @@ from pyrung.click.codegen.formula import (
     Negate,
     Number,
     Pi,
-    Plus,
     parse_with_unconfirmed_pairs,
 )
 from pyrung.click.codegen.utils import _parse_af_args
@@ -98,8 +97,6 @@ def _as_subtraction(node: Formula) -> Formula:
         return Number(float(exported))
     if isinstance(node, Negate):
         return BinaryOp("-", Number(0), _as_subtraction(node.operand))
-    if isinstance(node, Plus):
-        return replace(node, operand=_as_subtraction(node.operand))
     if isinstance(node, BinaryOp):
         return replace(node, left=_as_subtraction(node.left), right=_as_subtraction(node.right))
     if isinstance(node, Call):

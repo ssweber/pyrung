@@ -37,10 +37,11 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 #: is no operator.
 NEGATE_ADDRESS = "a minus sign before an address"
 
-#: A minus sign that is an operator of its own before a constant, as an operator in
-#: :data:`CONFIRMED_PAIRS`. In hex mode CLICK stores it as a token of its own, such as
-#: ``-#UH2#AND#UH3`` (round b20). In decimal mode a minus sign after another sign is such an
-#: operator, as in ``- - 5``.
+#: A minus sign before a constant that it is not part of, as :data:`CONFIRMED_PAIRS` names
+#: it. In hex mode CLICK stores the minus sign as a token of its own, such as
+#: ``-#UH2#AND#UH3`` (round b20). In decimal mode CLICK stores a minus sign in the constant
+#: after it (H-2). The parse keeps the first minus sign of ``- - 5`` apart, because the second
+#: one is part of the constant.
 NEGATE_CONSTANT = "a minus sign before a constant"
 
 #: A minus sign before a bracket, and before a function, as operators in
@@ -49,23 +50,11 @@ NEGATE_CONSTANT = "a minus sign before a constant"
 NEGATE_BRACKET = "a minus sign before a bracket"
 NEGATE_FUNCTION = "a minus sign before a function"
 
-#: A minus sign before a pointer, before PI, before another minus sign and before a plus sign.
-#: Each is an operator of its own, because no reading has run one yet.
+#: A minus sign before a pointer, before PI and before another minus sign. Each is an operator
+#: of its own, because no reading has run one yet.
 NEGATE_POINTER = "a minus sign before a pointer"
 NEGATE_PI = "a minus sign before PI"
 NEGATE_MINUS = "a minus sign before another minus sign"
-NEGATE_PLUS = "a minus sign before a plus sign"
-
-#: A plus sign, as the pair lists name it. In hex mode a plus changes no value or flag. Round
-#: b20 read it before 5h, and round b21 read it before a bracket and before 0h. b21 also shows
-#: that the plus never cuts its operand to 16 bits. A plus that does not cut changes nothing in
-#: any grouping. So the parse drops every hex plus. No round read one before an address or in
-#: a function. The drop there rests on b21's evidence that the plus never cuts.
-#:
-#: In decimal mode CLICK stores a plus before a constant in the constant (H+5). The parse
-#: drops that plus. No reading shows a decimal plus before anything else. The parse keeps that
-#: plus as an operator.
-PLUS_SIGN = "a plus sign"
 
 #: Each pair of operators whose order a reading of a CLICK settled, with the rounds of those
 #: readings. Two operators meet when one is an operand of the other, and the operand has no
@@ -89,7 +78,7 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "-", "b12"),
     ("*", "*", "b16"),
     ("*", "/", "b11, b12, b15"),
-    ("*", "MOD", "b10, b11, b15"),
+    ("*", "MOD", "b10, b11, b15, b22"),
     ("*", "AND", "b11"),
     ("*", "OR", "b16"),
     ("*", "XOR", "b16"),
@@ -133,6 +122,7 @@ CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     (NEGATE_CONSTANT, "XOR", "b20"),
     (NEGATE_CONSTANT, "+", "b20"),
     (NEGATE_CONSTANT, "-", "b20"),
+    (NEGATE_CONSTANT, "/", "b22"),
     (NEGATE_BRACKET, "^", "b15"),
     (NEGATE_BRACKET, "/", "b20"),
     (NEGATE_BRACKET, "MOD", "b20"),
@@ -156,7 +146,12 @@ CONFIRMED_ORDERS: tuple[tuple[str, str, str], ...] = ()
 #: readings have not all settled. A formula with the same tree is confirmed, because a CLICK
 #: was seen computing it. ``tests/click/test_click_formula.py`` checks this list against its
 #: readings.
-READ_FORMULAS: tuple[tuple[str, bool], ...] = (("- DS1 * 3", False),)
+READ_FORMULAS: tuple[tuple[str, bool], ...] = (
+    ("- FFFFh * FF00h", True),
+    ("- DH431 * DH432", True),
+    ("- FFFFh * FF00h MOD 7h", True),
+    ("- DH431 * DH432 MOD 7h", True),
+)
 
 #: Pairs of operators whose two groupings give the same value and the same fault flags on a
 #: CLICK, as (first operator, second operator, hex mode) in the order that the formula writes
@@ -167,12 +162,11 @@ READ_FORMULAS: tuple[tuple[str, bool], ...] = (("- DS1 * 3", False),)
 #: reading shows each step of both groupings. The grid holds a value of each class that an
 #: operand can take, and the list is empty:
 #:
-#: - A DF can hold Inf and NaN, and the model counts no step on either as read. A decimal
-#:   minus sign before ``*`` can meet 0 * x. The readings show the sign of that 0 only for
-#:   x = 5.0, -5.0 and -1.0. So no decimal pair with a minus sign agrees. Each other decimal
-#:   pair differs on some value of the grid.
-#: - No reading shows a hex value past FFFFh in AND, OR or XOR, or past FDA93880h in any step.
-#:   An operand can be a longer formula, so no hex pair agrees.
+#: - A DF can hold Inf and NaN, and the model counts no step on either as read. So no decimal
+#:   pair with a minus sign agrees. Each other decimal pair differs on some value of the grid.
+#: - No reading shows a hex value past FFFFh in AND, OR or XOR. No reading shows one above
+#:   FDA93880h or below -FEFF0100h in any step. An operand can be a longer formula, so no hex
+#:   pair agrees.
 #:
 #: :data:`SAME_VALUE_ON_PLAIN_OPERANDS` holds the pairs that agree when no operand can take
 #: one of these values.
@@ -183,14 +177,17 @@ SAME_VALUE_PAIRS: tuple[tuple[str, str, bool], ...] = ()
 #: second operator, hex mode) in the order that the formula writes them. The other step of the
 #: pair counts as plain. :func:`plain_operands` says which operands are plain.
 #: In hex mode a plain operand is never past FFFFh, so these steps stay inside the values that
-#: the readings show. No decimal pair is here. A decimal minus sign before ``*`` can meet
-#: 0 * x. The readings show the sign of that 0 only for x = 5.0, -5.0 and -1.0.
+#: the readings show. A decimal minus sign before ``*`` can meet 0 * x. Each reading of a
+#: product of a zero gave the sign that a double gives, at 0.5, 3.0, 5.0 and 1.0E+30 with each
+#: sign, and at each zero (rounds b20 and b22). So the two groupings give the same zero.
 #: ``tests/click/test_click_formula.py`` derives this list over a grid of plain operands.
 SAME_VALUE_ON_PLAIN_OPERANDS: tuple[tuple[str, str, bool], ...] = (
     ("AND", "AND", True),
     ("OR", "OR", True),
     ("XOR", "XOR", True),
     (NEGATE_CONSTANT, "MOD", True),
+    (NEGATE_ADDRESS, "*", False),
+    (NEGATE_BRACKET, "*", False),
 )
 
 # CLICK's Math functions, and the Python names that the importer writes for them.
@@ -308,13 +305,6 @@ class Negate(_Node):
 
 
 @dataclass(frozen=True)
-class Plus(_Node):
-    """A plus sign in decimal mode, before anything but a constant."""
-
-    operand: Formula
-
-
-@dataclass(frozen=True)
 class BinaryOp(_Node):
     """A binary operation. *op* is CLICK's spelling: ``+ - * / ^ MOD AND OR XOR``."""
 
@@ -323,7 +313,7 @@ class BinaryOp(_Node):
     right: Formula
 
 
-Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | Plus | BinaryOp
+Formula: TypeAlias = Number | Address | Pointer | Pi | Call | RangeCall | Negate | BinaryOp
 """A node of the tree that :func:`parse_click_formula` returns."""
 
 
@@ -334,18 +324,18 @@ def parse_click_formula(text: str, *, hex_mode: bool = False) -> Formula | None:
     With *hex_mode* a bare number is hex. CLICK's dialog reads ``255`` in hex mode as 0x255 too.
 
     Return None when the stored value can depend on an order of operators that no reading of
-    a CLICK has settled. ``- DS1 * DS2`` returns None, and ``( - DS1 ) * DS2`` returns a tree.
+    a CLICK has settled. ``- DH1 * DH2`` in hex mode returns None, and ``( - DH1 ) * DH2``
+    returns a tree.
     Brackets set the order in CLICK too.
 
     Raise ValueError for text that is not a formula, such as ``2 ^ 3`` in hex mode.
     """
     # The pairs that a formula needs are those of each bracket scope: the formula outside
     # brackets, the inside of one bracket, or one argument of a function. A minus sign is an
-    # operator of one of the NEGATE_* kinds, and a plus sign is a PLUS_SIGN. Each
-    # applies before every operator to its left in its scope, so it pairs only with the
-    # operators to its right. A pair in SAME_VALUE_PAIRS needs no reading. A pair in
-    # SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps have plain operands. A
-    # formula with the tree of one in READ_FORMULAS needs none.
+    # operator of one of the NEGATE_* kinds. It applies before every operator to its left in
+    # its scope, so it pairs only with the operators to its right. A pair in SAME_VALUE_PAIRS
+    # needs no reading. A pair in SAME_VALUE_ON_PLAIN_OPERANDS needs none when its two steps
+    # have plain operands. A formula with the tree of one in READ_FORMULAS needs none.
     tree, pairs = parse_with_unconfirmed_pairs(text, hex_mode=hex_mode)
     return None if pairs else tree
 
@@ -368,7 +358,7 @@ def parse_with_unconfirmed_pairs(
     for steps in _scope_steps(tree):
         for index, first_step in enumerate(steps):
             for second_step in steps[index + 1 :]:
-                if isinstance(second_step, (Negate, Plus)):
+                if isinstance(second_step, Negate):
                     continue
                 first, second = operator_kind(first_step), operator_kind(second_step)
                 assert first is not None and second is not None
@@ -392,8 +382,6 @@ def operator_kind(node: Formula) -> str | None:
     """
     if isinstance(node, BinaryOp):
         return node.op
-    if isinstance(node, Plus):
-        return PLUS_SIGN
     if not isinstance(node, Negate):
         return None
     operand = node.operand
@@ -409,8 +397,6 @@ def operator_kind(node: Formula) -> str | None:
         return NEGATE_PI
     if isinstance(operand, Number):
         return NEGATE_CONSTANT
-    if isinstance(operand, Plus):
-        return NEGATE_PLUS
     return NEGATE_MINUS
 
 
@@ -427,7 +413,7 @@ def plain_operands(first: Formula, second: Formula, *, hex_mode: bool) -> bool:
     for step in (first, second):
         if isinstance(step, BinaryOp):
             operands: tuple[Formula, ...] = (step.left, step.right)
-        elif isinstance(step, (Negate, Plus)):
+        elif isinstance(step, Negate):
             operands = (step.operand,)
         else:
             return False
@@ -448,7 +434,7 @@ def _scopes(tree: Formula) -> Iterator[list[tuple[str, bool]]]:
     them, each with whether it is a sign before its operand.
     """
     for steps in _scope_steps(tree):
-        yield [(str(operator_kind(step)), isinstance(step, (Negate, Plus))) for step in steps]
+        yield [(str(operator_kind(step)), isinstance(step, Negate)) for step in steps]
 
 
 def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
@@ -465,7 +451,7 @@ def _scope_steps(tree: Formula) -> Iterator[list[Formula]]:
             walk(node.left)
             steps.append(node)
             walk(node.right)
-        elif isinstance(node, (Negate, Plus)):
+        elif isinstance(node, Negate):
             steps.append(node)
             walk(node.operand)
         elif isinstance(node, Call):
@@ -559,18 +545,16 @@ class _Parser:
     def _unary(self) -> Formula:
         token = self._peek()
         if token == ("punct", "+"):
+            # The parse drops every plus sign. Each formula that a CLICK was read running with
+            # a plus stored the value and flags of the formula without the plus. In hex mode
+            # the plus did not cut its operand to 16 bits in any case it ran: with 1h in DH1,
+            # + ( 0h - DH1 ) + 1h stored 0h with no SC43 (round b21). In decimal mode CLICK
+            # stores a plus before a constant in the constant (+5 is H+5, round b20). With 5 in
+            # DS1, + DS1 * 2 and + ( DS1 - 3 ) * 2 stored 10 and 4 (round b22). No reading
+            # puts a plus before a function, a pointer or PI, or before a DF that holds -0.0.
+            # The drop there is pyrung's assumption, based on these readings.
             self.pos += 1
-            after = self._peek()
-            if self.hex_mode:
-                # A hex plus does not cut its operand, so it changes nothing (see PLUS_SIGN).
-                # With 1h in DH1, + ( 0h - DH1 ) + 1h stores 0h with no SC43, as
-                # ( 0h - DH1 ) + 1h does (round b21).
-                return self._unary()
-            if after is not None and after[0] in ("number", "hex"):
-                # A decimal CLICK stores a plus before a constant in the constant (+5 is H+5).
-                self.pos += 1
-                return self._number(after)
-            return Plus(self._unary())
+            return self._unary()
         if token == ("punct", "-"):
             self.pos += 1
             after = self._peek()

@@ -93,9 +93,8 @@ A pair joins a list again only when a reading shows every row of its entry in
 
 ``test_pending_zero_signs_are_the_unread_rows_that_each_pair_meets`` in
 ``tests/click/test_click_formula.py`` generates the rows that each pair meets, and checks the
-table against them. Each row that is left has one value of its class read, by a field of
-this group or by a case of reading round b20. A row is read only when every value of its class
-is.
+table against them. The table is empty. Rounds b20 and b22 read the 0 of a product at several
+values of each class, and the model reads every such 0.
 
 ``by_zero`` also settles two pairs in ``formula.CONFIRMED_PAIRS``. ``- DF 5.0 / DF 0.0`` and
 ``- DF 5.0 MOD DF 0.0`` stored +0.0. Applied last, the minus sign would give -0.0. So a CLICK

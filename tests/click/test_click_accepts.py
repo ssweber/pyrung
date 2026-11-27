@@ -106,6 +106,19 @@ def test_a_hex_math_into_yd_exports():
     _exports_as(lambda: math(dh[1] + dh[2], yd[1]), "math(DH1 + DH2,YD1,mode=hex)")
 
 
+@pytest.mark.parametrize(
+    "write, token",
+    [
+        (lambda: math(+ds[1] * 2, ds[2]), "math(+ DS1 * 2,DS2,mode=decimal)"),
+        (lambda: math(+dh[1] * 2, dh[2]), "math(+ DH1 * 2h,DH2,mode=hex)"),
+    ],
+    ids=["decimal", "hex"],
+)
+def test_a_plus_sign_exports_as_click_displays_it(write, token):
+    # Round b22: CLICK took + DS401 * 2 and +DH401 * 2h, and displays each with a space.
+    _exports_as(write, token)
+
+
 # --- Copy into YD -----------------------------------------------------------------------
 # The import reads no XD or YD address yet, so these check the export alone.
 

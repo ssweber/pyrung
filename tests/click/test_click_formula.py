@@ -34,9 +34,7 @@ from pyrung.click.codegen.formula import (
     NEGATE_FUNCTION,
     NEGATE_MINUS,
     NEGATE_PI,
-    NEGATE_PLUS,
     NEGATE_POINTER,
-    PLUS_SIGN,
     READ_FORMULAS,
     SAME_VALUE_ON_PLAIN_OPERANDS,
     SAME_VALUE_PAIRS,
@@ -236,6 +234,24 @@ READINGS: list[tuple[str, str, bool, dict[str, float], float]] = [
     ("b21-p3", "+ ( 0h - DH421 ) * 2h", True, {"DH421": 1}, 0xFFFE),
     ("b21-p2b", "+ 0h - DH422 + 1h", True, {"DH422": 2}, 0xFFFF),
     ("b21-p3b", "+ ( 0h - DH421 ) * 1h", True, {"DH421": 1}, 0xFFFF),
+    # Round b22. CLICK stored each plus as a token of its own, and the plus changed nothing.
+    ("b22-b_ds", "+ DS401 * 2", False, {"DS401": 5}, 10),
+    ("b22-b_br", "+ ( DS401 - 3 ) * 2", False, {"DS401": 5}, 4),
+    ("b22-b_hex", "+ DH401 * 2h", True, {"DH401": 3}, 0x0006),
+    # A hex / rounds down, and a hex MOD truncates. A product stays whole past 32 bits.
+    ("b22-c_div2", "- 5h / 2h", True, {}, 0xFFFD),
+    ("b22-c_div3", "- 5h / 3h", True, {}, 0xFFFE),
+    ("b22-c_mulk", "- FFFFh * FF00h", True, {}, 0xFF00),
+    ("b22-c_mulr", "- DH431 * DH432", True, {"DH431": 0xFFFF, "DH432": 0xFF00}, 0xFF00),
+    ("b22-c_mulk7", "- FFFFh * FF00h MOD 7h", True, {}, 0xFFFB),
+    ("b22-c_mulr7", "- DH431 * DH432 MOD 7h", True, {"DH431": 0xFFFF, "DH432": 0xFF00}, 0xFFFB),
+    ("b22-c_div", "( 0h - DH421 ) / 3h", True, {"DH421": 1}, 0xFFFF),
+    ("b22-c_mod", "( 0h - DH421 ) MOD 3h", True, {"DH421": 1}, 0xFFFF),
+    # Round b23 divided by a value below 0.
+    ("b23-d1", "5h / ( 0h - 3h )", True, {}, 0xFFFE),
+    ("b23-d2", "( 0h - 7h ) / ( 0h - 2h )", True, {}, 0x0003),
+    ("b23-m1", "5h MOD ( 0h - 3h )", True, {}, 0x0002),
+    ("b23-m2", "( 0h - 7h ) MOD ( 0h - 2h )", True, {}, 0xFFFF),
     ("b20-e_hex", "DH411 MOD DH412 MOD DH413", True, {"DH411": 7, "DH412": 5, "DH413": 3}, 2),
     ("b20-e_dec", "DS411 / DS412 MOD 3", False, {"DS411": 7, "DS412": 2}, 0.5),
 ]
@@ -337,15 +353,13 @@ _SIGNS = {
     NEGATE_POINTER,
     NEGATE_PI,
     NEGATE_MINUS,
-    NEGATE_PLUS,
-    PLUS_SIGN,
 }
 
 
 def _written_orders(pair: frozenset[str]) -> list[tuple[str, str]]:
     """Return each order in which a formula can write the two operators of *pair*.
 
-    A minus sign or a plus sign pairs only with an operator to its right.
+    A minus sign pairs only with an operator to its right.
     """
     if len(pair) == 1:
         [op] = pair
@@ -475,7 +489,7 @@ def test_read_formulas_are_the_readings_whose_pairs_are_not_all_settled(monkeypa
 # - A longer formula below 0, down to -FFFFh (the difference). The model reads it in each
 #   step, except an AND, OR or XOR of a value below -FFFFh.
 # - A longer formula below -FFFFh, down to -40000000h (the stand-in ( 0h - DH4 ) * DH5). The
-#   model reads it, except in AND, OR or XOR. It leaves a value below -FDA93880h unread.
+#   model reads it, except in AND, OR or XOR. It leaves a value below -FEFF0100h unread.
 # - Every hex step works in whole numbers, so no hex value is a fraction, -0, Inf or NaN.
 #
 # A function, PI or a pointer gives a value from one of these classes, or an error that raises
@@ -653,10 +667,6 @@ def _unconfirmed_pairs() -> list[tuple[str, str, bool, str]]:
         texts = [f"{bank}1 {a} {bank}2 {b} {bank}3" for a in ops for b in ops]
         texts += [f"- {bank}1 {b} {bank}2" for b in ops]
         texts += [f"- ( {bank}1 ) {b} {bank}2" for b in ops]
-        if not hex_mode:
-            # A decimal plus before a constant has no node, so a stand-in for the register would
-            # drop it. A bracket keeps it.
-            texts += [f"+ ( {bank}1 ) {b} {bank}2" for b in ops]
         if hex_mode:
             # The pair holds for every constant, so it comes with small and large ones.
             texts += [f"- {c} {b} {bank}2" for c in ("0h", "5h", "8000h", "FFFFh") for b in ops]
@@ -864,10 +874,11 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
     # With unread_zero doing nothing, the model reads each zero sign as the rejoin rules suppose.
     monkeypatch.setattr(formula_values._Guard, "unread_zero", lambda self, op, *operands: None)
     differ = _how_pairs_differ_on_plain_operands()
+    listed = set(SAME_VALUE_ON_PLAIN_OPERANDS)
     agree = {
         (first, second)
         for (first, second, hex_mode), hows in differ.items()
-        if not hex_mode and not hows
+        if not hex_mode and not hows and (first, second, hex_mode) not in listed
     }
     assert agree <= set(PENDING_ZERO_SIGNS["SAME_VALUE_ON_PLAIN_OPERANDS"]), agree
 
@@ -875,12 +886,12 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
 @pytest.mark.parametrize(
     ("text", "hex_mode", "pairs"),
     [
-        ("SQRT ( - ( DS1 ) * DS2 )", False, [(NEGATE_BRACKET, "*")]),
+        ("SQRT ( - ( DF1 ) * DS2 )", False, [(NEGATE_BRACKET, "*")]),
         # Two operators that do not meet still count.
-        ("- ( DS1 ) + DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
+        ("- ( DF1 ) + DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
         # A minus sign pairs with each operator to its right.
-        ("- ( DS1 ) * DS2 - DS3", False, [(NEGATE_BRACKET, "*")]),
-        ("- ( DS1 ) - DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
+        ("- ( DF1 ) * DS2 - DS3", False, [(NEGATE_BRACKET, "*")]),
+        ("- ( DF1 ) - DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
         ("- ( DS1 ) / DS2 * DS3", False, [(NEGATE_BRACKET, "*")]),
         ("- PI * 2 / 3", False, [("a minus sign before PI", "*"), ("a minus sign before PI", "/")]),
         ("- PI * 2", False, [("a minus sign before PI", "*")]),
@@ -897,25 +908,16 @@ def test_pending_zero_signs_hold_each_pair_that_only_zero_signs_keep_out(monkeyp
         ("- DS[DS1] ^ 2", False, [(NEGATE_POINTER, "^")]),
         ("- - DS1 ^ 2", False, [(NEGATE_MINUS, "^")]),
         ("- - DS1 + 2", False, [(NEGATE_MINUS, "+")]),
-        # In hex mode a minus sign before a constant is an operator. Round b20 read its order
-        # with AND, OR, XOR, + and - only.
-        ("- 5h / DH1", True, [(NEGATE_CONSTANT, "/")]),
+        # In hex mode a minus sign before a constant is an operator. Rounds b20 and b22 read its
+        # order with AND, OR, XOR, +, - and /. With * the two groupings give the same value, so
+        # no reading settles it. A product past FDA93880h is unread.
         ("- 5h * DH1", True, [(NEGATE_CONSTANT, "*")]),
-        ("- 5 / DH1", True, [(NEGATE_CONSTANT, "/")]),
-        # Round b20 read a decimal plus before a constant only.
-        ("+ DS1 * 2", False, [(PLUS_SIGN, "*")]),
-        ("+ ( DS1 - 3 ) * 2", False, [(PLUS_SIGN, "*")]),
-        ("- + DS1 * 2", False, [(NEGATE_PLUS, "*"), (PLUS_SIGN, "*")]),
         # FFFFh * FFFFh passes FDA93880h, the largest hex value read.
         ("- DH1 * DH2", True, [(NEGATE_ADDRESS, "*")]),
         ("- ( DH1 ) * DH2", True, [(NEGATE_BRACKET, "*")]),
         # A product, a bracket or a function hands the pair a value past FFFFh.
         ("( DH1 * DH2 ) AND DH3 AND DH4", True, [("AND", "AND")]),
         ("DH1 OR DH2 OR LSH ( DH3 , 2h )", True, [("OR", "OR")]),
-        # Round b20 read the sign of the 0 of a product at 5.0 and -5.0 only. These pairs meet
-        # that 0 at other values.
-        ("- DS2 * 4", False, [(NEGATE_ADDRESS, "*")]),
-        ("- ( DS1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
         # A DF can hold Inf or NaN, and the model reads no step on either.
         ("- DF2 * 4", False, [(NEGATE_ADDRESS, "*")]),
         ("- ( DF1 ) * DS2", False, [(NEGATE_BRACKET, "*")]),
@@ -998,8 +1000,13 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- ( DH1 * DH2 ) MOD DH3", True),
         ("DH1 MOD DH2 MOD DH3", True),
         ("- ( DF1 ) / DF2 ^ DF3", False),
-        # A decimal CLICK stores a plus before a constant in the constant. A hex plus does not
-        # cut its operand (round b21). It changes nothing.
+        # Round b22 read these.
+        ("- 5h / DH1", True),
+        ("- 5 / DH1", True),
+        ("+ DS1 * 2", False),
+        ("+ ( DS1 - 3 ) * 2", False),
+        # A decimal CLICK stores a plus before a constant in the constant. A plus changes
+        # nothing, so the parse drops it (rounds b20 to b22).
         ("+ 5 * DS1", False),
         ("+ 5h * DH1", True),
         # A bracket gives the order. In decimal mode the minus sign is part of the constant.
@@ -1007,6 +1014,10 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("- 5 / DS1", False),
         # Both groupings give the same value and flags on plain operands.
         ("- 5h MOD DH1", True),
+        ("- DS1 * DS2", False),
+        ("- DS2 * 4", False),
+        ("- ( DS1 ) * DS2", False),
+        ("SQRT ( - ( DS1 ) * DS2 )", False),
     ],
 )
 def test_click_formula_parse_confirms_an_order_that_the_grammar_or_a_reading_gives(
@@ -1019,7 +1030,7 @@ def test_pyrung_click_exports_the_formula_parser() -> None:
     import pyrung.click
 
     assert pyrung.click.parse_click_formula is parse_click_formula
-    assert pyrung.click.parse_click_formula("- DS1 * DS2") is None
+    assert pyrung.click.parse_click_formula("- DH1 * DH2", hex_mode=True) is None
     with pytest.raises(ValueError):
         pyrung.click.parse_click_formula("2 ^ 3", hex_mode=True)
 
@@ -1058,15 +1069,19 @@ def test_click_formula_parse_drops_a_hex_plus_sign(text: str, without: str) -> N
     )
 
 
-def test_click_formula_parse_keeps_a_decimal_plus_sign_before_an_address_or_a_bracket() -> None:
-    # Round b20 read + 5 * DS401 with 3 in DS401. CLICK stored the plus in the constant
-    # (H+5#*#DS401), and stored 15.
-    assert parse_click_formula("+ 5 * DS1") == parse_click_formula("5 * DS1")
-    # No reading shows a decimal plus before anything but a constant.
-    assert parse_with_unconfirmed_pairs("+ DS1 * 2")[0] == BinaryOp(
-        "*", formula_module.Plus(Address("DS", 1)), Number(2)
-    )
-    assert parse_click_formula("+ ( DS1 - 3 ) * 2") is None
+@pytest.mark.parametrize(
+    ("text", "without"),
+    [
+        # CLICK stores the plus in the constant, H+5 (round b20).
+        ("+ 5 * DS1", "5 * DS1"),
+        # CLICK stores these pluses as tokens of their own, and they changed nothing (round b22).
+        ("+ DS1 * 2", "DS1 * 2"),
+        ("+ ( DS1 - 3 ) * 2", "( DS1 - 3 ) * 2"),
+        ("- + DS1 * 2", "- DS1 * 2"),
+    ],
+)
+def test_click_formula_parse_drops_a_decimal_plus_sign(text: str, without: str) -> None:
+    assert parse_with_unconfirmed_pairs(text) == parse_with_unconfirmed_pairs(without)
 
 
 # ---------------------------------------------------------------------------
@@ -1124,36 +1139,12 @@ def test_imported_formula_brackets_what_click_groups(token: str, line: str) -> N
 @pytest.mark.parametrize(
     ("token", "line"),
     [
-        ("math(+ DS1 * 2,DS2)", "math(+DS1 * 2, DS2)"),
-        ("math(+ ( DS1 - 3 ) * 2,DS2)", "math(+(DS1 - 3) * 2, DS2)"),
-    ],
-)
-def test_imported_formula_keeps_a_decimal_plus_sign(token: str, line: str) -> None:
-    # No reading shows what a decimal plus before an address or a bracket does. So the import
-    # keeps the plus as a step of the scan, and warns.
-    with pytest.warns(UserWarning, match=PLUS_SIGN):
-        source = ladder_to_pyrung(_bundle(token))
-    assert _math_line(source) == line
-    # The export, imported again, gives the same line.
-    ns = exec_with_source(source)
-    exported = pyrung_to_ladder(ns["logic"], ns["mapping"])
-    with pytest.warns(UserWarning, match=PLUS_SIGN):
-        again = ladder_to_pyrung(exported)
-    assert _math_line(again) == line
-
-
-def test_imported_formula_names_a_minus_sign_before_a_plus_sign() -> None:
-    with pytest.warns(UserWarning) as caught:
-        source = ladder_to_pyrung(_bundle("math(- + DS1 * 2,DS2)"))
-    assert any(f"uses {NEGATE_PLUS} and '*'" in str(w.message) for w in caught)
-    assert _math_line(source) == "math(-+DS1 * 2, DS2)"
-
-
-@pytest.mark.parametrize(
-    ("token", "line"),
-    [
         # A decimal CLICK stores + 5 as the constant H+5.
         ("math(+ 5 * DS1,DS2)", "math(5 * DS1, DS2)"),
+        # A decimal plus before an address or a bracket changes nothing (round b22).
+        ("math(+ DS1 * 2,DS2)", "math(DS1 * 2, DS2)"),
+        ("math(+ ( DS1 - 3 ) * 2,DS2)", "math((DS1 - 3) * 2, DS2)"),
+        ("math(- + DS1 * 2,DS2)", "math(-DS1 * 2, DS2)"),
         # A hex plus does not cut its operand (round b21). It changes nothing.
         ("math(+ 5h * DH1,DH2,mode=hex)", "math(0x5 * DH1, DH2)"),
         ("math(+ ( 0h - DH1 ) + 1h,DH2,mode=hex)", "math((0x0 - DH1) + 0x1, DH2)"),
@@ -1244,12 +1235,9 @@ def test_imported_constants_compute_what_math_computes(
     [
         ("( DH1 * DH2 ) AND DH3 AND DH4", "DH5,mode=hex", "'AND' twice", "the two from the left"),
         ("- ( DH1 ) * DH2", "DH3,mode=hex", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
-        ("- ( DS1 ) * 2", "DF1", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
         ("- PI * 2", "DF1", "a minus sign before PI and '*'", "the minus sign first"),
         ("- DF2 * 4", "DF3", f"{NEGATE_ADDRESS} and '*'", "the minus sign first"),
         ("- ( DF1 ) * DF2", "DF3", f"{NEGATE_BRACKET} and '*'", "the minus sign first"),
-        ("- 5h / DH1", "DH2,mode=hex", f"{NEGATE_CONSTANT} and '/'", "the minus sign first"),
-        ("+ DS1 * 2", "DS2", f"{PLUS_SIGN} and '*'", "the plus sign first"),
     ],
 )
 def test_imported_formula_with_an_unconfirmed_pair_warns(
@@ -1420,6 +1408,83 @@ def _b20_rungs(text: str, hex_mode: bool, registers: dict[str, float], dest: str
     return [*tokens, f"copy({sentinel},{dest})", f"math({text},{dest}{mode})"]
 
 
+#: The registers of round b22's Part A: +0.0, the -1.0 that stages -0.0 in DF110, and 0.5,
+#: 3.0 and 1.0E+30 with each sign. A DF holds 1.0E+30 as a float32.
+_B22_ZEROS = {
+    "DF111": 0.0,
+    "DF112": -1.0,
+    "DF110": -0.0,
+    "DF113": 0.5,
+    "DF114": -0.5,
+    "DF115": 3.0,
+    "DF116": -3.0,
+    "DF117": float32(1.0e30),
+    "DF118": float32(-1.0e30),
+}
+
+#: Round b22, on the same CLICK on 2026-11-27, in the shape of :data:`ROUND_B20_READINGS`.
+#: Part A multiplies each zero by each value of DF113 to DF118, with the zero on each side. Each
+#: product stored the sign that a double gives.
+ROUND_B22_READINGS: list[tuple[str, str, bool, dict[str, float], str, float, set[str]]] = [
+    ("b22-s0", "DF111 * DF112", False, _B22_ZEROS, "DF1", -0.0, set()),
+    *(
+        (
+            f"b22-a{4 * n + k + 1:02}",
+            f"{left} * {right}",
+            False,
+            _B22_ZEROS,
+            f"DF{4 * n + k + 2}",
+            math.copysign(0.0, _B22_ZEROS[left] * _B22_ZEROS[right]),
+            set(),
+        )
+        for n, x in enumerate(("DF113", "DF114", "DF115", "DF116", "DF117", "DF118"))
+        for k, (left, right) in enumerate([("DF111", x), (x, "DF111"), ("DF110", x), (x, "DF110")])
+    ),
+    ("b22-q1", "SQRT ( DF114 )", False, _B22_ZEROS, "DF26", 0.0, {_SC46}),
+    ("b22-q2", "SQRT ( DF118 )", False, _B22_ZEROS, "DF27", 0.0, {_SC46}),
+    ("b22-q3", "SQRT ( DF111 )", False, _B22_ZEROS, "DF28", 0.0, set()),
+    ("b22-q4", "SQRT ( DF110 )", False, _B22_ZEROS, "DF29", -0.0, set()),
+    # Part B. A plus changes nothing.
+    ("b22-b_ds", "+ DS401 * 2", False, {"DS401": 5}, "DS30", 10, set()),
+    ("b22-b_br", "+ ( DS401 - 3 ) * 2", False, {"DS401": 5}, "DS31", 4, set()),
+    ("b22-b_hex", "+ DH401 * 2h", True, {"DH401": 3}, "DH32", 0x0006, set()),
+    # Part C. A hex / rounds down, and a hex MOD truncates. A product stays whole past 32 bits.
+    ("b22-c_div2", "- 5h / 2h", True, {}, "DH33", 0xFFFD, {_SC43}),
+    ("b22-c_div3", "- 5h / 3h", True, {}, "DH34", 0xFFFE, {_SC43}),
+    ("b22-c_mulk", "- FFFFh * FF00h", True, {}, "DH35", 0xFF00, {_SC43}),
+    (
+        "b22-c_mulr",
+        "- DH431 * DH432",
+        True,
+        {"DH431": 0xFFFF, "DH432": 0xFF00},
+        "DH36",
+        0xFF00,
+        {_SC43},
+    ),
+    ("b22-c_mulk7", "- FFFFh * FF00h MOD 7h", True, {}, "DH37", 0xFFFB, {_SC43}),
+    (
+        "b22-c_mulr7",
+        "- DH431 * DH432 MOD 7h",
+        True,
+        {"DH431": 0xFFFF, "DH432": 0xFF00},
+        "DH38",
+        0xFFFB,
+        {_SC43},
+    ),
+    ("b22-c_div", "( 0h - DH421 ) / 3h", True, {"DH421": 1}, "DH39", 0xFFFF, {_SC43}),
+    ("b22-c_mod", "( 0h - DH421 ) MOD 3h", True, {"DH421": 1}, "DH40", 0xFFFF, {_SC43}),
+]
+
+#: Round b23, on the same CLICK on 2026-11-27, in the shape of :data:`ROUND_B20_READINGS`. Each
+#: divides by a value below 0.
+ROUND_B23_READINGS: list[tuple[str, str, bool, dict[str, float], str, float, set[str]]] = [
+    ("b23-d1", "5h / ( 0h - 3h )", True, {}, "DH1", 0xFFFE, {_SC43}),
+    ("b23-d2", "( 0h - 7h ) / ( 0h - 2h )", True, {}, "DH2", 0x0003, set()),
+    ("b23-m1", "5h MOD ( 0h - 3h )", True, {}, "DH3", 0x0002, set()),
+    ("b23-m2", "( 0h - 7h ) MOD ( 0h - 2h )", True, {}, "DH4", 0xFFFF, {_SC43}),
+]
+
+
 @pytest.mark.parametrize(
     ("text", "hex_mode", "registers", "dest", "stored", "flags"),
     [reading[1:] for reading in ROUND_B20_READINGS],
@@ -1434,6 +1499,53 @@ def test_imported_formula_stores_what_round_b20_read(
     flags: set[str],
     monkeypatch,
 ) -> None:
+    _check_round_reading(text, hex_mode, registers, dest, stored, flags, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("text", "hex_mode", "registers", "dest", "stored", "flags"),
+    [reading[1:] for reading in ROUND_B22_READINGS],
+    ids=[reading[0] for reading in ROUND_B22_READINGS],
+)
+def test_imported_formula_stores_what_round_b22_read(
+    text: str,
+    hex_mode: bool,
+    registers: dict[str, float],
+    dest: str,
+    stored: float,
+    flags: set[str],
+    monkeypatch,
+) -> None:
+    _check_round_reading(text, hex_mode, registers, dest, stored, flags, monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("text", "hex_mode", "registers", "dest", "stored", "flags"),
+    [reading[1:] for reading in ROUND_B23_READINGS],
+    ids=[reading[0] for reading in ROUND_B23_READINGS],
+)
+def test_imported_formula_stores_what_round_b23_read(
+    text: str,
+    hex_mode: bool,
+    registers: dict[str, float],
+    dest: str,
+    stored: float,
+    flags: set[str],
+    monkeypatch,
+) -> None:
+    _check_round_reading(text, hex_mode, registers, dest, stored, flags, monkeypatch)
+
+
+def _check_round_reading(
+    text: str,
+    hex_mode: bool,
+    registers: dict[str, float],
+    dest: str,
+    stored: float,
+    flags: set[str],
+    monkeypatch,
+) -> None:
+    """Import *text* as :func:`_b20_rungs` stages it, and check each backend against a CLICK."""
     with warnings.catch_warnings():
         # The readings settle the order of each formula, so none warns.
         warnings.simplefilter("error")
@@ -1465,6 +1577,7 @@ ROUND_B21_READINGS: list[tuple[str, str, dict[str, int], str, int, bool]] = [
     ("b21-n3b", "( 0h - DH421 ) * 1h", {"DH421": 1}, "DH11", 0xFFFF, True),
     ("b21-n4", "( 0h - DH421 ) / 2h", {"DH421": 1}, "DH12", 0xFFFF, True),
 ]
+
 
 @pytest.mark.parametrize(
     ("text", "registers", "dest", "stored", "out_of_range"),
@@ -1545,7 +1658,8 @@ def _program(readings):
     tokens: list[str] = []
     formulas: list[str] = []
     dests: list[str] = []
-    free = {False: 101, True: 101}
+    # The staged DHs end below DH301, where the results start.
+    free = {False: 1, True: 1}
     for n, (_, text, hex_mode, registers, _) in enumerate(readings):
         staged, values = _staged(text, hex_mode, registers, free[hex_mode])
         free[hex_mode] += len(values)
@@ -1565,13 +1679,19 @@ def _close(got: Any, want: float) -> bool:
 
 @pytest.fixture(scope="module")
 def confirmed() -> tuple[Any, ...]:
-    # The program moves each reading onto registers of its own, so the formulas of
-    # READ_FORMULAS no longer match a reading's tree, and each warns once. b20-d_dec warns too,
-    # because its plus now stands before a register.
+    # The program moves the registers and the decimal-digit constants of each reading onto
+    # registers of its own. A formula of READ_FORMULAS that moves no longer matches a reading's
+    # tree, so it warns. No other formula warns.
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         program = _program(READINGS)
-    assert len(caught) == len(READ_FORMULAS) + 1
+    formulas = program[2]
+    moved = {
+        formulas[n]
+        for n, (_, text, hex_mode, _, _) in enumerate(READINGS)
+        if (text, hex_mode) in READ_FORMULAS and formulas[n] != text
+    }
+    assert {str(w.message).split("'")[1] for w in caught} == moved
     return program
 
 

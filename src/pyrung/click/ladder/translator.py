@@ -713,9 +713,9 @@ class _TranslatorMixin:
                 return _formula_call("ABS", inner)
             if isinstance(expression.operand, BinaryExpr):
                 return f"{expression.symbol} ( {inner} )"
-            if expression.symbol == "-":
-                # CLICK's editor redisplays -DS1 as - DS1.
-                return f"- {inner}"
+            if expression.symbol in ("-", "+"):
+                # CLICK's editor redisplays -DS1 as - DS1, and +DH401 as + DH401 (round b22).
+                return f"{expression.symbol} {inner}"
             return f"{expression.symbol}{inner}"
         if isinstance(expression, BinaryExpr):
             # << and >> map to Click shift functions
