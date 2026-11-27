@@ -333,6 +333,13 @@ or_result_unsigned = 5
 hex_by_zero_goes_on = 6
 false_rung_clears_sc46 = 7
 
+[groups.hex_div_down]
+base = 2371 # Conf_HexDivDown: DS2371..DS2400
+slots = 2
+
+[groups.hex_div_down.cases]
+negative_quotient = 1
+
 [groups.math_order]
 base = 1801 # Conf_MathOrder: DS1801..DS2200
 slots = 39

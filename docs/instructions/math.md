@@ -70,9 +70,9 @@ Inside the range, pyrung keeps a `Real` at Python's 64-bit precision. A CLICK RE
 
 - A division by zero gives 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5.
 - Every later `math()` clears the flag. This includes a `math()` on a false rung and a one-shot that does not fire. A `copy()`, coil, timer or counter leaves the flag alone. Read it on the next rung.
-- Integer division truncates toward zero: `−7 / 2 = −3`.
-- In a hex-mode `math()` (only `Word` tags), each `/` truncates its own result. `DH1 / DH2 * DH2` with 7 and 2 stores 6, the same as on a CLICK. A decimal `math()` keeps the fraction until it stores the result, so the same formula on `Int` tags stores 7.
-- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1.
+- A decimal `math()` into an `Int` truncates toward zero: `−7 / 2 = −3`.
+- In a hex-mode `math()` (only `Word` tags), each `/` rounds its own result down to a whole number. `DH1 / DH2 * DH2` with 7 and 2 stores 6, the same as on a CLICK. A quotient below 0 rounds down too, so `−1 / 3` gives −1. A decimal `math()` keeps the fraction until it stores the result, so the same formula on `Int` tags stores 7.
+- In a `math()` of either mode, `%` (CLICK's MOD) truncates, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1.
 - A MOD by zero gives 0 and sets `system.fault.math_operation_error` (CLICK's SC46). The rest of the formula runs.
 - Outside a `math()`, `%` is Python's. An index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 

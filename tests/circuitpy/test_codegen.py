@@ -3109,19 +3109,23 @@ class TestBoardPeripheralsAndRunStop:
         expected = (stored, *(bool(flag) for flag in flags))
         assert results == {name: expected for name in results}, label
 
-    #: Rows as in :attr:`_CLICK_HEX_MATH`, with two Word tags.  No CLICK reading has a
-    #: negative quotient.  Truncation toward zero there is pyrung's assumption, and so is
-    #: its SC43 (a CLICK sets SC43 for a negative difference or MOD, but not for a negative
-    #: OR).  Every backend must make the same assumptions.
+    #: Rows as in :attr:`_CLICK_HEX_MATH`, with two Word tags.  A CLICK rounds a hex quotient
+    #: down whatever the signs, and its MOD truncates (hardware 2026-11-27).  The rows from
+    #: ``negative_divisor`` to ``mod_both_negative`` are those readings, with tags in place of
+    #: the constants.
     _HEX_DIVISION = [
-        ("negative_quotient", lambda a, b: -a / b, (7, 2), 0xFFFD, (0, 1, 0)),
+        ("negative_quotient", lambda a, b: -a / b, (7, 2), 0xFFFC, (0, 1, 0)),
+        ("negative_divisor", lambda a, b: a / (0 - b), (5, 3), 0xFFFE, (0, 1, 0)),
+        ("both_negative", lambda a, b: (0 - a) / (0 - b), (7, 2), 3, (0, 0, 0)),
+        ("mod_by_a_negative", lambda a, b: a % (0 - b), (5, 3), 2, (0, 0, 0)),
+        ("mod_both_negative", lambda a, b: (0 - a) % (0 - b), (7, 2), 0xFFFF, (0, 1, 0)),
         ("by_a_constant", lambda a, b: a / 2 * 2, (7, 2), 6, (0, 0, 0)),
         ("by_zero", lambda a, b: a / (b - b) + 5, (7, 2), 5, (1, 0, 0)),
         # The product passes 2 ** 53, so the dividend is a double.  The MOD brings the
         # quotient back into range, so a wrong quotient shows.
         ("double_dividend", lambda a, b: a * a * a * a / b % 7, (0xFFFF, 3), 3, (0, 0, 0)),
-        # A float constant divides in floats.  The quotient of 3 / 0.1 rounds to 30, and
-        # flooring the exact quotient would give 29.
+        # A float constant divides in floats.  The double quotient of 3 / 0.1 is 30.0, and
+        # rounding it down keeps 30.  Rounding the exact quotient down would give 29.
         ("float_constant_divisor", lambda a, b: a / 0.1, (3, 0), 30, (0, 0, 0)),
     ]
 

@@ -64,7 +64,7 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
 
 ### Fixes
 
-- `math()` on `Word` tags only (CLICK's hex mode) now drops the fraction of each division of positive values, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with 7 and 2 now stores 6 (it stored 7).
+- `math()` on `Word` tags only (CLICK's hex mode) now rounds each quotient down, as a CLICK does. `math(DH[1] / DH[2] * DH[2], DH[3])` with DH1 = 7 and DH2 = 2 now stores 6 (it stored 7). `math((0 - DH[1]) / 3, DH[2])` with DH1 = 1 now stores FFFFh and sets `system.fault.out_of_range` (it stored 0).
 - `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT).
 - `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
@@ -75,7 +75,7 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
 - `fill(True, ...)` and `fill(False, ...)` into TXT tags now store "1" and "0", as `fill(1, ...)` and `fill(0, ...)` do (it stored the Bool).
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
-  - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DS1 * DS2` or `- 5h / DH1` in hex mode. Add brackets in CLICK to set the order.
+  - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DF1 * DF2` or `- DH1 * DH2` in hex mode. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` now imports a minus sign before a constant in a hex Math as a CLICK runs it. `- 5h MOD DH1` with DH1 = 3h stores FFFEh (it stored 2h). `- 2h` sets SC43 (it set no flag).
 - `math()` into a `Real` now stores -0.0 where a CLICK does. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0).
 - `ladder_to_pyrung()` writes `5 / 0` in a Math formula as `LiteralExpr(5) / 0`. `math()` then stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).

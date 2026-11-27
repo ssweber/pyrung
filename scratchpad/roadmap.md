@@ -486,45 +486,41 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
-- **The sign of a zero in a product after a minus sign.** `- DS1 * DS2` and `- ( DS1 ) * DS2` still warn on import.
-  The readings show the sign of 0 * x only for x = 5.0, -5.0 and -1.0. Each gave the sign that a double gives.
-  The 9 rows that `PENDING_ZERO_SIGNS` lists need every value of their class. Sam decides whether one value stands for
-  its class. If it does, both decimal pairs join `SAME_VALUE_ON_PLAIN_OPERANDS`. No conformance case reads these rows.
-- **A hex minus sign before `*` or `/`.** `- 5h * DH1`, `- DH1 * DH2`, `- ( DH1 ) * DH2` and `- 5h / DH1` warn on
-  import. No reading shows a hex product past FDA93880h, such as -FFFFh * FF00h. For a hex `/` of a negative value,
-  see the next item.
-- **pyrung's hex `/` of a negative value differs from a CLICK's.** It affects each hex `/` whose dividend is below 0
-  and whose quotient has a fraction.
-  - With 1h in DH1, `( 0h - DH1 ) / 2h` stored FFFFh with SC43 on a CLICK (round b21, n4 and p4).
-  - `- DH1 / 2h`, `- ( DH1 ) / 2h` and `( 0h - DH1 ) / 2h` import with no warning. pyrung stores 0h with no SC43 for
-    each, on every backend.
-  - Two readings fit. The quotient rounds down, or the division works on 32 unsigned bits. Round b22 Part C reads
-    `( 0h - DH1 ) / 3h` and the same with MOD 3h. `/ 3h` stores FFFFh or 5555h, each with SC43.
-  - `test_imported_formula_stores_what_round_b21_read` holds b21-p4 and b21-n4 as strict xfails.
-  - CHANGELOG.md says hex `math()` truncates each division, as a CLICK does. That holds for positive values only.
-    Rewrite the line when the fix lands.
-- **A decimal plus before anything but a constant.** No reading shows one. The import keeps the plus, and warns
-  when the plus meets another operator. Round b22 Part B reads `+ DS1 * 2` and `+ ( DS1 - 3 ) * 2`.
-  - pyrung's export writes the plus with no space, such as `+DS1 * 2`. pyrung imports that text again. Round b22
-    Part B asks whether CLICK takes it.
+- **A hex minus sign before `*`.** `- 5h * DH1`, `- DH1 * DH2` and `- ( DH1 ) * DH2` warn on import. The two
+  groupings store the same value while the product stays whole. The model in `formula_values.py` reads a hex value
+  from -FEFF0100h to FDA93880h only.
+  - Round b24 read products held whole up to FFFFh to the 3rd (w1 to w3), and -FFFE0001h in `- DH1 * DH2 MOD 7h`
+    (w2). `READ_FORMULAS` holds w2. A later branch can widen the model's bounds to these values. The pairs then join
+    `SAME_VALUE_ON_PLAIN_OPERANDS`.
+- **A decimal plus before a function, a pointer, PI or another sign.** `+ SQRT ( DF1 ) * DF2`, `+ PI * DF2` and
+  `+ DS[DS1] * DS2` warn on import. No reading puts a plus there. The parse drops a plus before an address or a
+  bracket (rounds b22 and b24).
+  - A case clicky could run: `+ SQRT ( DF110 )` and `+ PI * DF110`, each with -0.0 staged in DF110, into a DF.
+- **A Math whose formula is a single DF drops the sign of -0.0 on a CLICK.** `DF110` with -0.0 stored +0.0 (round
+  b24 z0). pyrung stores -0.0. `+ DF110` stored -0.0 (z1), and the import drops the plus.
+  - When pyrung stores +0.0 for a single DF, the import must keep `+ DF1` apart from `DF1`.
+- **A minus sign or a plus before a pointer imports as code that fails to load.** `- DS[DS1] * 2` imports as
+  `-ds[DS1] * 2`, and Python raises `TypeError` (bad operand type for unary -: 'IndirectRef'). The plus does the
+  same.
 - **A Math pair read in one mode only.** The pair lists in `click/codegen/formula.py` have no mode. pyrung assumes
   that one parser sets the order in both modes. Round b20 checked two pairs, MOD MOD in hex and `/` MOD in decimal.
   Each ran left to right, as round b16 read it in the other mode. Most other pairs were read in one mode only.
 - **`math_range/minus_sign` and `zero_sum` need a CLICK run.** Their expectations changed to round b16's readings,
   so their hashes changed. Run them on a CLICK to confirm them at the new hashes.
+  - `hex_div_down/negative_quotient` is new, in part follow6_reads. It holds round b22's reading. Run it on a CLICK
+    to confirm it.
 - **The formula parser's node classes.** `pyrung.click` exports `parse_click_formula` and `Formula` but not the node
   classes, such as `BinaryOp`. Export them if ClickNick needs to check a node's class.
 - **A Math step past 2\*\*53 is rounded to a double.** The rounded value can land just past an exact corner, as in
   `13 ** (A + 15)`. No false domain was found (math-flags review, 2026-11-26).
+  - A CLICK rounds a hex product past 53 bits to a double too (round b24 w4 and w5). pyrung stores the same values
+    on every backend.
 - **The jit declines a scan that calls a helper with a default argument.** Four CircuitPython helpers take
   `flags=None`: `_abs_int`, `_permissive_math`, `_pow_calc` and `_permissive_op` (circuitpy/codegen/_helpers.py). The
   tracer in core/scan_trace.py declines any function with defaults, so such a scan runs on the compiled kernel
   instead.
 - **A four-operand hex chain warns on import**, even where its groupings agree. The import could accept it with no
   warning. No value is wrong.
-- **A comment in hex Math.** The comment above the `_hex_div` branch in `circuitpy/codegen/compile/_primitives.py`
-  leaves out two conditions of the code below it. The dividend must be 0 or more, and the divisor a positive whole
-  constant.
 - **`send()` drops the Send function code on import.** A one-register run sends FC06, and a 2-Char TXT send exports
   as FC16 with count 2. The bytes on the wire are the same. A user who needs FC06 from pyrung has no way to ask for it yet.
 - **A scan that raises during a free run leaves the client showing "running".** The continue worker's thread dies

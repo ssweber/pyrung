@@ -136,8 +136,8 @@ Range instructions use integer addresses (`ds.select(1, 100)`) with boundary nic
 ```python
 from pyrung.click import parse_click_formula
 
-parse_click_formula("DS1 - DS2 + DS3 * DS4")       # the tree, in CLICK's order
-parse_click_formula("- 5h / DH1", hex_mode=True)  # None
+parse_click_formula("DS1 - DS2 + DS3 * DS4")        # the tree, in CLICK's order
+parse_click_formula("- DH1 * DH2", hex_mode=True)  # None
 ```
 
 `parse_click_formula()` returns the tree of a Math formula, grouped the way a CLICK computes it. It returns None when the value can depend on an order that nobody has checked on a CLICK. It raises `ValueError` for text that is not a formula.

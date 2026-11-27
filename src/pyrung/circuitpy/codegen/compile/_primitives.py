@@ -182,9 +182,11 @@ def _compile_expression_impl(
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol)) or expr.op is _op_mod_real
         flags = CALC_FLAGS if strict else None
         if expr.op is _op_hex_div:
-            # A hex Math's / truncates toward zero (core _op_hex_div).  // gives the same
-            # quotient only for whole operands.  A float constant would floor the exact
-            # quotient, and 3 // 0.1 is 29 where the rule gives 30.
+            # A hex Math's / rounds the quotient down (core _op_hex_div).  // gives the same
+            # quotient for whole operands.  The fast path takes a Word tag or a whole constant
+            # over a positive whole constant, so no operand is a float and the divisor is
+            # never 0.  With a float, // rounds the exact quotient down, and 3 // 0.1 is 29
+            # where the helper gives 30.
             if _non_negative_int(expr.left) and _positive_int_literal(expr.right):
                 return f"({left} // {right})"
             ctx.mark_helper("_hex_div")

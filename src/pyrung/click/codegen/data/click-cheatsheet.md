@@ -147,7 +147,9 @@ math(randint(1, 6), Die)             # RAND ( 1 , 6 ), inclusive, a draw per sca
 
 - `math()` wraps on overflow (modular arithmetic). `copy()` clamps.
 - Division by zero → that division = 0 (the rest of the formula runs), fault flag set.
-- Integer division truncates toward zero.
+- A decimal `math()` truncates toward zero when it stores into an integer tag, so `-7 / 2` stores -3.
+- In hex mode each `/` rounds its quotient down, so `-1 / 3` gives -1.
+- MOD truncates, so the remainder takes the dividend's sign.
 - Don't mix WORD and non-WORD tags in one `math()`.
 
 ## Data movement

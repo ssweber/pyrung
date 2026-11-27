@@ -18,8 +18,6 @@ from typing import Any
 from pyrung import PI, LiteralExpr
 from pyrung.click.codegen.formula import (
     _CLICK_FUNC_TO_PYTHON,
-    NEGATE_ADDRESS,
-    NEGATE_BRACKET,
     Address,
     BinaryOp,
     Call,
@@ -80,6 +78,13 @@ _STORES_READ: dict[str, tuple[float, float]] = {
 #: FF38h * FE70h MOD 7h is 0005h, so the product FDA93880h stays whole before the MOD (b15 m2b).
 _HEX_READ = 0xFDA93880
 
+#: The lowest hex value that a reading shows a CLICK holding whole inside a formula.
+#: With FFFFh and FF00h, - DH1 * DH2 MOD 7h is FFFBh (b22 c_mulr7). If the minus sign applies
+#: first, the product -FEFF0100h stays whole before the MOD. No reading settles that order for
+#: a hex minus sign before an address and ``*``. The bound derives it from b22 c_div3, where a
+#: minus sign before a constant applies before ``/``, which sits in the same tier as ``*``.
+_HEX_READ_BELOW = -0xFEFF0100
+
 
 class Unread(Exception):
     """No reading shows what a CLICK does at this step of a formula."""
@@ -89,8 +94,8 @@ def click_value(node: Formula, hex_mode: bool, registers: dict[str, int]) -> flo
     """Return what a CLICK computes for *node*, by the rules the readings show.
 
     A decimal Math computes in doubles, and its MOD keeps the dividend's sign. A hex Math reads
-    each DH as unsigned and computes in whole numbers of any size. Its ``/`` drops the fraction,
-    and its MOD keeps the dividend's sign. Its AND, OR and XOR return 16 unsigned bits. It
+    each DH as unsigned and computes in whole numbers of any size. Its ``/`` rounds the quotient
+    down, and its MOD keeps the dividend's sign. Its AND, OR and XOR return 16 unsigned bits. It
     stores the low 16 bits of the result.
     """
     value = _value(node, hex_mode, registers, None)
@@ -104,20 +109,18 @@ def click_steps(
 
     Raise :class:`Unread` at each step that no reading shows. These steps are:
 
-    - a hex step whose value is above FDA93880h or below -FDA93880h, the largest read (b15 m2b)
+    - a hex step whose value is above FDA93880h (b15 m2b) or below -FEFF0100h (b22 c_mulr7),
+      the largest values read
     - a hex AND, OR or XOR of a value above FFFFh or below -FFFFh
-    - a hex ``/`` whose quotient has a fraction while an operand is negative, and a hex MOD by
-      a negative divisor
     - a decimal step on Inf or NaN, which a DF can hold
-    - the sign of a decimal 0 that no reading shows (:data:`ZEROS_READ`), from a ``*``,
-      ``/``, sum, MOD or ``^``, a division or MOD by zero, or SQRT of 0 or of a negative value
-      other than -5.0
+    - the sign of a decimal 0 that no reading shows (:data:`ZEROS_READ`), from a ``/``, sum,
+      MOD or ``^``, or a division or MOD by zero
     - a decimal step whose value passes the largest double or falls below the smallest
       normal double
     - an error from ``^``
     - every function but SQRT, and SQRT in hex mode
     - a pointer
-    - a decimal plus before anything but a constant
+    - a decimal plus before a function, a pointer, PI or another sign
 
     A decimal Math computes in doubles (``math_more/abs_and_precision``). Its ``/`` keeps the
     fraction until the store (``math_more/int_div_mid_formula``), and its MOD of two Reals
@@ -179,20 +182,16 @@ class _Guard:
 
     def function(self, name: str, args: list[float]) -> float:
         # SQRT(4) is 2 (b15 u2 and u4). SQRT of a negative is 0 with SC46, and the rest of the
-        # formula runs (``math_terms/error_terms``). SQRT ( -5.0 ) is +0.0 (b20 c14). No reading
-        # shows the sign of the 0 at another negative value, or of SQRT of 0. Each other
-        # function was read at a few inputs only (``math_more/functions``,
+        # formula runs (``math_terms/error_terms``). SQRT of -5.0, -0.5 and -1.0E+30 is +0.0
+        # (b20 c14, b22 q1 and q2). SQRT of +0.0 is +0.0, and SQRT of -0.0 is -0.0 (b22 q3 and
+        # q4). Each other function was read at a few inputs only (``math_more/functions``,
         # ``math_error/math_errors_do_not_stop``).
         if name != "SQRT" or self.hex_mode:
             raise Unread(f"{name} in a formula")
         (x,) = args
-        if x <= 0:
-            if x != -5.0:
-                self.unread_zero("SQRT", x)
-            # The rejoin rules suppose that SQRT of a negative value is +0.0, as pyrung's is.
-            if x < 0:
-                self.flags.add("math_operation_error")
-                return 0.0
+        if x < 0:
+            self.flags.add("math_operation_error")
+            return 0.0
         return math.sqrt(x)
 
     def operands(self, *values: float) -> None:
@@ -232,18 +231,15 @@ def _sign_bit(value: float) -> bool:
     return math.copysign(1.0, value) < 0
 
 
-#: Each step that a reading shows giving 0, as (operator, left operand, right operand). A
-#: CLICK gave each the 0 that a double gives, and a division or MOD by zero +0.0. The model
-#: reads a 0 only at the exact operands here, so 0.0 * -5.0 does not stand for 0.0 * -3.0.
+#: Each step other than a product that a reading shows giving 0, as (operator, left operand,
+#: right operand). A CLICK gave each the 0 that a double gives, and a division or MOD by zero
+#: +0.0. The model reads a 0 only at the exact operands here, so 0.0 / -5.0 does not stand for
+#: 0.0 / -3.0. A product of a zero is read at every finite value (:func:`_zero_is_read`).
 ZEROS_READ: tuple[tuple[str, float, float], ...] = (
     # ``real_bits/minus_zero_math`` and ``real_bits/minus_zero_shapes``.
-    ("*", 0.0, -1.0),
-    ("*", -1.0, 0.0),
     ("/", 0.0, -1.0),
     ("-", -0.0, -0.0),
     # ``math_range/minus_sign``, reading round b16. A DS of 0 computes as the double +0.0.
-    ("*", 0.0, -5.0),
-    ("*", -0.0, -5.0),
     ("/", -0.0, -5.0),
     ("MOD", 5.0, 5.0),
     ("MOD", -5.0, 5.0),
@@ -259,10 +255,6 @@ ZEROS_READ: tuple[tuple[str, float, float], ...] = (
     ("MOD", -0.0, 5.0),
     # ``math_range/by_zero``, reading round b16. Each gives +0.0.
     *((op, dividend, 0.0) for op in ("/", "MOD") for dividend in (5.0, -5.0, 0.0, -0.0)),
-    # Round b20, cases c01 to c12: each product of a zero with 0.0, -0.0, 5.0 or -5.0, in
-    # either order.
-    *(("*", zero, other) for zero in (0.0, -0.0) for other in (0.0, -0.0, 5.0, -5.0)),
-    *(("*", other, zero) for zero in (0.0, -0.0) for other in (5.0, -5.0)),
 )
 
 
@@ -274,7 +266,15 @@ _ZEROS_READ = frozenset((op, _bits(a), _bits(b)) for op, a, b in ZEROS_READ)
 
 
 def _zero_is_read(op: str, a: float, b: float) -> bool:
-    """Return whether a reading shows the sign of the 0 that *a* *op* *b* gives."""
+    """Return whether a reading shows the sign of the 0 that *a* *op* *b* gives.
+
+    Every product of a zero and a finite value is read. Each gave the sign that a double
+    gives: a zero times each zero, and a zero times 5.0, 0.5, 3.0 and 1.0E+30 with each sign,
+    in either order (``real_bits/minus_zero_math``, ``math_range/minus_sign``, rounds b20 and
+    b22). Sam ruled on 2026-11-27 that a few readings may stand for every value of a class.
+    """
+    if op == "*" and (a == 0 or b == 0):
+        return True
     return (op, _bits(a), _bits(b)) in _ZEROS_READ
 
 
@@ -323,21 +323,6 @@ def unread_zero_signs(node: Formula, registers: dict[str, float]) -> set[str]:
     return recorder.rows
 
 
-_PRODUCTS = {
-    "+0.0 * +x": "b20 c05 (0.0 * 5.0 only)",
-    "+0.0 * -x": "minus_sign ErrorCode bit 4 and b20 c09 (0 * -5 only)",
-    "+x * +0.0": "b20 c06 (5.0 * 0.0 only)",
-    "-0.0 * +x": "b20 c07 (-0.0 * 5.0 only)",
-    "-0.0 * -x": "zero_sum ErrorCode bit 1 and b20 c11 (-0.0 * -5.0 only)",
-    "-x * +0.0": "b20 c10 (-5.0 * 0.0 only)",
-}
-_PRODUCTS_BY_MINUS_ZERO = {
-    "+x * -0.0": "b20 c08 (5.0 * -0.0 only)",
-    "-x * -0.0": "b20 c12 (-5.0 * -0.0 only)",
-}
-#: The stand-in SQRT ( DS4 ) at -1 meets this row.
-_SQRT_OF_A_NEGATIVE = {"SQRT ( -x )": "b20 c14 (SQRT ( -5.0 ) only)"}
-
 #: The zero signs that a decimal pair meets and that no reading shows, by the list that the
 #: pair would join again. A pair joins that list only when a reading shows every row of its
 #: entry. ``tests/click/test_click_formula.py`` generates the rows of each pair over the grid
@@ -348,23 +333,15 @@ _SQRT_OF_A_NEGATIVE = {"SQRT ( -x )": "b20 c14 (SQRT ( -5.0 ) only)"}
 #: - ``+0.0`` and ``-0.0`` are the two zeros;
 #: - ``+x`` is a value above 0, and ``-x`` is a value below 0.
 #:
-#: The readings show +0.0 * -1.0 and -1.0 * +0.0 (``real_bits/minus_zero_math``,
-#: ``real_bits/minus_zero_shapes``). So in ``+0.0 * -x`` and ``-x * +0.0``, -x is a value
-#: below 0 other than -1.0.
+#: Each row maps to the readings that show one value of its class. Sam ruled on 2026-11-27
+#: that a few readings may stand for every value of a class.
 #:
-#: Each row names the readings that show one value of its class: a probe in
-#: ``test_math_range.py``, or a case of reading round b20. Each says which value it read, such
-#: as ``(0.0 * 5.0 only)``. Every reading gave the sign that a double gives. A row is read only
-#: when a reading or a ruling shows that every value of the class gives the same sign.
+#: No pair waits on a zero sign now. The two decimal pairs of a minus sign with ``*`` waited
+#: on the 0 of a product and of SQRT of a negative value. Round b22 read both at more values,
+#: so the model reads them (:func:`_zero_is_read`, :meth:`_Guard.function`).
 PENDING_ZERO_SIGNS: dict[str, dict[tuple[str, str], dict[str, str]]] = {
-    "SAME_VALUE_ON_PLAIN_OPERANDS": {
-        (NEGATE_ADDRESS, "*"): _PRODUCTS,
-        (NEGATE_BRACKET, "*"): _PRODUCTS,
-    },
-    "SAME_VALUE_PAIRS": {
-        (minus_sign, "*"): {**_PRODUCTS, **_PRODUCTS_BY_MINUS_ZERO, **_SQRT_OF_A_NEGATIVE}
-        for minus_sign in (NEGATE_ADDRESS, NEGATE_BRACKET)
-    },
+    "SAME_VALUE_ON_PLAIN_OPERANDS": {},
+    "SAME_VALUE_PAIRS": {},
 }
 
 
@@ -408,9 +385,9 @@ def _value(
     if isinstance(node, Plus):
         operand = _value(node.operand, hex_mode, registers, guard)
         if guard is not None:
-            # The parse keeps a plus only in decimal mode, before anything but a constant. No
-            # reading shows one.
-            raise Unread("a decimal plus before anything but a constant")
+            # The parse keeps a plus only in decimal mode, before a function, a pointer, PI or
+            # another sign. No reading puts a plus there.
+            raise Unread("a decimal plus before a function, a pointer, PI or another sign")
         return operand
     assert isinstance(node, BinaryOp)
     a = _value(node.left, hex_mode, registers, guard)
@@ -437,7 +414,9 @@ def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> 
             "+": lambda: x + y,
             "-": lambda: x - y,
             "*": lambda: x * y,
-            "/": lambda: _truncated(x, y),
+            # A hex / rounds down, and a hex MOD truncates, whatever the signs (b22 c_div and
+            # c_mod, b23). So the two do not pair up: -1 / 3h is -1, and -1 MOD 3h is -1.
+            "/": lambda: x // y,
             "MOD": lambda: x - y * _truncated(x, y),
             # AND, OR and XOR return 16 unsigned bits, so a negative operand gives no SC43
             # (b17 a8 to a11). The next step reads those bits as unsigned, so ( 0h - 1h ) OR 0h
@@ -447,7 +426,7 @@ def _step(op: str, a: float, b: float, hex_mode: bool, guard: _Guard | None) -> 
             "XOR": lambda: (x ^ y) & 0xFFFF,
         }
         result = hex_steps[op]()
-        if guard is not None and abs(result) > _HEX_READ:
+        if guard is not None and not _HEX_READ_BELOW <= result <= _HEX_READ:
             raise Unread(f"hex {x} {op} {y}")
         return result
     if op == "^" and guard is not None and not _power_is_read(a, b):
@@ -470,11 +449,6 @@ def _check_hex_step(op: str, x: int, y: int) -> None:
     # wider one unread.
     if op in ("AND", "OR", "XOR") and not (-0xFFFF <= x <= 0xFFFF and -0xFFFF <= y <= 0xFFFF):
         raise Unread(f"hex {x} {op} {y}")
-    # A negative dividend was read in MOD (b17 a7, b15 m1b) and in an exact ``/`` (b17 a6).
-    if op == "/" and (x < 0 or y < 0) and y != 0 and x % y != 0:
-        raise Unread(f"hex {x} / {y}")
-    if op == "MOD" and y < 0:
-        raise Unread(f"hex {x} MOD {y}")
 
 
 def _power_is_read(a: float, b: float) -> bool:
