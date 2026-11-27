@@ -984,7 +984,10 @@ def test_click_formula_parse_is_none_for_an_unconfirmed_pair(
         ("DH1 OR DH2 OR DH3", True),
         ("DH1 XOR DH2 XOR 0Fh", True),
         ("- ( DH1 ) MOD 7h", True),
-        # Round b16 settled these pairs, in both modes.
+        # Round b16 read each of these pairs in one mode, and the lists apply each pair to both.
+        # It read / MOD, / AND, / XOR, MOD OR, MOD XOR, * OR and * XOR in hex. It read * *, + +,
+        # + -, MOD MOD, a minus sign before a bracket with -, and a minus sign before an address
+        # with / and MOD in decimal.
         ("SD20 * 10000 + SD21 * 100 + SD22", False),
         ("DS1 * DS2 * DS3", False),
         ("DH1 * DH2 * DH3 * DH4 * DH5", True),
@@ -1254,7 +1257,8 @@ def test_imported_formula_stores_what_round_b16_part_b_read(
 @pytest.mark.parametrize(
     ("formula", "stored"),
     [
-        # A CLICK stores FFFEh and sets SC43 (math_flags, the first case).
+        # math_flags read - DH with DH = 2h, which stores FFFEh and sets SC43. A typed constant is
+        # assumed to run the same.
         ("- 2h", 0xFFFE),
         # The same value as - DH3 MOD DH1 with DH3 = 5h. A constant of FFFBh would give 2h.
         ("- 5h MOD DH1", 0xFFFE),

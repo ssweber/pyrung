@@ -21,9 +21,10 @@ from pyrung.click.codegen.constants import _OPERAND_PREFIXES
 #: CLICK's binary operators by tier, tightest first. A CLICK applies the operators of one
 #: tier from the left, so ``2 ^ 3 ^ 2`` is 64 and ``6 OR 3 AND 8`` is 0. A minus sign
 #: before an address binds tighter than every tier, so ``- DS1 ^ 2`` is 4 with DS1 = 2. A
-#: minus sign before a bracket binds tighter than ``^``, ``+`` and AND. A minus sign before a
-#: function binds tighter than ``^`` and ``+``. The parse reads a minus sign tightest against
-#: the other operators too. CLICK 4.00 on a C2-03CPU was read for this order.
+#: minus sign before a bracket binds tighter than ``^``, ``+``, ``-``, AND, OR and XOR. A
+#: minus sign before a function binds tighter than ``^`` and ``+``. The parse reads a minus
+#: sign tightest against the other operators too. CLICK 4.00 on a C2-03CPU was read for this
+#: order.
 BINARY_TIERS: tuple[tuple[str, ...], ...] = (
     ("^",),
     ("*", "/", "MOD", "AND", "OR", "XOR"),
@@ -36,8 +37,9 @@ BINARY_TIERS: tuple[tuple[str, ...], ...] = (
 NEGATE_ADDRESS = "a minus sign before an address"
 
 #: A minus sign before a constant in hex mode, as an operator in :data:`CONFIRMED_PAIRS`. CLICK
-#: stores it as an operator of its own: laddercodec writes ``- 5h / DH1`` as ``-#UH5#/#DH1``,
-#: the same form as ``- DH1 / DH2``. No reading has run one before another operator.
+#: stores it in its project as an operator of its own. laddercodec decodes ``- 5h / DH1`` as
+#: ``-#UH5#/#DH1``, the same form as ``- DH1 / DH2``. No reading has run one before another
+#: operator.
 NEGATE_CONSTANT = "a minus sign before a hex constant"
 
 #: A minus sign before a bracket, and before a function, as operators in
@@ -59,6 +61,10 @@ NEGATE_MINUS = "a minus sign before another minus sign"
 #: meet when the formula, grouped in that order, gives another value. A pair is settled once
 #: its readings rule out every order but CLICK's, whichever operator the formula writes first.
 #: ``tests/click/test_click_formula.py`` checks this list against its readings.
+#:
+#: A pair has no mode. pyrung assumes that CLICK's one formula parser sets the order in both
+#: modes, so a reading in either mode settles the pair in both. No one has checked this across
+#: modes, and most pairs were read in one mode only.
 CONFIRMED_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("^", "^", "b10"),
     ("^", "*", "b11"),
