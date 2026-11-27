@@ -47,7 +47,6 @@ from pyrung.core.condition import (
 from pyrung.core.expression import (
     ExprCompare,
     Expression,
-    LiteralExpr,
 )
 from pyrung.core.instruction import (
     BlockCopyInstruction,
@@ -84,6 +83,7 @@ from pyrung.core.instruction import (
     UnpackToWordsInstruction,
     control,
 )
+from pyrung.core.instruction.calc import may_be_text
 from pyrung.core.instruction.control import not_a_char_error
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
@@ -598,28 +598,6 @@ def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | No
     return None
 
 
-def _may_be_text(value: Any) -> bool:
-    """Return True if *value* reads text, a Char tag or a pointer into Char tags anywhere.
-
-    Text that an expression builds, such as ``TXT1 + TXT2``, is text too.
-    """
-    if isinstance(value, ImmediateRef):
-        value = value.value
-    if isinstance(value, (IndirectRef, IndirectExprRef)):
-        return value.block.type.name == "CHAR"
-    if isinstance(value, Tag):
-        return value.type.name == "CHAR"
-    if isinstance(value, LiteralExpr):
-        return _may_be_text(value.value)
-    if isinstance(value, Expression):
-        # An operator's symbol, such as "+", is a str but not an operand.
-        parts = [part for part in vars(value).values() if not isinstance(part, str)]
-        return any(_may_be_text(part) for part in parts)
-    if isinstance(value, (list, tuple)):
-        return any(_may_be_text(part) for part in value)
-    return isinstance(value, str)
-
-
 def _compile_calc_instruction(
     instr: CalcInstruction,
     enabled_expr: str,
@@ -668,7 +646,7 @@ def _compile_calc_instruction(
         # Past CLICK's REAL range, the result is +/-Inf with the out-of-range flag, as a
         # float32 Math stores it. A NaN sets no flag.
         branch = "if"
-        if _may_be_text(instr.expression):
+        if may_be_text(instr.expression):
             # Stepping converts text with float() and sets no out-of-range flag for it.
             # Past the REAL range the text stores +/-Inf (core store_real).
             enabled_body += [

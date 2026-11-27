@@ -43,6 +43,9 @@ from pyrung.core.expression import (
     TagExpr,
     UnaryExpr,
     _op_hex_div,
+    _op_mod_real,
+    _op_mul_real,
+    _op_neg_real,
     _op_pow,
     may_be_float,
 )
@@ -176,7 +179,7 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-        calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
+        calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol)) or expr.op is _op_mod_real
         flags = CALC_FLAGS if strict else None
         if expr.op is _op_hex_div:
             # A hex Math's / truncates toward zero (core _op_hex_div).  // gives the same
@@ -238,9 +241,10 @@ def _compile_expression_impl(
             # fail then builds no flag list.
             # Every call passes three arguments, because scan_trace matches a helper
             # call by its argument count and does not fill in a default.
-            ctx.mark_helper("_mod")
+            helper = "_mod_real" if expr.op is _op_mod_real else "_mod"
+            ctx.mark_helper(helper)
             mod_flags = None if _non_zero_literal(expr.right) else flags
-            return f"_mod({left}, {right}, {mod_flags})"
+            return f"{helper}({left}, {right}, {mod_flags})"
         if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
             # A Math's division by 0 is 0 with SC40.  If the divisor is a tag, the
             # zero test is inline.  The exception is a dividend that appends flags of
@@ -256,6 +260,9 @@ def _compile_expression_impl(
                 ctx.mark_helper(helper)
                 compiled = f"{helper}({left}, {right}, {flags})"
             return _calc_step(expr, compiled, ctx, strict)
+        if expr.op is _op_mul_real:
+            ctx.mark_helper("_mul_real")
+            return _calc_step(expr, f"_mul_real({left}, {right})", ctx, strict)
         if expr.symbol == "**" and left.startswith("-"):
             # Python applies ** before a minus sign on its left, so -2 ** 2 is -4. A
             # negative constant is the only operand that renders with a bare sign.
@@ -285,6 +292,9 @@ def _compile_expression_impl(
                 compiled = _permissive_op("~", inner, "0", ctx, flags)
                 return _calc_step(expr, compiled, ctx, strict) if strict else compiled
             return _calc_step(expr, f"(~{_bit_int_expr(expr.operand, inner, ctx)})", ctx, strict)
+        if expr.op is _op_neg_real:
+            ctx.mark_helper("_neg_real")
+            return _calc_step(expr, f"_neg_real({inner})", ctx, strict)
         return _calc_step(expr, f"({expr.symbol}({inner}))", ctx, strict)
 
     if isinstance(expr, MathFuncExpr):
@@ -517,9 +527,12 @@ _UNSIGNED_TYPES = frozenset({TagType.BOOL, TagType.WORD})
 
 
 def _non_negative(expr: Any) -> bool:
-    """Return whether *expr* is a non-negative constant or a Bool or Word tag."""
+    """Return whether *expr* is a non-negative constant or a Bool or Word tag.
+
+    -0.0 is negative here, because a MOD's 0 has the dividend's sign.
+    """
     if isinstance(expr, LiteralExpr):
-        return expr.value >= 0
+        return expr.value >= 0 and math.copysign(1, expr.value) > 0
     return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
 
 

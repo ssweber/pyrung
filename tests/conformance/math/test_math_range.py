@@ -429,7 +429,6 @@ group = Group(
             id="minus_sign",
             expect={"Result1": 1, "Result2": 1, "Result3": 3, "Result4": 2, "ErrorCode": 5},
             formulas=MINUS_FORMULAS,
-            pending="MATH",
             probe="what a minus sign gives before 0, Inf and NaN, and which order a CLICK "
             "applies to it with * and /",
         ),
@@ -460,7 +459,6 @@ group = Group(
                 "ErrorCode": 0,
             },
             formulas=ZERO_SUM_FORMULAS,
-            pending="MATH",
             probe="which sign the 0 of a sum takes, and the 0 of a MOD, * and / of 0",
         ),
     ],
