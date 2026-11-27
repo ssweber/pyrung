@@ -497,8 +497,9 @@ def _all_atoms_absorbed(
 def _field_tag_name(instr: Any, field_name: str) -> str | None:
     """Return the name of the tag in the field *field_name* of *instr*, or None.
 
-    Timers, counters and drums hold their done bit, accumulator and tag preset as a
-    ``TagArg``.  Any other value, or no such field, gives None.
+    Timers and counters hold their done bit, accumulator and tag preset as a ``TagArg``.
+    Time drums hold their accumulator as one.  Any other value, or no such field, gives
+    None.
     """
     match getattr(instr, field_name, None):
         case TagArg(tag=tag):
@@ -1014,7 +1015,7 @@ def _direct_write_target(instr: Any) -> Any:
 
     if isinstance(instr, CopyInstruction):
         match instr.target:
-            # An immediate() destination is no direct tag write for these readers.
+            # The progress readers skip a copy into an immediate() tag.
             case TagArg(tag=tag, immediate=False):
                 return tag
             case TagArg() | PointerArg():

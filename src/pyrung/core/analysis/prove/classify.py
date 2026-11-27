@@ -281,7 +281,7 @@ def _collect_implicit_edge_condition_exprs(
     def _in_scope(instr: Any) -> bool:
         if upstream is None:
             return True
-        # A shift writes its range, and a drum writes its outputs and its tags.
+        # A drum's outputs field holds a tuple of tags.
         for field_name in getattr(type(instr), "_writes", ()):
             value = getattr(instr, field_name)
             for target in value if isinstance(value, tuple) else (value,):
@@ -580,7 +580,7 @@ def _stored_literal(value: Any, source: Any, target: Tag) -> Any | object:
     """Return the value that a Copy of the constant *value* stores in *target*.
 
     *source* is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the
-    copy's source.
+    copy's source.  Return ``_NO_LITERAL_WRITE`` when the copy stores no single constant.
     """
     from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
 
@@ -1506,7 +1506,8 @@ def _domain_from_write_instruction(
         if not domain:
             return domain
         match instr.source:
-            # An immediate() source gives no domain here.
+            # This reader has never modelled an immediate() source, so it returns no
+            # domain for one.
             case RangeArg(span=span, immediate=False) | PointerRangeArg(span=span):
                 return _stored_domain(domain, span.block.type, target)
             case RangeArg():
@@ -2048,7 +2049,7 @@ def _has_pointers(span: Span) -> bool:
 def _source_tag_name(source: Value) -> str | None:
     """Return the name of the tag that the source of a copy or a fill reads, or None.
 
-    A pointer, a constant and any expression but a bare tag read none.
+    Return None for a pointer, a constant, or an expression that is more than one tag.
     """
     match source:
         case TagArg(tag=tag):
