@@ -14,6 +14,7 @@ from typing import Any
 from pyclickplc.addresses import format_address_display
 
 from pyrung.core.expression import Expression, RangeAggregateExpr, SumExpr
+from pyrung.core.instruction.operands import held
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.walker import ProgramLocation
@@ -60,7 +61,7 @@ def _evaluate_range_aggregates(
     if type(instruction).__name__ != "CalcInstruction":
         return []
     aggregates: list[tuple[str, BlockRange]] = []
-    _collect_range_aggregates(instruction.source_expression, aggregates, set())
+    _collect_range_aggregates(held(instruction.source_expression), aggregates, set())
     if not aggregates:
         return []
 

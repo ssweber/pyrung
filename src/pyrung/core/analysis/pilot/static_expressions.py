@@ -281,7 +281,7 @@ def single_calc_source(idx_tag: str, pdg: Any, program: Any) -> tuple[Any, str] 
     if ro is None:
         return None
     for instr in ro._instructions:
-        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == idx_tag:
+        if isinstance(instr, CalcInstruction) and instr.dest.tag.name == idx_tag:
             names = _expr_tag_names(instr.expression)
             if not names:
                 return None

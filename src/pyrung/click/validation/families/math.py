@@ -6,7 +6,7 @@ family overrides ``operands`` to give each tag of the formula.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, assert_never
 
 from laddercodec import Math
 
@@ -18,7 +18,17 @@ from pyrung.core.expression import (
     SumExpr,
     TagExpr,
 )
-from pyrung.core.instruction.calc import infer_calc_mode
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    PointerRangeArg,
+    RangeArg,
+    Span,
+    TagArg,
+    Value,
+    held,
+)
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -53,8 +63,40 @@ _ADVICE: dict[str, str] = {
 _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 
 
+def _formula_leaves(source: Value | Span) -> list[Any]:
+    """Return each tag, range and pointer that the formula *source* reads, in order."""
+    match source:
+        case TagArg(tag=tag):
+            return [tag]
+        case PointerArg(ref=ref):
+            return [ref]
+        case RangeArg(span=span):
+            return [span]
+        case ExprArg(expr=expr):
+            return _leaves(expr)
+        case ConstArg() | PointerRangeArg():
+            return []
+        case _:
+            assert_never(source)
+
+
+def _formula_expression(source: Value | Span) -> Any:
+    """Return the expression in the formula *source*, or None when the formula is one operand."""
+    match source:
+        case ExprArg(expr=expr):
+            return expr
+        case TagArg() | PointerArg() | ConstArg() | RangeArg() | PointerRangeArg():
+            return None
+        case _:
+            assert_never(source)
+
+
 def _leaves(value: Any, seen: set[int] | None = None) -> list[Any]:
-    """Return each tag, range and pointer that the formula *value* reads, in order."""
+    """Return each tag, range and pointer that the expression *value* reads, in order.
+
+    A part of an expression can be a tag, a pointer, a range or an ``immediate()``, such
+    as a ``randint()`` bound.
+    """
     seen = set() if seen is None else seen
     if isinstance(value, ImmediateRef):
         value = value.value
@@ -76,16 +118,20 @@ def _leaves(value: Any, seen: set[int] | None = None) -> list[Any]:
 def _operands(instruction: Any) -> list[Operand]:
     """Return the formula, with each tag that it reads, and the destination."""
     found: list[Operand] = []
-    leaves = _leaves(instruction.source_expression)
+    leaves = _formula_leaves(instruction.source_expression)
     if leaves:
         found.append(Operand(0, "formula", tuple(("source_expression", leaf) for leaf in leaves)))
-    found.append(Operand(1, "destination", (("dest", instruction.dest),)))
+    found.append(Operand(1, "destination", (("dest", instruction.dest.tag),)))
     return found
 
 
-def _bit_operands(value: Any) -> list[Tag]:
-    """Return each bit that the formula *value* reads as a plain operand."""
-    return [leaf for leaf in _leaves(value) if isinstance(leaf, Tag) and leaf.type is TagType.BOOL]
+def _bit_operands(source: Value | Span) -> list[Tag]:
+    """Return each bit that the formula *source* reads as a plain operand."""
+    return [
+        leaf
+        for leaf in _formula_leaves(source)
+        if isinstance(leaf, Tag) and leaf.type is TagType.BOOL
+    ]
 
 
 def _bit_ranges_outside_sum(value: Any, resolver: _ResolutionCache, seen: set[int]) -> bool:
@@ -114,7 +160,7 @@ def _operand_bank_advice(instruction: Any, resolver: _ResolutionCache) -> str | 
             "(copy(1, Tag) under the bit, copy(0, Tag) under ~bit) and use the tag. A one-bit "
             "range of pyrung's sc block reads 0 in pyrung, and a CLICK reads the bit."
         )
-    if _bit_ranges_outside_sum(instruction.source_expression, resolver, set()):
+    if _bit_ranges_outside_sum(_formula_expression(instruction.source_expression), resolver, set()):
         return "Use .sum() to count the True bits, or copy the bits into registers first."
     if instruction.mode_inference.mixed_families:
         return _SPLIT_ADVICE
@@ -184,16 +230,30 @@ def _unwritable_hex_constants(value: Any, seen: set[int]) -> list[str]:
     return [text for child in children for text in _unwritable_hex_constants(child, seen)]
 
 
+def _formula_hex_constants(source: Value | Span) -> list[str]:
+    """Return each constant of the hex formula *source* that the export refuses."""
+    match source:
+        case ConstArg(value=value):
+            return _unwritable_hex_constants(value, set())
+        case ExprArg(expr=expr):
+            return _unwritable_hex_constants(expr, set())
+        case TagArg() | PointerArg() | RangeArg() | PointerRangeArg():
+            return []
+        case _:
+            assert_never(source)
+
+
 def _build(instruction: Any, exporter: Any) -> list[Any]:
     """Return laddercodec's refusals of the Math that the export writes."""
     from pyrung.click.ladder.types import _RenderError
 
-    mode = infer_calc_mode(instruction.source_expression, instruction.dest).mode
+    mode = instruction.mode
+    source = instruction.source_expression
     # A hex Math reads every constant as hex, as the export writes it.
     with exporter._hex_constants("math" if mode == "hex" else None):
         try:
             formula = exporter._render_operand(
-                instruction.source_expression,
+                held(source),
                 path="instruction.expression",
                 source=instruction,
             )
@@ -201,16 +261,12 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
             # The export has no spelling for some hex constants. laddercodec refuses each one
             # in the spelling that a user would type into CLICK. The stand-in formula holds
             # only those constants, so it drops the rest of the formula and its faults.
-            constants = (
-                _unwritable_hex_constants(instruction.source_expression, set())
-                if mode == "hex"
-                else []
-            )
+            constants = _formula_hex_constants(source) if mode == "hex" else []
             if not constants:
                 # The export refuses the formula and says why.
                 raise Unbuildable from exc
             formula = " + ".join(constants)
-    dest = render_operand(exporter, instruction.dest, "dest", instruction)
+    dest = render_operand(exporter, instruction.dest.tag, "dest", instruction)
     oneshot = bool(instruction.oneshot)
     refusals = refusals_of(lambda: Math(expression=formula, dest=dest, mode=mode, oneshot=oneshot))
     # laddercodec refuses each place that a tag appears, so a tag used twice gets one finding.

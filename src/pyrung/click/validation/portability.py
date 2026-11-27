@@ -16,7 +16,7 @@ from pyrung.core.instruction.control import (
     ReturnInstruction,
     iter_loop_body_rungs,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import as_authored, held
 from pyrung.core.rung import dsl_call
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import rung_label
@@ -564,7 +564,7 @@ def _evaluate_instruction_portability(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
     if instruction_type == "CalcInstruction":
-        if _expr_contains_floor_div(instruction.source_expression):
+        if _expr_contains_floor_div(held(instruction.source_expression)):
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)
             findings.append(

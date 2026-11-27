@@ -126,10 +126,7 @@ class CalcCrossing(BaseCrossing):
 
     def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         claim = self._raw_forward(instr)
-        dest_type = _type_of(target_tag, ctx)
-        if dest_type is None:
-            candidate_type = getattr(getattr(instr, "dest", None), "type", None)
-            dest_type = candidate_type if isinstance(candidate_type, TagType) else None
+        dest_type = _type_of(target_tag, ctx) or instr.dest.tag.type
         storage = calc_store_transform(dest_type)
         if storage is None:
             return UNKNOWN
@@ -231,10 +228,7 @@ class CalcCrossing(BaseCrossing):
 
     def _reverse_eq(self, instr: Any, target: Eq, ctx: CrossingContext) -> ReverseResult:
         target_value = next(iter(target.values))
-        dest_type = _type_of(target.tag, ctx)
-        if dest_type is None:
-            candidate_type = getattr(getattr(instr, "dest", None), "type", None)
-            dest_type = candidate_type if isinstance(candidate_type, TagType) else None
+        dest_type = _type_of(target.tag, ctx) or instr.dest.tag.type
         if dest_type is not None and not stored_value_possible(dest_type, target_value):
             return unsatisfiable(target.tag)
 

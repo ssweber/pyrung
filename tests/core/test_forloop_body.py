@@ -251,7 +251,7 @@ def test_body_order_is_source_order():
     kinds = [type(item).__name__ for item in loop.body]
     assert kinds == ["CalcInstruction", "Rung", "CalcInstruction"]
     # The flat view keeps every body instruction in source order.
-    assert [str(i.dest.name) for i in loop.instructions] == ["A", "B", "C"]
+    assert [str(i.dest.tag.name) for i in loop.instructions] == ["A", "B", "C"]
     assert len(loop.body_rungs) == 1
 
 
