@@ -11,20 +11,9 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
-## Unreleased
+## v0.19.0 (2026-11-28)
 
-### Fixes
-
-- `how()` now finds a plan through an `IntEnum` command register that the ladder clears with `copy(Cmd.NONE, Request)` (it found none). `how()` reads a `copy()` or `fill()` of an `IntEnum` member as the member's number (it read `Cmd.NONE` as a tag named `NONE`). A plan no longer waits for a tag named after a member.
-- If you call `set_rtc()` after the last scan, `fork()`, `how()` and `replay_to()` now run on the clock you set (they ran on the clock from before the call).
-- A `fork()` taken before the first scan is now stopped after `stop()`, and has `battery_present` False after you clear it (it was in RUN with the battery present).
-- `math()` no longer hangs on a power past the double range, such as `5 ** DD[1]` with DD1 = 2147483647, in any runner or in the generated CircuitPython code. Into an `Int`, a `Dint` or a `Word` it stores 0 and sets `system.fault.out_of_range`, as a CLICK does.
-- A validation finding on a `math()` of one operand now shows the operand, as in `math(DS1, DS5)` (it showed `math(LiveTag, DS5)`).
-- `check()` no longer reports a comparison as always false when a step of a `math()` formula passes 2 ** 53. A CLICK rounds that step to a double. With `A`, `B` and `C` as inputs whose only choice is 1048577, `math(A * B * C, D)` stores 3145728. 0.18.1 reported `D == 3145728` as always false.
-
-## v0.19.0 (2026-11-27)
-
-Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT tag now holds only text. When you build the program, pyrung refuses each write that would store a number or a bit in a TXT tag. `ladder_to_pyrung()` now groups a Math formula in CLICK's order. `math()` now matches a CLICK on hex division, fault flags and the sign of a zero that it stores in a Real. Read Behaviour changes and Fixes first.
+Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT tag now holds only text. When you build the program, pyrung refuses each write that would store a number or a bit in a TXT tag. `ladder_to_pyrung()` now groups a Math formula in CLICK's order. `math()` now matches a CLICK on hex division, powers, fault flags and the sign of a zero that it stores in a Real. Read Behaviour changes and Fixes first.
 
 ### What's new
 
@@ -73,17 +62,26 @@ Upgrade if you use TXT tags or `math()`, or if you import CLICK projects. A TXT 
 - `receive()` from a raw holding or input register into TXT tags now reads two characters from each register, low byte first (it stored each register's number in one TXT). `send()` of TXT tags to a raw holding register now writes two characters to each register, low byte first (it raised `ValueError`).
 - `math()` now sets `system.fault.math_operation_error` (SC46) on a MOD by zero, as a CLICK does (it set no flag). The MOD still gives 0, and the rest of the formula runs.
 - `math()` on `Word` tags only now treats the result of an AND, OR or XOR as 16 unsigned bits, as a CLICK does. `math(-DH[1] | 0, DH[2])` with DH1 = 2 stores FFFEh and sets no flag (it set SC43).
-- `check()` no longer reports a comparison as always false when a `math()` stores the compared value with an AND, OR or XOR, a power of a negative number, or a `//` whose divisor can be 0. `check()` also no longer raises `OverflowError` on a `math()` with a very large left shift or power, such as `1 << N` with N = 2000.
+- `check()` no longer reports a comparison as always false when a `math()` stores the compared value with one of these:
+  - an AND, OR or XOR
+  - a power of a negative number
+  - a `//` whose divisor can be 0
+  - an operation whose result passes 2 ** 53
+
+  `check()` also no longer raises `OverflowError` on a `math()` with a very large left shift or power, such as `1 << N` with N = 2000.
 - `fill()` of an integer constant into TXT tags now stores its digit, as a CLICK does (it stored the number). `check()` and `how()` no longer fail on it.
 - `copy(..., convert=to_binary)` from a `Real` into a `Dint`, or back, now moves the 32 bits unchanged, as a CLICK does (it wrote nothing and set the out-of-range flag). From a constant, it stores what a plain `copy()` stores.
 - `ladder_to_pyrung()` now groups a Math formula as a CLICK does. `6h OR 3h AND 8h` stores 0 (it stored 6).
   - The import warns on a Math formula whose value can depend on an order that no one has checked on a CLICK, such as `- DF1 * DF2` or `- DH1 * DH2` in hex mode. Add brackets in CLICK to set the order.
 - `ladder_to_pyrung()` now imports a minus sign before a constant in a hex Math as a CLICK runs it. `- 5h MOD DH1` with DH1 = 3h stores FFFEh (it stored 2h). `- 2h` sets SC43 (it set no flag).
 - `math()` into a `Real` now stores -0.0 as a CLICK does, in `PLC` and `CompiledPLC`. `-DS[1]` with DS1 = 0 stores -0.0 (it stored 0.0). The generated CircuitPython code still stores 0.0.
-- `math()` into a `Real` in `PLC` and `CompiledPLC` now stores Inf and sets `system.fault.out_of_range` for a power with a huge exponent, such as `5 ** DD[1]` with DD1 = 2147483647 (it hung). The generated CircuitPython code still hangs.
+- `math()` no longer hangs on a power past the double range, such as `5 ** DD[1]` with DD1 = 2147483647, in any runner or in the generated CircuitPython code. It stores Inf into a `Real` and 0 into an `Int` or a `Dint`, as a CLICK does. It also stores 0 into a `Word`. Each store sets `system.fault.out_of_range`.
 - `CompiledPLC` and the generated CircuitPython code now store what `PLC` stores for a bit operation on a large `Real` in `math()`. `math((DF[1] ^ 5) & 1, DS[1])` with DF1 = 1e38 stores 0 (`CompiledPLC` and the generated code stored 1).
 - `ladder_to_pyrung()` now imports `5 / 0` in a Math formula as code that loads. `math()` then stores 0 and sets the division-error flag (the imported file raised `ZeroDivisionError` when it loaded).
 - A `forloop()` whose count is `immediate()` of a `Real` that holds Inf or NaN now runs no iteration and sets `system.fault.out_of_range` on `CompiledPLC` and in the generated CircuitPython code, as on `PLC` (both raised an error).
+- A validation finding on a `math()` whose formula is a single tag or constant now shows it, as in `math(DS1, DS5)` (it showed `math(LiveTag, DS5)`).
+- `how()` now finds a plan that sets an `IntEnum` command register when the ladder only clears it with `copy(Cmd.NONE, Request)` (it found none).
+- `fork()`, `how()` and `replay_to()` now run on the clock that you set with `set_rtc()` after the last scan (they ran on the clock from before the call). If you call `stop()` or clear `battery_present` before the first scan, a `fork()` now has the same setting (it was in RUN with the battery present).
 
 ## v0.18.1 (2026-11-25)
 
