@@ -26,7 +26,8 @@ from pyrung.core.instruction import (
     TimeEventDrumInstruction,
     ToggleInstruction,
 )
-from pyrung.core.instruction.operands import CoilBitOperand
+from pyrung.core.instruction.advanced import _BIT_RANGE
+from pyrung.core.instruction.out_variants import _PLAIN_TARGET, _TOGGLE_TARGET
 from pyrung.core.instruction.utils import parse_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
@@ -264,7 +265,7 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
             shift(C.select(2, 7)).clock(ClockBit).reset(ResetBit)
     """
     # Refuse a wrong range here, before .clock() and .reset() build the instruction.
-    ShiftInstruction.check_values("shift()", {"bit_range": bit_range})
+    _BIT_RANGE.parse("shift()", "bit_range", bit_range)
     data_condition, source_file, source_line = _capture_rung_condition_and_source("shift")
     return ShiftBuilder(bit_range, data_condition, source_file, source_line)
 
@@ -1182,9 +1183,9 @@ def off_delay(
     )
 
 
-# CLICK's Debounce, Flasher and Timed coils have no Immediate option.  Toggle has one.
-_TOGGLE_TARGET = CoilBitOperand()
-_PLAIN_TARGET = CoilBitOperand(immediate=False)
+# Each out-variant builder refuses a bad target before it reads the timers or the rung, so
+# a call with two errors names the target.  ``__init__`` parses the target again, for an
+# instruction built by hand.
 
 
 def _out_phase(
@@ -1225,9 +1226,9 @@ def toggle(target: Tag | ImmediateRef) -> Tag | ImmediateRef:
             toggle(Light)
             toggle(Y[1].immediate)
     """
-    parsed = _TOGGLE_TARGET.parse("toggle()", "target", target)
+    _TOGGLE_TARGET.parse("toggle()", "target", target)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("toggle")
-    instruction = ToggleInstruction(parsed, enable_condition)
+    instruction = ToggleInstruction(target, enable_condition)
     instruction.source_file, instruction.source_line = source_file, source_line
     _require_rung_context("toggle")._rung.add_instruction(instruction)
     return target
@@ -1256,7 +1257,7 @@ def debounce(
         off: ``(timer, preset)`` for the off side.
         unit: Time unit for both presets (default ``"ms"``).
     """
-    parsed = _PLAIN_TARGET.parse("debounce()", "target", target)
+    _PLAIN_TARGET.parse("debounce()", "target", target)
     on_phase = _out_phase(on, "debounce", "on")
     off_phase = _out_phase(off, "debounce", "off")
     if on_phase is None or off_phase is None:
@@ -1265,7 +1266,7 @@ def debounce(
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("debounce")
     instruction = DebounceInstruction(
-        parsed,
+        target,
         on_done=on_phase[0],
         on_acc=on_phase[1],
         on_preset=on_phase[2],
@@ -1303,7 +1304,7 @@ def flasher(
         off: ``(timer, preset)`` for the off phase.
         unit: Time unit for both presets (default ``"ms"``).
     """
-    parsed = _PLAIN_TARGET.parse("flasher()", "target", target)
+    _PLAIN_TARGET.parse("flasher()", "target", target)
     on_phase = _out_phase(on, "flasher", "on")
     off_phase = _out_phase(off, "flasher", "off")
     if on_phase is None or off_phase is None:
@@ -1312,7 +1313,7 @@ def flasher(
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("flasher")
     instruction = FlasherInstruction(
-        parsed,
+        target,
         on_done=on_phase[0],
         on_acc=on_phase[1],
         on_preset=on_phase[2],
@@ -1354,13 +1355,13 @@ def timed(
         unit: Time unit (default ``"ms"``).
         maintained: Keep the target on while the rung stays true after the on time.
     """
-    parsed = _PLAIN_TARGET.parse("timed()", "target", target)
+    _PLAIN_TARGET.parse("timed()", "target", target)
     phase = _out_phase((timer, preset), "timed", "on", preset_label="timed() preset")
     assert phase is not None
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("timed")
     instruction = TimedInstruction(
-        parsed,
+        target,
         timer_done=phase[0],
         timer_acc=phase[1],
         on_preset=phase[2],

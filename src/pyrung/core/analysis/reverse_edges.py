@@ -16,14 +16,11 @@ from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.instruction.operands import (
     ConstArg,
-    Dest,
     ExprArg,
     PointerArg,
-    PointerRangeArg,
-    RangeArg,
-    Span,
     TagArg,
     Value,
+    operand_tag_names,
 )
 
 if TYPE_CHECKING:
@@ -73,31 +70,6 @@ def value_tag_name(value: Value) -> str | None:
             return None
         case _:
             assert_never(value)
-
-
-def _dest_names(dest: Dest, expand: Callable[[Any], list[str]]) -> list[str]:
-    """Return the names of the tags that *dest* writes.  *expand* lists them for a pointer."""
-    match dest:
-        case TagArg(tag=tag):
-            return [tag.name]
-        case PointerArg(ref=ref):
-            return expand(ref)
-        case _:
-            assert_never(dest)
-
-
-def _span_names(span: Span, expand: Callable[[Any], list[str]]) -> list[str]:
-    """Return the names of the tags in *span*.
-
-    *expand* lists them for a range with pointers, or for a range that lists no tags.
-    """
-    match span:
-        case RangeArg(span=static):
-            return [tag.name for tag in static.tags()] or expand(static)
-        case PointerRangeArg(span=dynamic):
-            return expand(dynamic)
-        case _:
-            assert_never(span)
 
 
 def calc_reverse_edge(
@@ -203,7 +175,7 @@ def build_reverse_edge_map(
             source_name = value_tag_name(instr.source)
             if source_name is None:
                 continue
-            for target_name in _dest_names(instr.dest, _expand):
+            for target_name in operand_tag_names(instr.dest, _expand):
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, FillInstruction):
@@ -212,14 +184,14 @@ def build_reverse_edge_map(
             source_name = value_tag_name(instr.value)
             if source_name is None:
                 continue
-            for target_name in _span_names(instr.dest, _expand):
+            for target_name in operand_tag_names(instr.dest, _expand):
                 reverse_edges.setdefault(source_name, []).append((target_name, IDENTITY))
 
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _span_names(instr.source, lambda _: [])
-            dest_names = _span_names(instr.dest, _expand)
+            source_names = operand_tag_names(instr.source)
+            dest_names = operand_tag_names(instr.dest, _expand)
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):

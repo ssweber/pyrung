@@ -30,11 +30,9 @@ from pyrung.core.instruction.operands import (
     ConstArg,
     ExprArg,
     PointerArg,
-    PointerRangeArg,
-    RangeArg,
-    Span,
     TagArg,
     Value,
+    operand_tags,
 )
 from pyrung.core.tag import ImmediateRef, Tag
 
@@ -81,22 +79,6 @@ _CallerMap = dict[str, list[_CallerEntry]]
 # ---------------------------------------------------------------------------
 
 
-def operand_tags(operand: Value | Span) -> tuple[Tag, ...]:
-    """Return the tags that a parsed operand names at a fixed address, in the order of the range.
-
-    A pointer, a range with pointers, an expression and a constant name none.
-    """
-    match operand:
-        case TagArg(tag=tag):
-            return (tag,)
-        case RangeArg(span=span):
-            return tuple(span.tags())
-        case PointerArg() | PointerRangeArg() | ExprArg() | ConstArg():
-            return ()
-        case _:
-            assert_never(operand)
-
-
 def _resolve_tag_names(target: Any) -> list[str]:
     """Statically known tag names of an operand, in address order (none for a pointer)."""
     return [tag.name for tag in static_write_target_tags(target)]
@@ -138,9 +120,9 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets = [tag.name for tag in operand_tags(instr.target)]
         # Each phase claims its whole Timer, but only the accumulator is written:
         # an Out coil never sets the Timer's Done.
-        targets += [instr.on_acc.name, instr.off_acc.name]
+        targets += [instr.on_acc.tag.name, instr.off_acc.tag.name]
     elif isinstance(instr, TimedInstruction):
-        targets = [instr.target.tag.name, instr.timer_acc.name]
+        targets = [instr.target.tag.name, instr.timer_acc.tag.name]
     elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
         targets = [instr.done_bit.tag.name, instr.accumulator.tag.name]
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):
@@ -158,17 +140,17 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets.append(instr.completion_flag.tag.name)
     elif isinstance(instr, ModbusSendInstruction):
         targets = [
-            instr.sending.name,
-            instr.success.name,
-            instr.error.name,
-            instr.exception_response.name,
+            instr.sending.tag.name,
+            instr.success.tag.name,
+            instr.error.tag.name,
+            instr.exception_response.tag.name,
         ]
     elif isinstance(instr, ModbusReceiveInstruction):
         targets = [
-            instr.receiving.name,
-            instr.success.name,
-            instr.error.name,
-            instr.exception_response.name,
+            instr.receiving.tag.name,
+            instr.success.tag.name,
+            instr.error.tag.name,
+            instr.exception_response.tag.name,
         ]
 
     return [(name, itype) for name in targets]
@@ -612,8 +594,6 @@ class _ScanWrites:
             if isinstance(item, CallInstruction):
                 callees.add(item.subroutine_name)
             for target in instruction_write_targets(item):
-                if isinstance(target, ImmediateRef):
-                    target = target.value
                 if isinstance(target, Tag):
                     writes.names[target.name] = target
                 elif isinstance(target, BlockRange):

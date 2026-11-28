@@ -506,9 +506,6 @@ class CopyInstruction(OneShotMixin, Instruction):
     def target(self) -> Dest:
         return self.dest
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
-
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         resolved_target: Tag | None
@@ -763,10 +760,11 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 "blockcopy() reads a range from .select(). Use copy() to copy one value, "
                 "or fill() to write one value into a range."
             )
-        self.authored_dest = dest
+        authored_dest = dest
         self.source: Span = RANGE.parse("blockcopy()", "source", source)
         dest = _block_copy_dest(self.source, dest)
         self.dest: Span = RANGE.parse("blockcopy()", "dest", dest)
+        self.authored_dest: Value | Span = parse_value(authored_dest)
         match self.source, self.dest:
             case RangeArg(span=fixed_source), RangeArg(span=fixed_dest):
                 # len() counts what execute() copies: the fields of a named_array, not its gaps.
@@ -792,9 +790,6 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
                 convert = to_value
         self.convert = convert
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -911,9 +906,6 @@ class FillInstruction(OneShotMixin, Instruction):
         self.value: Value = _one_value(VALUE.parse("fill()", "value", value))
         check_rules(self._operands, self._operand_rules, "fill()", {"value": value, "dest": dest})
         self.convert = _plain_text_converter(value, dest)
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

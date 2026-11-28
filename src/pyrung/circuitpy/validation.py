@@ -10,8 +10,7 @@ from pyrung.circuitpy.p1am import is_board_tag
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import Expression
-from pyrung.core.instruction.operands import RangeArg, TagArg
-from pyrung.core.instruction.resolvers import operand_object
+from pyrung.core.instruction.operands import operand_parts
 from pyrung.core.memory_block import (
     BlockRange,
     IndirectBlockRange,
@@ -123,11 +122,8 @@ def _operand_object(value: Any) -> Any:
     Any other value comes back unchanged.  The P1AM I/O check skips an operand in
     ``immediate()``.  It skips a contact in ``immediate()`` too.
     """
-    match value:
-        case TagArg(immediate=True) | RangeArg(immediate=True):
-            return None
-        case _:
-            return operand_object(value)
+    held_object, immediate = operand_parts(value)
+    return None if immediate else held_object
 
 
 def _extract_io_tags(instruction: Any) -> list[Tag]:

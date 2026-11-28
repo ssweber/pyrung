@@ -7,9 +7,6 @@ must read both declarations the same way:
 - a mapping contributes its values, and a sequence its elements;
 - a parsed operand contributes the tag, range or pointer inside it, without
   its ``immediate()``;
-- a raw ``immediate()`` reference stays wrapped.  No instruction that a builder
-  makes holds one, so only a test double or a hand-built instruction reaches this
-  case;
 - a dynamic destination stays unresolved, for its own consumer to resolve.
 
 The one derived shape is a ``CopyInstruction`` that writes text over several
@@ -40,10 +37,9 @@ from pyrung.core.instruction.operands import (
     ConstArg,
     ExprArg,
     PointerArg,
-    PointerRangeArg,
-    RangeArg,
     TagArg,
     Value,
+    operand_object,
 )
 from pyrung.core.instruction.resolvers import _sequential_tags, _termination_char
 from pyrung.core.memory_block import (
@@ -57,32 +53,9 @@ from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 
-def operand_leaf(value: Any) -> Any:
-    """Return the tag, range, pointer, expression or constant inside a parsed operand.
-
-    Return any other value unchanged.  The analyses that walk every field of an
-    instruction call this on each value, so they reach the tags inside a parsed
-    operand.  The result drops ``immediate()``.  A reader that must tell an immediate
-    operand from a plain one matches on the parsed operand instead.
-    """
-    match value:
-        case TagArg(tag=tag):
-            return tag
-        case RangeArg(span=span) | PointerRangeArg(span=span):
-            return span
-        case PointerArg(ref=ref):
-            return ref
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=constant):
-            return constant
-        case _:
-            return value
-
-
 def _iter_target_leaves(value: Any) -> Iterator[Any]:
     """Yield declared destination leaves without resolving dynamic addresses."""
-    value = operand_leaf(value)
+    value = operand_object(value)
     if value is None:
         return
     if isinstance(value, dict):
@@ -318,7 +291,7 @@ def static_write_target_tags(target: Any) -> tuple[Tag, ...]:
     address or a PDG-specific conservative region, and neither is an exact
     instruction occurrence for a named-tag writer lookup.
     """
-    target = operand_leaf(target)
+    target = operand_object(target)
     if isinstance(target, ImmediateRef):
         target = target.value
     if isinstance(target, Tag):
@@ -355,7 +328,6 @@ __all__ = [
     "instruction_write_targets",
     "instruction_writes_tag",
     "instruction_written_tags",
-    "operand_leaf",
     "static_write_target_names",
     "static_write_target_tags",
 ]

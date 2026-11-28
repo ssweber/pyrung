@@ -12,7 +12,6 @@ from .conversions import (
     _as_single_ascii_char,
     _ascii_char_from_code,
 )
-from .operands import ConstArg, ExprArg, PointerArg, PointerRangeArg, RangeArg, TagArg
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -23,27 +22,6 @@ if TYPE_CHECKING:
     )
 
 _TAG_SUFFIX_RE = re.compile(r"^(.*?)(\d+)$")
-
-
-def operand_object(value: Any) -> Any:
-    """Return the object inside a parsed operand, and any other value unchanged.
-
-    A reader that walks every field of an instruction calls this function on each value
-    it meets.  The tag or the range comes back without its ``immediate()``.
-    """
-    match value:
-        case TagArg(tag=tag):
-            return tag
-        case RangeArg(span=span) | PointerRangeArg(span=span):
-            return span
-        case PointerArg(ref=ref):
-            return ref
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=constant):
-            return constant
-        case _:
-            return value
 
 
 def resolve_tag_or_value_ctx(

@@ -79,7 +79,7 @@ def _formula_leaves(source: Value | Span) -> list[Any]:
             assert_never(source)
 
 
-def _formula_expression(source: Value | Span) -> Any:
+def formula_expression(source: Value | Span) -> Any:
     """Return the expression in the formula *source*, or None when the formula is one operand."""
     match source:
         case ExprArg(expr=expr):
@@ -159,7 +159,7 @@ def _operand_bank_advice(instruction: Any, resolver: _ResolutionCache) -> str | 
             "(copy(1, Tag) under the bit, copy(0, Tag) under ~bit) and use the tag. A one-bit "
             "range of pyrung's sc block reads 0 in pyrung, and a CLICK reads the bit."
         )
-    if _bit_ranges_outside_sum(_formula_expression(instruction.source_expression), resolver, set()):
+    if _bit_ranges_outside_sum(formula_expression(instruction.source_expression), resolver, set()):
         return "Use .sum() to count the True bits, or copy the bits into registers first."
     if instruction.mode_inference.mixed_families:
         return _SPLIT_ADVICE

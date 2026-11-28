@@ -1,4 +1,4 @@
-"""Check each operand of an instruction when the program is built.
+"""Parse each operand of an instruction when the program is built.
 
 An instruction class declares what each of its fields accepts in ``_operands``.  It
 declares the rules that tie two fields together in ``_operand_rules``::
@@ -9,17 +9,12 @@ declares the rules that tie two fields together in ``_operand_rules``::
     }
     _operand_rules = (FitsRegister(bits="bit_block", register="dest"),)
 
-``Rung.add_instruction`` calls ``Instruction.check_operands()``.  The check raises an
-error that names the operand and says what to pass.  If ``__init__`` reads something
-from an operand, such as the type of a destination, the builder calls
-``Instruction.check_values()`` first.  The check then refuses a wrong operand before
-``__init__`` raises ``AttributeError``.
-
-Each kind of operand is a subclass of ``Operand``.  A kind refuses an operand when no
-input values let the instruction write a result with it.  Each scan with such an
-operand raises, sets a fault flag, or does nothing.  A kind judges one operand, and a
-rule judges two together.  So an operand that writes nothing only with some converter
-or operator still builds.
+Each kind of operand is a subclass of ``Operand``.  Its ``parse()`` returns one of the
+results below, or raises an error that names the operand and says what to pass.  A kind
+refuses an operand when no input values let the instruction write a result with it.
+Each scan with such an operand raises, sets a fault flag, or does nothing.  A kind
+judges one operand, and a rule judges two together.  So an operand that writes nothing
+only with some converter or operator still builds.
 
 A kind also refuses these operands, which can write a result:
 
@@ -31,7 +26,7 @@ A kind also refuses these operands, which can write a result:
 A kind does not check the length of a range with pointers, because the pointers are
 read at scan time.  The scan checks it.
 
-These instructions parse their operands instead:
+These instructions parse their operands:
 
 - ``copy()``, ``fill()`` and ``blockcopy()``;
 - ``pack_bits()``, ``pack_words()``, ``pack_text()``, ``unpack_to_bits()`` and
@@ -50,22 +45,19 @@ These instructions parse their operands instead:
 
 Their builder calls ``parse()`` on each declaration, which returns one of the results
 below or raises the refusal.  ``search()`` passes the value of its comparison to
-:func:`parse_value`.  That function refuses nothing.  The timers, the counters and the
-drums parse in their own ``__init__``, and so do the presets of the coils.  The
-instruction then holds only results, except in six fields of three coils.
-``debounce()`` and ``flasher()`` hold ``on_done``, ``on_acc``, ``off_done`` and
-``off_acc`` as plain tags.  ``timed()`` holds ``timer_done`` and ``timer_acc`` as plain
-tags.
+:func:`parse_value`.  That function refuses nothing.  The timers, the counters, the
+drums, ``toggle()``, ``debounce()``, ``flasher()`` and ``timed()`` parse in their own
+``__init__``.  The instruction then holds only results.
 ``execute()``, the code generator and the CLICK export match on them and never test the
-raw value again.  A reader that takes the operands of every instruction calls
-:func:`as_authored` on each.
+raw value again.  A reader that walks every field of an instruction calls
+:func:`operand_object` on each.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, assert_never
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, assert_never, final
 
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter, to_text
@@ -86,12 +78,13 @@ _NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL
 # ``vars()`` through a program still reach the tags inside them.
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class TagArg:
     """One tag.  *immediate* is True when the author wrapped it in ``immediate()``.
 
-    *wrapper* is the ``ImmediateRef`` that the author passed.  :func:`held` returns it.  A
-    reader that keys on ``id()`` then sees one object for as long as the instruction lives.
+    *wrapper* is the ``ImmediateRef`` that the author passed.  The program walker keys on
+    its ``id()``, which stays the same for as long as the instruction lives.
     """
 
     tag: Tag
@@ -102,6 +95,7 @@ class TagArg:
         _check_wrapper(self, self.tag)
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class PointerArg:
     """One element that a pointer picks when the scan runs, such as ``DS[Ptr]``."""
@@ -114,17 +108,23 @@ class PointerArg:
         return self.ref.block
 
 
+_Constant = TypeVar("_Constant", covariant=True)
+
+
+@final
 @dataclass(frozen=True, eq=False)
-class ConstArg:
+class ConstArg(Generic[_Constant]):
     """A constant, such as 5, 1.5, True or "AB".
 
     *value* can be any other object that the field accepts, such as a structure that
-    ``copy()`` writes into a TXT.  The scan stores it as it is.
+    ``copy()`` writes into a TXT.  The scan stores it as it is.  A preset holds a
+    ``ConstArg[int]``, so its readers need no test of the type.
     """
 
-    value: object
+    value: _Constant
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class ExprArg:
     """An expression that the scan evaluates, such as ``DS1 + 1``."""
@@ -132,6 +132,7 @@ class ExprArg:
     expr: Expression
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class RangeArg:
     """A range with fixed ends, such as ``DS.select(1, 10)``.
@@ -147,6 +148,7 @@ class RangeArg:
         _check_wrapper(self, self.span)
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class PointerRangeArg:
     """A range whose ends the scan reads, such as ``DS.select(Lo, Hi)``."""
@@ -177,65 +179,88 @@ Span = RangeArg | PointerRangeArg
 """What a field that takes a range holds, such as the destination of ``fill()``."""
 Coil = TagArg | RangeArg
 """What a coil writes, such as the target of ``out()``: one tag, or a range with fixed ends."""
-Preset = TagArg | ConstArg
+Preset = TagArg | ConstArg[int]
 """What a preset or a step number holds, such as the preset of ``on_delay()``: a tag or an
 integer constant."""
 
 
-def held(arg: Value | Span) -> Any:
-    """Return the object that *arg* holds, as the author passed it.
+def operand_object(value: Any) -> Any:
+    """Return the tag, range, pointer, expression or constant inside a parsed operand.
 
-    A tag or a range in ``immediate()`` comes back in the ``ImmediateRef`` that the
-    author passed.  Each call on one operand returns the same object.  The readers that
-    the other instructions share, such as ``operand_name()`` and the program walkers,
-    still take the authored object.  They call this function on a parsed operand before
-    they read it.
+    Return any other value unchanged.  A reader that walks every field of an instruction
+    calls this on each value, so it reaches the tags inside a parsed operand.  The
+    result drops ``immediate()``.  :func:`operand_parts` also says whether the operand
+    was in it.
     """
-    match arg:
-        case TagArg(tag=tag, wrapper=wrapper):
-            return tag if wrapper is None else wrapper
-        case RangeArg(span=span, wrapper=wrapper):
-            return span if wrapper is None else wrapper
-        case PointerArg(ref=ref):
-            return ref
-        case PointerRangeArg(span=span):
-            return span
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=value):
-            return value
+    return operand_parts(value)[0]
+
+
+def operand_parts(value: Any) -> tuple[Any, bool]:
+    """Return the object inside a parsed operand, and whether it is in ``immediate()``.
+
+    Return any other value unchanged, with False.
+    """
+    match value:
+        case (
+            TagArg(tag=held_object, immediate=immediate)
+            | RangeArg(span=held_object, immediate=immediate)
+        ):
+            return held_object, immediate
+        case (
+            PointerArg(ref=held_object)
+            | PointerRangeArg(span=held_object)
+            | ExprArg(expr=held_object)
+            | ConstArg(value=held_object)
+        ):
+            return held_object, False
         case _:
-            assert_never(arg)
+            return value, False
 
 
-def inner(arg: Value | Span) -> Any:
-    """Return the object that *arg* holds, without its ``immediate()``."""
-    match arg:
+def operand_tags(operand: Value | Span) -> tuple[Tag, ...]:
+    """Return the tags that *operand* names at fixed addresses, in the order of its range.
+
+    A pointer, a range with pointers, an expression and a constant name none.
+    """
+    match operand:
         case TagArg(tag=tag):
-            return tag
-        case RangeArg(span=span) | PointerRangeArg(span=span):
-            return span
-        case PointerArg(ref=ref):
-            return ref
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=value):
-            return value
+            return (tag,)
+        case RangeArg(span=span):
+            return tuple(span.tags())
+        case PointerArg() | PointerRangeArg() | ExprArg() | ConstArg():
+            return ()
         case _:
-            assert_never(arg)
+            assert_never(operand)
 
 
-PARSED = (TagArg, PointerArg, ConstArg, ExprArg, RangeArg, PointerRangeArg)
-"""Every result type, for a shared reader that tests whether it holds a parsed operand."""
+def operand_tag_names(
+    operand: Value | Span, expand: Callable[[Any], list[str]] | None = None
+) -> list[str]:
+    """Return the names of the tags that *operand* can name, in the order of its range.
 
-
-def as_authored(value: Any) -> Any:
-    """Return the authored object for a parsed operand, and any other value unchanged.
-
-    A reader that takes the operands of every instruction calls this function on each
-    one.  It then reads a Copy's operand as it reads any other instruction's.
+    *expand* lists the names for a pointer or a range with pointers.  Without it they
+    name none, and neither does a constant or an expression.
     """
-    return held(value) if isinstance(value, PARSED) else value
+    match operand:
+        case PointerArg(ref=pointer) | PointerRangeArg(span=pointer):
+            return [] if expand is None else expand(pointer)
+        case TagArg() | RangeArg() | ConstArg() | ExprArg():
+            return [tag.name for tag in operand_tags(operand)]
+        case _:
+            assert_never(operand)
+
+
+def plain_tag_name(operand: Any) -> str | None:
+    """Return the name of the tag in *operand* if it is one tag without ``immediate()``.
+
+    Return None for anything else.  The readers that call this skip a tag in
+    ``immediate()``.
+    """
+    match operand:
+        case TagArg(tag=tag, immediate=False):
+            return tag.name
+        case _:
+            return None
 
 
 def parse_value(value: Any) -> Value | Span:
@@ -297,10 +322,10 @@ class Operand:
     immediate: bool = True
     hint: str = ""
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         """Return True if the field accepts *value*.
 
-        ``accepts()`` calls this method with the operand taken out of ``immediate()``.
+        ``_accepts()`` calls this method with the operand taken out of ``immediate()``.
         """
         raise NotImplementedError
 
@@ -308,19 +333,19 @@ class Operand:
         """Return what the field accepts, as in "one Int tag, or a pointer to one"."""
         raise NotImplementedError
 
-    def accepts(self, value: Any) -> bool:
+    def _accepts(self, value: Any) -> bool:
         """Return True if the field accepts *value*."""
         inner, wrapped = unwrap(value)
         if wrapped and not self.immediate:
             return False
-        return self.fits(inner)
+        return self._fits(inner)
 
     def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
         """Return the error that refuses *value* as *arg* of *call*, or None if it fits.
 
         *call* is the call that the author wrote, as in ``"pack_bits()"``.
         """
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         return TypeError(self._message(call, f"{describe(value)} as {arg}", value))
 
@@ -331,7 +356,7 @@ class Operand:
 
     def _message(self, call: str, got: str, value: Any) -> str:
         wanted = self.wanted()
-        if isinstance(value, ImmediateRef) and not self.immediate and self.fits(value.value):
+        if isinstance(value, ImmediateRef) and not self.immediate and self._fits(value.value):
             wanted += ", without immediate()"
         message = f"{call} got {got}. Pass {wanted}."
         return f"{message} {self.hint}" if self.hint else message
@@ -359,7 +384,7 @@ class TagOperand(Operand):
         """
         return replace(self, types=types, **changes)
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         if not self.pointers and not isinstance(value, Tag):
             return False
         tag_type = operand_type(value)
@@ -423,7 +448,7 @@ class RangeOperand(Operand):
         """
         return replace(self, types=types, **changes)
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         if not _is_range(value):
             return False
         if self.count is not None and isinstance(value, BlockRange) and len(value) != self.count:
@@ -441,11 +466,11 @@ class RangeOperand(Operand):
         A range of the wrong length raises ``ValueError``.  Anything else raises
         ``TypeError``.
         """
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         counted = self.count is not None
         got = f"{describe(value, count=counted)} as {arg}"
-        error = ValueError if counted and replace(self, count=None).accepts(value) else TypeError
+        error = ValueError if counted and replace(self, count=None)._accepts(value) else TypeError
         return error(self._message(call, got, value))
 
     def parse(self, call: str, arg: str, value: Any) -> Span:
@@ -476,7 +501,7 @@ class ValueOperand(Operand):
     # ``copy(ds[1] * (1, 2), c[3])`` writes True into C3, so a value accepts one.
     _lists: ClassVar[bool] = False
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         if value is None or _is_condition(value):
             return False
         if _is_range(value):
@@ -491,7 +516,7 @@ class ValueOperand(Operand):
 
         For an expression with a bad part, the message names the part.
         """
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         part = _bad_part(unwrap(value)[0], lists=self._lists)
         if part is _NO_PART:
@@ -528,7 +553,7 @@ class NumberOperand(ValueOperand):
     whole: bool = False
     span: tuple[int, int] | None = None
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         if _is_range(value) or _holds_no_number(value):
             return False
         if isinstance(value, str):
@@ -537,7 +562,7 @@ class NumberOperand(ValueOperand):
             return False
         if self._outside_span(value):
             return False
-        return super().fits(value)
+        return super()._fits(value)
 
     def _outside_span(self, value: Any) -> bool:
         if self.span is None or not isinstance(value, int):
@@ -592,8 +617,8 @@ class EachOperand(Operand):
 
     item: TagOperand = TagOperand()
 
-    def fits(self, value: Any) -> bool:
-        return isinstance(value, Mapping) and all(self.item.accepts(v) for v in value.values())
+    def _fits(self, value: Any) -> bool:
+        return isinstance(value, Mapping) and all(self.item._accepts(v) for v in value.values())
 
     def wanted(self) -> str:
         return f"a dict whose every value is {self.item.wanted()}"
@@ -626,7 +651,7 @@ class CoilOperand(Operand):
     refusals of the other operands do.
     """
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         return isinstance(value, (Tag, BlockRange))
 
     def wanted(self) -> str:
@@ -634,7 +659,7 @@ class CoilOperand(Operand):
 
     def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
         """Return the error that refuses *value*, or None if it fits."""
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         return TypeError(
             "Expected Tag, BlockRange from .select(), or immediate(...) wrapper, "
@@ -658,7 +683,7 @@ class CoilBitOperand(Operand):
     :class:`CoilOperand`, its refusals have words of their own.
     """
 
-    def fits(self, value: Any) -> bool:
+    def _fits(self, value: Any) -> bool:
         return isinstance(value, Tag) and value.type is TagType.BOOL
 
     def wanted(self) -> str:
@@ -666,7 +691,7 @@ class CoilBitOperand(Operand):
 
     def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
         """Return the error that refuses *value*, or None if it fits."""
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         if isinstance(value, ImmediateRef) and not self.immediate:
             return TypeError(
@@ -694,7 +719,7 @@ class PayloadOperand(CoilOperand):
 
     def refusal(self, call: str, arg: str, value: Any) -> Exception | None:
         """Return the error that refuses *value*, or None if it fits."""
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         return TypeError(f"{arg} must be Tag or BlockRange, got {type(value).__name__}")
 
@@ -1041,26 +1066,6 @@ def _bit_address_refusal(
         f"a bit, and Char tags hold only text. {advice}. Each register holds two "
         "characters."
     )
-
-
-def check_fields(
-    operands: Mapping[str, Operand],
-    rules: tuple[FitsRegister | NumberInto | TextInto, ...],
-    call: str,
-    values: Mapping[str, Any],
-) -> None:
-    """Raise the error for the first value in *values*, by field, that does not fit.
-
-    The rules see each value without its ``immediate()``.  A field that *values* leaves
-    out is not checked, and nor is a rule that reads it.
-    """
-    for field_name, value in values.items():
-        operand = operands.get(field_name)
-        if operand is not None:
-            error = operand.refusal(call, operand.arg or field_name, value)
-            if error is not None:
-                raise error
-    check_rules(operands, rules, call, values)
 
 
 def check_rules(

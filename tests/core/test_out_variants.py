@@ -105,6 +105,76 @@ def test_only_toggle_takes_an_immediate_target(build):
                 build(lamp)
 
 
+Count = Int("Count")
+Lamp = Bool("Lamp")
+
+# Each call has a bad target and a second error.
+_TWO_ERRORS = {
+    "debounce, a phase that is no tuple": (
+        "debounce",
+        lambda: debounce(Count, on=5, off=(T[2], 3)),
+    ),
+    "debounce, a Bool as the timer": (
+        "debounce",
+        lambda: debounce(Count, on=(In, 5), off=(T[2], 3)),
+    ),
+    "debounce, a Real preset": (
+        "debounce",
+        lambda: debounce(Count, on=(T[1], 1.5), off=(T[2], 3)),
+    ),
+    "flasher, a phase that is no tuple": (
+        "flasher",
+        lambda: flasher(Count, on=5, off=(T[2], 3)),
+    ),
+    "flasher, a Bool as the timer": (
+        "flasher",
+        lambda: flasher(Count, on=(In, 5), off=(T[2], 3)),
+    ),
+    "flasher, a Real preset": (
+        "flasher",
+        lambda: flasher(Count, on=(T[1], 1.5), off=(T[2], 3)),
+    ),
+    "timed, a Bool as the timer": ("timed", lambda: timed(Count, In, 5)),
+    "timed, a Real preset": ("timed", lambda: timed(Count, T[3], 1.5)),
+}
+
+# Each call has a bad target, and is made outside a rung.
+_OUTSIDE_A_RUNG = {
+    "toggle": lambda: toggle(Count),
+    "debounce": lambda: debounce(Count, on=(T[1], 5), off=(T[2], 3)),
+    "flasher": lambda: flasher(Count, on=(T[1], 5), off=(T[2], 3)),
+    "timed": lambda: timed(Count, T[3], 5),
+}
+
+
+@pytest.mark.parametrize(("call", "build"), _TWO_ERRORS.values(), ids=_TWO_ERRORS.keys())
+def test_a_bad_target_is_refused_before_the_timers(call, build):
+    with Program():
+        with rung(In):
+            with pytest.raises(TypeError) as refused:
+                build()
+    assert str(refused.value) == f"{call}() writes one Bool tag, got {Count!r}."
+
+
+@pytest.mark.parametrize(("call", "build"), _OUTSIDE_A_RUNG.items(), ids=_OUTSIDE_A_RUNG.keys())
+def test_a_bad_target_is_refused_before_the_rung_check(call, build):
+    with Program():
+        with pytest.raises(TypeError) as refused:
+            build()
+    assert str(refused.value) == f"{call}() writes one Bool tag, got {Count!r}."
+
+
+def test_an_immediate_target_is_refused_before_the_timers():
+    with Program():
+        with rung(In):
+            with pytest.raises(TypeError) as refused:
+                debounce(immediate(Lamp), on=5, off=(T[2], 3))
+    assert str(refused.value) == (
+        "debounce() takes no immediate(...) target; only out() and toggle() coils write "
+        "immediately."
+    )
+
+
 class TestDebounce:
     def test_each_side_times_from_0_and_keeps_its_td(self, runner_factory):
         Valve = Bool("Valve")

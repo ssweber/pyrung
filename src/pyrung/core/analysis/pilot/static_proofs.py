@@ -182,9 +182,9 @@ def _pointer_written_blocks(program: Any) -> frozenset[Block]:
 def _constant_preset(preset: Preset) -> int | None:
     """Return the constant in *preset*, or None for a tag."""
     match preset:
-        case ConstArg(value=int() as value):
+        case ConstArg(value=value):
             return value
-        case ConstArg() | TagArg():
+        case TagArg():
             return None
         case _:
             assert_never(preset)

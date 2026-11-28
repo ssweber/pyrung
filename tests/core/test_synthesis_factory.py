@@ -12,7 +12,7 @@ from pyrung.core.condition import BitCondition, CompareEq
 from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
 from pyrung.core.instruction.control import FunctionCallInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.operands import held
+from pyrung.core.instruction.operands import operand_object
 from pyrung.core.instruction.out_variants import DebounceInstruction, FlasherInstruction
 from pyrung.core.synthesis import (
     Synthesis,
@@ -45,7 +45,9 @@ def test_bool_feedback_rungs_are_one_debounce_coil() -> None:
     (coil,) = rung._instructions
     assert isinstance(coil, DebounceInstruction)
     assert coil.target.tag is Fb
-    assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
+    assert tuple(
+        arg.tag for arg in (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc)
+    ) == tuple(timers.values())
     assert (coil.on_preset.value, coil.off_preset.value, coil.unit.name) == (
         200,
         100,
@@ -80,7 +82,9 @@ def test_pulse_feedback_rungs_are_one_flasher_coil() -> None:
     (coil,) = rung._instructions
     assert isinstance(coil, FlasherInstruction)
     assert coil.target.tag is Fb
-    assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
+    assert tuple(
+        arg.tag for arg in (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc)
+    ) == tuple(timers.values())
     # One unit for both sides, as on a CLICK: 8 ms rounds up to a second.
     assert (coil.on_preset.value, coil.off_preset.value, coil.unit.name) == (1, 40, "Ts")
 
@@ -127,8 +131,8 @@ def test_function_rung_declares_dataflow() -> None:
     rung = function_rung(_fn, ins={"cur": cur}, outs={"result": out}, guard=BitCondition(en))
     (instr,) = rung._instructions
     assert isinstance(instr, FunctionCallInstruction)
-    assert {key: held(value) for key, value in instr._ins.items()} == {"cur": cur}
-    assert {key: held(value) for key, value in instr._outs.items()} == {"result": out}
+    assert {key: operand_object(value) for key, value in instr._ins.items()} == {"cur": cur}
+    assert {key: operand_object(value) for key, value in instr._outs.items()} == {"result": out}
     assert rung._conditions  # armed by the guard
 
 

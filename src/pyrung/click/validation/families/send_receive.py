@@ -11,6 +11,7 @@ from typing import Any
 
 from laddercodec import Receive, Send
 
+from pyrung.core.instruction.operands import TagArg, operand_object
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, is_modbus_status_tag
 from pyrung.core.tag import Tag
 from pyrung.core.validation.render import Call, call_of, operand_name
@@ -20,10 +21,8 @@ from ..fields import (
     Operand,
     Unbuildable,
     _address_text,
-    operand_object,
     refusals_of,
     render_arg,
-    render_operand,
 )
 from ..resolve import _ResolutionCache
 
@@ -110,12 +109,12 @@ def _operands(instruction: Any) -> list[Operand]:
     word = "source" if local == "source" else "destination"
     operands = [Operand(local, word, ((local, getattr(instruction, local)),))]
     device_id = instruction.device_id
-    if isinstance(device_id, Tag):
+    if isinstance(device_id, TagArg):
         operands.append(Operand("target", "device id", (("device_id", device_id),)))
     for name in (busy, *_STATUS_BITS):
         bit = getattr(instruction, name)
         # A status bit that the author left off holds a hidden tag, which CLICK never sees.
-        if not is_modbus_status_tag(bit.name):
+        if not is_modbus_status_tag(bit.tag.name):
             operands.append(Operand(name, f"{name.replace('_', ' ')} flag", ((name, bit),)))
     return operands
 
@@ -193,8 +192,8 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
         raise Unbuildable from exc
     for name in (busy, *_STATUS_BITS):
         bit = getattr(instruction, name)
-        if not is_modbus_status_tag(bit.name):
-            kwargs[name] = render_operand(exporter, bit, name, instruction)
+        if not is_modbus_status_tag(bit.tag.name):
+            kwargs[name] = render_arg(exporter, bit, name, instruction)
     if instruction.word_swap:
         kwargs["word_swap"] = "1"
     token = exporter._fn(verb, **kwargs)

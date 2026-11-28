@@ -146,6 +146,23 @@ def test_a_copy_shows_only_the_converter_that_its_author_wrote() -> None:
     assert render_instruction(copy, "")[0] == "copy(Count, Shown)"
 
 
+def test_a_math_of_one_operand_shows_the_operand() -> None:
+    from pyrung import Int, immediate
+    from pyrung.click import ClickBlocks
+    from pyrung.core.instruction import CalcInstruction
+    from pyrung.core.validation.render import render_instruction
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, *_ = ClickBlocks()
+    for source, shown in [
+        (ds[1], "DS1"),
+        (ds[Int("Ptr")], "DS[Ptr]"),
+        (immediate(xd[1]), "XD1"),
+        (5, "5"),
+    ]:
+        calc = CalcInstruction(source, ds[5])
+        assert render_instruction(calc, "")[0] == f"math({shown}, DS5)"
+
+
 def test_pack_and_unpack_render_both_operands() -> None:
     from pyrung import Block, Dint, TagType
     from pyrung.core.instruction import (
@@ -379,21 +396,3 @@ def test_a_list_argument_keeps_the_span_of_each_item() -> None:
     # A call that has no such item marks the whole list.
     assert call.span("outputs", 2) == (13, 12)
     assert call.span("reset", 0) == (33, 3)
-
-
-def test_a_declared_list_operand_shows_each_item() -> None:
-    from pyrung import Int
-    from pyrung.core.instruction import CopyInstruction
-    from pyrung.core.validation.render import argument_span, declared_call
-
-    # No builder accepts a list operand. copy(), fill(), out() and pack_bits() each refuse
-    # one. A stand-in class with the name of a Copy holds one, to test the list branch of
-    # declared_call().
-    def hold(self, source, dest) -> None:
-        vars(self).update(source=source, dest=dest, convert=None, oneshot=False)
-
-    stand_in = type("CopyInstruction", (CopyInstruction,), {"__init__": hold})
-    copy = stand_in(5, [Int("A"), Int("Bee")])
-    assert declared_call(copy).text == "copy(5, [A, Bee])"
-    assert argument_span(copy, 1) == ("copy(5, [A, Bee])", (8, 8))
-    assert argument_span(copy, 1, 1) == ("copy(5, [A, Bee])", (12, 3))

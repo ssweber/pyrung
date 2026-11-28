@@ -407,8 +407,10 @@ def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
             _sr.send(target=_TARGET, remote_start="DS2", source=Source)
 
     first, second = logic.rungs[0]._instructions
-    assert first.success is Success
-    hidden = [first.sending, first.error, first.exception_response, second.sending]
+    assert first.success.tag is Success
+    hidden = [
+        arg.tag for arg in (first.sending, first.error, first.exception_response, second.sending)
+    ]
     assert all(_sr.is_modbus_status_tag(tag.name) for tag in hidden)
     assert len({tag.name for tag in hidden}) == len(hidden)
     assert first._io_key != second._io_key
@@ -416,7 +418,7 @@ def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
     runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Source": 42})
     runner.step()  # submit
-    assert runner.current_state.tags[first.sending.name] is True
+    assert runner.current_state.tags[first.sending.tag.name] is True
     for future in futures:
         future.set_result(_sr._RequestResult(ok=True, exception_code=0))
     runner.patch({"Enable": True})
@@ -438,7 +440,7 @@ def test_two_programs_in_one_plc_each_replay_their_own_receive(monkeypatch: pyte
     first, second = build("DestA"), build("DestB")
     runner = PLC([*first.rungs, *second.rungs])
     a, b = (rung._instructions[0] for rung in (*first.rungs, *second.rungs))
-    assert a.receiving.name != b.receiving.name
+    assert a.receiving.tag.name != b.receiving.tag.name
     assert a._io_key != b._io_key
 
     runner.step()  # submit both

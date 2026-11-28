@@ -87,17 +87,13 @@ class Rung:
         for cond in conditions:
             self._conditions.append(_as_condition(cond))
 
-    def add_instruction(self, instruction: Instruction, *, call: str | None = None) -> None:
+    def add_instruction(self, instruction: Instruction) -> None:
         """Add an instruction to execute when conditions are true.
 
         A box with pins (:meth:`Instruction.has_pins`) ends its rung: it is
         refused beside any other output of the rung's wire tree (the trunk and
         every branch), as CLICK draws its pins from the box's own wire.
-
-        If an operand of the instruction does not fit, the error names *call*, the call
-        that built the instruction, such as ``"calc()"``.
         """
-        instruction.check_operands(call)
         terminal = self._terminal_instruction
         if terminal is not None:
             if terminal.has_pins() and not self._loop_capture:

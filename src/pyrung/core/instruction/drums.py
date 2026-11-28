@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, assert_never, cast
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.crossing import Cmp, Constraint, Eq
@@ -121,7 +121,8 @@ def _resolve_step_value(step: Preset | None, ctx: ScanContext) -> int | None:
         case TagArg(tag=tag):
             return _read_step_tag_value(ctx, tag)
         case ConstArg(value=value):
-            return int(cast(int, value))
+            # The parse keeps a bool, such as jump(step=True).  int() makes it step 1.
+            return int(value)
         case _:
             assert_never(step)
 
@@ -131,7 +132,8 @@ def _resolve_preset_value(preset: Preset, ctx: ScanContext) -> int:
         case TagArg(tag=tag):
             return _read_step_tag_value(ctx, tag, fallback=0)
         case ConstArg(value=value):
-            return int(cast(int, value))
+            # The parse keeps a bool preset.  int() makes it 0 or 1.
+            return int(value)
         case _:
             assert_never(preset)
 

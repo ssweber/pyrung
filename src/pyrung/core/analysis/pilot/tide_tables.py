@@ -21,8 +21,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, assert_never
 
-from pyrung.core.analysis.pilot.program_facts import copy_dest_name
-from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, plain_tag_name
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 if TYPE_CHECKING:
@@ -478,7 +477,7 @@ def table_operand_from_copy(
     for instruction in rung._instructions:
         if not isinstance(instruction, CopyInstruction):
             continue
-        if copy_dest_name(instruction.dest) != tag:
+        if plain_tag_name(instruction.dest) != tag:
             continue
         match instruction.source:
             case PointerArg(ref=ref):

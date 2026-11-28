@@ -21,7 +21,7 @@ from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import rung_label
 from pyrung.core.validation.walker import ProgramLocation
 
-from .families.math import _formula_expression
+from .families.math import formula_expression
 from .findings import (
     CLK_EXPR_ONLY_IN_MATH,
     CLK_FORLOOP_INNER_ONESHOT,
@@ -562,7 +562,7 @@ def _evaluate_instruction_portability(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
     if instruction_type == "CalcInstruction":
-        if _expr_contains_floor_div(_formula_expression(instruction.source_expression)):
+        if _expr_contains_floor_div(formula_expression(instruction.source_expression)):
             location = _instruction_location(base_location, "instruction.expression")
             location_text = _format_location(location)
             findings.append(

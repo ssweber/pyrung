@@ -28,8 +28,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.operands import TagArg
-from pyrung.core.instruction.resolvers import operand_object
+from pyrung.core.instruction.operands import operand_object
 from pyrung.core.rung import Rung
 
 if TYPE_CHECKING:
@@ -160,7 +159,7 @@ def bool_feedback_rungs(
 
     on_preset, off_preset, unit, _ = coil_timer(on_delay_ms, off_delay_ms)
     coil = DebounceInstruction(
-        TagArg(fb_tag),
+        fb_tag,
         on_done=on_done,
         on_acc=on_acc,
         on_preset=on_preset,
@@ -263,7 +262,7 @@ def pulse_feedback_rungs(
 
     on_preset, off_preset, unit, _ = coil_timer(on_dwell_ms, off_dwell_ms)
     coil = FlasherInstruction(
-        TagArg(fb_tag),
+        fb_tag,
         on_done=on_done,
         on_acc=on_acc,
         on_preset=on_preset,
@@ -299,7 +298,7 @@ def timed_feedback_rungs(
 
     preset, unit, _ = plant_timer(on_ms)
     coil = TimedInstruction(
-        TagArg(fb_tag),
+        fb_tag,
         timer_done=timer_done,
         timer_acc=timer_acc,
         on_preset=preset,
@@ -319,7 +318,7 @@ def toggle_feedback_rungs(*, enable: Condition, fb_tag: Tag) -> list[Rung]:
     """
     from pyrung.core.instruction.out_variants import ToggleInstruction
 
-    return [_rung_holding(enable, ToggleInstruction(TagArg(fb_tag), enable))]
+    return [_rung_holding(enable, ToggleInstruction(fb_tag, enable))]
 
 
 def copy_hold_rung(

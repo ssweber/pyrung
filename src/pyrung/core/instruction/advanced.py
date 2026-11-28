@@ -68,7 +68,7 @@ class _SearchRange(RangeOperand):
 
         The error names the comparison, because the range has no argument of its own.
         """
-        if self.accepts(value):
+        if self._accepts(value):
             return None
         return TypeError(
             f"{call} comparison must use a .select() range, got {type(value).__name__}."
@@ -147,6 +147,8 @@ class SearchInstruction(OneShotMixin, Instruction):
                 "search() expects a comparison expression, "
                 f"e.g. DS.select(1, 10) >= 100, got {type(comparison).__name__}"
             )
+        self.found: TagArg = _FOUND.parse_tag("search()", "found", found)
+        self.result: TagArg = _RESULT.parse_tag("search()", "result", result)
         if comparison.operator not in _SEARCH_OPERATOR_MAP:
             raise ValueError(
                 f"Invalid search condition: {comparison.operator!r}. "
@@ -158,8 +160,6 @@ class SearchInstruction(OneShotMixin, Instruction):
         # The builder does not check the value.  The scan raises for a value that it
         # cannot compare.
         self.value: Value | Span = parse_value(comparison.value)
-        self.found: TagArg = _FOUND.parse_tag("search()", "found", found)
-        self.result: TagArg = _RESULT.parse_tag("search()", "result", result)
 
         OneShotMixin.__init__(self, oneshot)
         self.condition = comparison.operator
@@ -171,9 +171,6 @@ class SearchInstruction(OneShotMixin, Instruction):
             self._fault_writes = ("fault.address_error",)
         self.continuous = continuous
         self._compare = _SEARCH_OPERATOR_MAP[comparison.operator]
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -383,9 +380,6 @@ class ShiftInstruction(Instruction):
             raise ValueError("shift requires a clock condition")
         if self.reset_condition is None:
             raise ValueError("shift requires a reset condition")
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
         bit_range = self.bit_range

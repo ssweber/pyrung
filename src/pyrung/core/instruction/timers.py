@@ -16,7 +16,7 @@ from .advance import (
     recorded_prepare,
 )
 from .base import Instruction
-from .operands import Preset, TagArg, inner
+from .operands import Preset, TagArg, operand_object
 from .utils import (
     elapsed_units,
     instruction_condition_view,
@@ -182,7 +182,7 @@ class OnDelayInstruction(Instruction):
             accumulator=self.accumulator.tag,
             done=self.done_bit.tag,
             progress=(ConditionDemand(to_condition(tt_bit)) if tt_bit is not None else None),
-            preset=inner(self.preset),
+            preset=operand_object(self.preset),
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
             advance=ConditionDemand(self.enable_condition),
@@ -321,7 +321,7 @@ class OffDelayInstruction(Instruction):
             accumulator=self.accumulator.tag,
             done=self.done_bit.tag,
             progress=(ConditionDemand(to_condition(tt_bit)) if tt_bit is not None else None),
-            preset=inner(self.preset),
+            preset=operand_object(self.preset),
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
             advance=ConditionDemand(self.enable_condition, False),

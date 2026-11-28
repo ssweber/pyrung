@@ -18,7 +18,7 @@ from pyrung.core.instruction.conversions import (
     _render_text_from_numeric,
     copy_source_kind,
 )
-from pyrung.core.instruction.operands import ConstArg, TagArg, inner
+from pyrung.core.instruction.operands import ConstArg, TagArg, operand_object
 from pyrung.core.memory_block import _element_name, _store_block, block_room
 from pyrung.core.tag import TagType
 from pyrung.core.validation.walker import ProgramLocation
@@ -129,7 +129,7 @@ def _evaluate_wide_copy_constant(
         return []
     if not isinstance(value, ConstArg) or copy_source_kind(value) != LITERAL:
         return []
-    resolution = resolver.resolve_operand_slots(inner(dest))
+    resolution = resolver.resolve_operand_slots(operand_object(dest))
     if resolution.unresolved:
         return []
     dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in resolution.slots))
@@ -284,7 +284,7 @@ def constant_text_past_bank_advice(instruction: Any, resolver: _ResolutionCache)
     if type(instruction).__name__ != "CopyInstruction":
         return None
     written = _fewest_elements_written(instruction)
-    resolution = resolver.resolve_operand_slots(inner(instruction.dest))
+    resolution = resolver.resolve_operand_slots(operand_object(instruction.dest))
     if written is None or resolution.unresolved or len(resolution.slots) != 1:
         return None
     address = resolution.slots[0].address
@@ -417,7 +417,7 @@ def _evaluate_done_bits(
     findings: list[ClickFinding] = []
     for done_field, _acc_field in pairs:
         location = _instruction_location(base_location, f"instruction.{done_field}")
-        resolution = resolver.resolve_operand_slots(getattr(instruction, done_field))
+        resolution = resolver.resolve_operand_slots(getattr(instruction, done_field).tag)
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "operand"))
             continue
@@ -456,7 +456,7 @@ def _evaluate_timer_pairs(
     pairs = family.timer_pairs.get(type(instruction).__name__, ())
     findings = _evaluate_done_bits(instruction, pairs, base_location, profile, mode, resolver)
     for done_field, acc_field in pairs:
-        done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
+        done, acc = getattr(instruction, done_field).tag, getattr(instruction, acc_field).tag
         done_slots = resolver.resolve_operand_slots(done).slots
         acc_slots = resolver.resolve_operand_slots(acc).slots
         if len(done_slots) != 1 or len(acc_slots) != 1:

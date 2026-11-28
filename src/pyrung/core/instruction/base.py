@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -12,7 +11,6 @@ from pyrung.core.instruction.operands import (
     NumberInto,
     Operand,
     TextInto,
-    check_fields,
 )
 
 if TYPE_CHECKING:
@@ -112,34 +110,6 @@ class Instruction(ABC):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """Execute this instruction within the given context (internal)."""
         pass
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Raise an error for an operand that ``_operands`` or ``_operand_rules`` refuses.
-
-        ``Rung.add_instruction`` calls this method, so the error comes when the program
-        is built.  The error names *call*, the call that the author wrote, such as
-        ``"calc()"``.  *call* defaults to the call that usually builds the instruction.
-        """
-        if not self._operands and not self._operand_rules:
-            return
-        if call is None:
-            from pyrung.core.rung import dsl_call
-
-            call = dsl_call(self)
-        names = dict.fromkeys(self._operands)
-        for rule in self._operand_rules:
-            names.update(dict.fromkeys(rule.fields))
-        self.check_values(call, {name: getattr(self, name) for name in names})
-
-    @classmethod
-    def check_values(cls, call: str, values: Mapping[str, Any]) -> None:
-        """Raise an error for a value in *values*, by field name, that the class refuses.
-
-        A builder such as ``shift()`` calls this method before it builds the instruction.
-        The error then comes from the line that holds the wrong operand.  The method
-        checks only the fields in *values*.
-        """
-        check_fields(cls._operands, cls._operand_rules, call, values)
 
     @classmethod
     def walker_fields(cls) -> tuple[str, ...]:

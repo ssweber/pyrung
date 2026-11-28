@@ -16,7 +16,7 @@ from pyrung.core.instruction.control import (
 )
 from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import Tag
 from pyrung.core.validation._common import WriteSite, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.severity import Severity
@@ -73,8 +73,6 @@ def _direct_scalar_target(instr: Any) -> Tag | None:
     if len(targets) != 1:
         return None
     target = targets[0]
-    if isinstance(target, ImmediateRef):
-        target = target.value
     return target if isinstance(target, Tag) else None
 
 

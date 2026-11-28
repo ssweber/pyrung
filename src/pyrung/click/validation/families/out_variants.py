@@ -5,11 +5,11 @@ laddercodec's OutVariant checks them.
 
 from __future__ import annotations
 
-from typing import Any, assert_never
+from typing import Any
 
 from laddercodec import OutVariant, OutVariantKind
 
-from pyrung.core.instruction.operands import ConstArg, Preset, TagArg
+from pyrung.core.instruction.operands import ConstArg, Preset, TagArg, operand_object
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.render import Call, operand_name
 
@@ -74,20 +74,9 @@ def _advice(code: str, field: str, instruction: Any, resolver: _ResolutionCache)
     if code == "constant-out-of-range" and field in _PRESET_FIELDS:
         preset: Preset = getattr(instruction, _PRESET_FIELDS[field])
         match preset:
-            case ConstArg(value=int() as value) if value <= 0:
+            case ConstArg(value=value) if value <= 0:
                 return "Pass a DS tag as the preset. A register preset takes any value."
     return None
-
-
-def _preset_value(preset: Preset) -> Any:
-    """Return the tag or the constant that *preset* holds, as the author passed it."""
-    match preset:
-        case TagArg(tag=tag):
-            return tag
-        case ConstArg(value=value):
-            return value
-        case _:
-            assert_never(preset)
 
 
 def _operands(instruction: Any) -> list[Operand]:
@@ -97,12 +86,14 @@ def _operands(instruction: Any) -> list[Operand]:
         return list(declared_operands(instruction, {"target": "target"}))
     found = [Operand(0, "target", (("target", instruction.target.tag),))]
     for side, acc, preset in _SIDES[name]:
-        found.append(Operand(f"{side}_acc", f"{side} timer", ((acc, getattr(instruction, acc)),)))
+        found.append(
+            Operand(f"{side}_acc", f"{side} timer", ((acc, getattr(instruction, acc).tag),))
+        )
         found.append(
             Operand(
                 f"{side}_preset",
                 f"{side} preset",
-                ((preset, _preset_value(getattr(instruction, preset))),),
+                ((preset, operand_object(getattr(instruction, preset))),),
             )
         )
     return found
@@ -138,14 +129,14 @@ def _call(instruction: Any) -> Call:
     for side, acc, preset in _SIDES[name]:
         if name == "TimedInstruction":
             text += ", "
-            add("on_acc", _owner(instruction.timer_acc), "positional")
+            add("on_acc", _owner(instruction.timer_acc.tag), "positional")
             text += ", "
-            add("on_preset", operand_name(_preset_value(instruction.on_preset)), "positional")
+            add("on_preset", operand_name(operand_object(instruction.on_preset)), "positional")
             continue
         text += f", {side}=("
-        add(f"{side}_acc", _owner(getattr(instruction, acc)), "keyword")
+        add(f"{side}_acc", _owner(getattr(instruction, acc).tag), "keyword")
         text += ", "
-        add(f"{side}_preset", operand_name(_preset_value(getattr(instruction, preset))), "keyword")
+        add(f"{side}_preset", operand_name(operand_object(getattr(instruction, preset))), "keyword")
         text += ")"
     if instruction.unit is not TimeUnit.Tms:
         text += ", unit="
@@ -170,7 +161,7 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     values: dict[str, Any] = {}
     for side, acc, preset in _SIDES[name]:
         values[f"{side}_acc"] = render_operand(
-            exporter, getattr(instruction, acc), acc, instruction
+            exporter, getattr(instruction, acc).tag, acc, instruction
         )
         values[f"{side}_preset"] = render_preset(
             exporter, getattr(instruction, preset), preset, instruction

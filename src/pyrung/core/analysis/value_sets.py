@@ -14,7 +14,7 @@ import math
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from typing import Any, assert_never
 
-from pyrung.core.analysis.write_sites import instruction_write_targets, operand_leaf
+from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.condition import (
     AllCondition,
     CompareEq,
@@ -28,7 +28,14 @@ from pyrung.core.expression import CALC_FAULTS, Expression
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.conversions import _truncate_to_tag_type
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, Value
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    TagArg,
+    Value,
+    operand_object,
+)
 from pyrung.core.instruction.resolvers import resolve_tag_or_value_ctx
 from pyrung.core.memory_block import (
     Block,
@@ -58,7 +65,7 @@ def _scan(value: Any) -> tuple[set[str], list[Any]]:
     seen: set[int] = set()
 
     def walk(current: Any) -> None:
-        current = operand_leaf(current)
+        current = operand_object(current)
         if current is None or isinstance(current, (bool, int, float, str, bytes, bytearray)):
             return
         if id(current) in seen:
@@ -103,12 +110,7 @@ def _scan(value: Any) -> tuple[set[str], list[Any]]:
 
 
 def _targets(instr: Any) -> list[Any]:
-    out = []
-    for target in instruction_write_targets(instr):
-        while isinstance(target, ImmediateRef):
-            target = target.value
-        out.append(target)
-    return out
+    return list(instruction_write_targets(instr))
 
 
 def _is_plain_copy(instr: Any) -> bool:

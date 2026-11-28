@@ -242,11 +242,6 @@ def immediate_misplaced_text(at: str = " here") -> str:
     return f"immediate() is not allowed{at}. CLICK accepts immediate() only on a contact or a coil."
 
 
-def immediate_coil_operand_text(got: str, at: str = "") -> str:
-    """Return the message for immediate() around a coil operand that is no tag or range."""
-    return f"immediate() on a coil{at} needs a tag or a block range, got {got}."
-
-
 def immediate_coil_not_y_text(found: str) -> str:
     """Return the message for an immediate coil that is mapped to *found*, not to Y."""
     return (

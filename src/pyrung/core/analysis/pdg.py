@@ -16,7 +16,7 @@ from pyrung.core.instruction.advanced import SearchInstruction
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.instruction.operands import RangeArg, TagArg
+from pyrung.core.instruction.operands import RangeArg, TagArg, operand_object
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -35,7 +35,6 @@ from .write_sites import (
     instruction_fault_writes,
     instruction_partial_write_targets,
     instruction_write_targets,
-    operand_leaf,
 )
 
 if TYPE_CHECKING:
@@ -1121,7 +1120,7 @@ def _extract_tag_names(
     seen: set[int] = set()
 
     def walk(current: Any) -> None:
-        current = operand_leaf(current)
+        current = operand_object(current)
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -1226,7 +1225,7 @@ def _extract_write_targets(
     seen: set[int] = set()
 
     def walk_target(current: Any) -> None:
-        current = operand_leaf(current)
+        current = operand_object(current)
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -1454,8 +1453,7 @@ def _instruction_may_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
     may: set[str] = set()
     for target in instruction_write_targets(instr):
         names = _extract_write_targets(target, tag_refs)[0]
-        leaf = target.value if isinstance(target, ImmediateRef) else target
-        dynamic = isinstance(leaf, IndirectRef | IndirectExprRef | IndirectBlockRange)
+        dynamic = isinstance(target, IndirectRef | IndirectExprRef | IndirectBlockRange)
         if any(target is p for p in partial) or (dynamic and len(names) > 1):
             may |= names
         else:
@@ -2112,7 +2110,7 @@ def _visit_indirect_refs(
 
     *visit_range*, when given, is also called on every ``IndirectBlockRange``.
     """
-    obj = operand_leaf(obj)
+    obj = operand_object(obj)
     if obj is None or isinstance(
         obj,
         (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType, Tag, Block),
@@ -2214,8 +2212,6 @@ def _named_write_dests(instr: Any) -> list[str]:
     """
     out: list[str] = []
     for dest in instruction_write_targets(instr):
-        if isinstance(dest, ImmediateRef):
-            dest = dest.value
         if isinstance(dest, Tag):
             out.append(dest.name)
     return out
@@ -2274,8 +2270,6 @@ def _collect_indirect_writes(
     def _check_instruction(instr: Any, node_index: int) -> None:
         cls = type(instr)
         for dest in instruction_write_targets(instr):
-            if isinstance(dest, ImmediateRef):
-                dest = dest.value
             if not isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
                 continue
             block = dest.block

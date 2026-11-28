@@ -31,10 +31,11 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
+    operand_object,
 )
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.memory_block import BlockRange
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import TagType
 from pyrung.core.validation.render import operand_name
 
 from ._loop_items import is_own_rung, loop_item_rung
@@ -75,7 +76,6 @@ class _InstructionMixin:
             path: str,
             source: Any,
             allow_immediate: bool = False,
-            immediate_context: str = "",
         ) -> str: ...
         def _render_arg(self, arg: Value | Span, *, path: str, source: Any) -> str: ...
         def _render_block_range(
@@ -246,11 +246,11 @@ class _InstructionMixin:
         it.
         """
         if instruction_type == "TimedInstruction":
-            phases = [("on", instruction.timer_acc, instruction.on_preset)]
+            phases = [("on", instruction.timer_acc.tag, instruction.on_preset)]
         else:
             phases = [
-                ("on", instruction.on_acc, instruction.on_preset),
-                ("off", instruction.off_acc, instruction.off_preset),
+                ("on", instruction.on_acc.tag, instruction.on_preset),
+                ("off", instruction.off_acc.tag, instruction.off_preset),
             ]
         kwargs: dict[str, str] = {}
         for side, acc, preset in phases:
@@ -317,7 +317,7 @@ class _InstructionMixin:
                 ),
                 source=instruction,
             )
-        if _plain_text_converter(_authored_value(value), tag) is not None:
+        if _plain_text_converter(operand_object(value), tag) is not None:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
@@ -875,7 +875,7 @@ class _InstructionMixin:
         """
         rendered: dict[str, str] = {}
         for name in (busy_name, "success", "error", "exception_response"):
-            tag = getattr(instruction, name)
+            tag = getattr(instruction, name).tag
             if not is_modbus_status_tag(tag.name):
                 rendered[name] = self._render_operand(
                     tag, path=f"{path}.{name}", source=instruction
@@ -886,13 +886,13 @@ class _InstructionMixin:
         """Return the target constructor, with a DS device ID written as its address."""
         from pyrung.core.instruction.send_receive import ModbusRtuTarget, ModbusTcpTarget
 
-        device_id = instruction.device_id
-        if isinstance(device_id, Tag):
-            device_id_text = self._render_operand(
-                device_id, path=f"{path}.device_id", source=instruction
-            )
-        else:
-            device_id_text = str(device_id)
+        match instruction.device_id:
+            case TagArg(tag=tag):
+                device_id_text = self._render_operand(
+                    tag, path=f"{path}.device_id", source=instruction
+                )
+            case ConstArg(value=value):
+                device_id_text = str(value)
         raw_target = instruction.raw_target
         if isinstance(raw_target, ModbusRtuTarget):
             parts = [
@@ -929,25 +929,6 @@ class _InstructionMixin:
         if not parts:
             return f"{name}()"
         return f"{name}({','.join(parts)})"
-
-
-def _authored_value(value: Value) -> Any:
-    """Return the tag, pointer, expression or constant inside *value*.
-
-    ``_plain_text_converter`` reads the operand that the author passed. It finds the same
-    conversion for a tag with or without ``immediate()``.
-    """
-    match value:
-        case TagArg(tag=tag):
-            return tag
-        case PointerArg(ref=ref):
-            return ref
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=constant):
-            return constant
-        case _:
-            assert_never(value)
 
 
 # ---- External target / remote-start helpers ----

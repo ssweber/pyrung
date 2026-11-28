@@ -14,9 +14,9 @@ CLICK Out coil claims the whole timer number and never turns T<n> on
 off.  The ``*_done`` fields only name the claimed timer, for the Click mapping
 checks.
 
-Each variant holds its target as a ``TagArg``.  Its builder, such as ``toggle()``, parses
-the target before it builds the instruction (:mod:`pyrung.core.instruction.operands`).
-Each variant with a timer parses its presets into a ``Preset`` itself.
+Each variant parses its operands in ``__init__`` (:mod:`pyrung.core.instruction.operands`).
+It holds its target and each timer's Done and Acc as a ``TagArg``, and each preset as a
+``Preset``.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.crossing import Eq
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import _parse_time_unit
 
 from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, constraint_holds
 from .base import Instruction
-from .operands import Preset, TagArg
+from .operands import CoilBitOperand, Preset, TagArg
 from .utils import elapsed_units, parse_preset, resolve_preset_ctx, to_condition
 
 if TYPE_CHECKING:
@@ -42,6 +42,10 @@ if TYPE_CHECKING:
     from pyrung.core.time_mode import TimeUnit
 
 _ACC_MAX = 32767
+
+# CLICK's Debounce, Flasher and Timed coils have no Immediate option.  Toggle has one.
+_TOGGLE_TARGET = CoilBitOperand()
+_PLAIN_TARGET = CoilBitOperand(immediate=False)
 
 # A flasher's phase (memory ``_flash_phase``).  A ``_NEXT`` phase starts on the next scan.  That
 # scan clears the phase's accumulator before it ticks.
@@ -89,8 +93,8 @@ class ToggleInstruction(Instruction):
     _call_operands = (("target", "target"),)
     _call_keywords = ()
 
-    def __init__(self, target: TagArg, enable_condition: Any = None):
-        self.target = target
+    def __init__(self, target: Tag | ImmediateRef, enable_condition: Any = None):
+        self.target: TagArg = _TOGGLE_TARGET.parse("toggle()", "target", target)
         self.enable_condition = to_condition(enable_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -146,7 +150,7 @@ class DebounceInstruction(Instruction):
 
     def __init__(
         self,
-        target: TagArg,
+        target: Tag,
         *,
         on_done: Tag,
         on_acc: Tag,
@@ -157,14 +161,15 @@ class DebounceInstruction(Instruction):
         unit: str = "Tms",
         enable_condition: Any = None,
     ):
+        parsed = _PLAIN_TARGET.parse("debounce()", "target", target)
         on: Preset = parse_preset(on_preset, label="debounce() on preset")
         off: Preset = parse_preset(off_preset, label="debounce() off preset")
-        self.target = target
-        self.on_done = on_done
-        self.on_acc = on_acc
+        self.target: TagArg = parsed
+        self.on_done = TagArg(on_done)
+        self.on_acc = TagArg(on_acc)
         self.on_preset = on
-        self.off_done = off_done
-        self.off_acc = off_acc
+        self.off_done = TagArg(off_done)
+        self.off_acc = TagArg(off_acc)
         self.off_preset = off
         self.unit = _parse_time_unit(unit)
         self.enable_condition = to_condition(enable_condition)
@@ -173,17 +178,17 @@ class DebounceInstruction(Instruction):
         rung_key = self.memory_key("_debounce_rung")
         was_enabled = bool(ctx.get_memory(rung_key, False))
         ctx.set_memory(rung_key, bool(enabled))
-        on_frac = f"_frac:{self.on_acc.name}"
-        off_frac = f"_frac:{self.off_acc.name}"
+        on_frac = f"_frac:{self.on_acc.tag.name}"
+        off_frac = f"_frac:{self.off_acc.tag.name}"
         if enabled:
             if not was_enabled:
                 # A rise starts the on side from 0.
-                ctx.set_tags({self.on_acc.name: 0})
+                ctx.set_tags({self.on_acc.tag.name: 0})
                 ctx.set_memory(on_frac, 0)
-            acc_value, frac = _tick(ctx, self.on_acc, self.unit)
+            acc_value, frac = _tick(ctx, self.on_acc.tag, self.unit)
             ctx.set_memory(on_frac, frac)
             ctx.set_memory(off_frac, 0)
-            tags: dict[str, Any] = {self.on_acc.name: acc_value, self.off_acc.name: 0}
+            tags: dict[str, Any] = {self.on_acc.tag.name: acc_value, self.off_acc.tag.name: 0}
             if acc_value >= resolve_preset_ctx(self.on_preset, ctx):
                 tags[self.target.tag.name] = True
             ctx.set_tags(tags)
@@ -194,12 +199,12 @@ class DebounceInstruction(Instruction):
             ctx.set_memory(off_frac, ctx.get_memory(off_frac, 0))
             return
         # The off side compares what it had reached before this scan, and not on the fall.
-        timed_out = not was_enabled and ctx.get_tag(self.off_acc.name, 0) >= resolve_preset_ctx(
+        timed_out = not was_enabled and ctx.get_tag(self.off_acc.tag.name, 0) >= resolve_preset_ctx(
             self.off_preset, ctx
         )
-        acc_value, frac = _tick(ctx, self.off_acc, self.unit)
+        acc_value, frac = _tick(ctx, self.off_acc.tag, self.unit)
         ctx.set_memory(off_frac, frac)
-        tags = {self.off_acc.name: acc_value}
+        tags = {self.off_acc.tag.name: acc_value}
         if timed_out:
             tags[self.target.tag.name] = False
         ctx.set_tags(tags)
@@ -254,7 +259,7 @@ class FlasherInstruction(Instruction):
 
     def __init__(
         self,
-        target: TagArg,
+        target: Tag,
         *,
         on_done: Tag,
         on_acc: Tag,
@@ -265,21 +270,22 @@ class FlasherInstruction(Instruction):
         unit: str = "Tms",
         enable_condition: Any = None,
     ):
+        parsed = _PLAIN_TARGET.parse("flasher()", "target", target)
         on: Preset = parse_preset(on_preset, label="flasher() on preset")
         off: Preset = parse_preset(off_preset, label="flasher() off preset")
-        self.target = target
-        self.on_done = on_done
-        self.on_acc = on_acc
+        self.target: TagArg = parsed
+        self.on_done = TagArg(on_done)
+        self.on_acc = TagArg(on_acc)
         self.on_preset = on
-        self.off_done = off_done
-        self.off_acc = off_acc
+        self.off_done = TagArg(off_done)
+        self.off_acc = TagArg(off_acc)
         self.off_preset = off
         self.unit = _parse_time_unit(unit)
         self.enable_condition = to_condition(enable_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        on_frac = f"_frac:{self.on_acc.name}"
-        off_frac = f"_frac:{self.off_acc.name}"
+        on_frac = f"_frac:{self.on_acc.tag.name}"
+        off_frac = f"_frac:{self.off_acc.tag.name}"
         phase_key = self.memory_key("_flash_phase")
         if not enabled:
             # Both accumulators (and their remainders) freeze where they are.
@@ -297,21 +303,21 @@ class FlasherInstruction(Instruction):
         if phase == _FLASH_IDLE:
             # Coming back always starts an on phase, both accumulators from 0.
             phase = _FLASH_ON
-            ctx.set_tags({self.on_acc.name: 0, self.off_acc.name: 0})
+            ctx.set_tags({self.on_acc.tag.name: 0, self.off_acc.tag.name: 0})
             ctx.set_memory(on_frac, 0)
             ctx.set_memory(off_frac, 0)
         elif phase in (_FLASH_ON_NEXT, _FLASH_OFF_NEXT):
             # The phase that starts now runs from 0, and the other's accumulator holds.
             phase = _FLASH_ON if phase == _FLASH_ON_NEXT else _FLASH_OFF
-            starting = self.on_acc if phase == _FLASH_ON else self.off_acc
+            starting = self.on_acc.tag if phase == _FLASH_ON else self.off_acc.tag
             ctx.set_tags({starting.name: 0})
             ctx.set_memory(f"_frac:{starting.name}", 0)
         # The coil shows the phase that runs this scan, even one that ends on it.
         tags: dict[str, Any] = {self.target.tag.name: phase == _FLASH_ON}
         if phase == _FLASH_ON:
-            acc, preset, other = self.on_acc, on_preset, self.off_acc
+            acc, preset, other = self.on_acc.tag, on_preset, self.off_acc.tag
         else:
-            acc, preset, other = self.off_acc, off_preset, self.on_acc
+            acc, preset, other = self.off_acc.tag, off_preset, self.on_acc.tag
         acc_value, frac = _tick(ctx, acc, self.unit)
         tags[acc.name] = acc_value
         if acc_value >= preset:
@@ -359,7 +365,7 @@ class TimedInstruction(Instruction):
 
     def __init__(
         self,
-        target: TagArg,
+        target: Tag,
         *,
         timer_done: Tag,
         timer_acc: Tag,
@@ -368,36 +374,37 @@ class TimedInstruction(Instruction):
         maintained: bool = False,
         enable_condition: Any = None,
     ):
+        parsed = _PLAIN_TARGET.parse("timed()", "target", target)
         preset: Preset = parse_preset(on_preset, label="timed() on preset")
-        self.target = target
-        self.timer_done = timer_done
-        self.timer_acc = timer_acc
+        self.target: TagArg = parsed
+        self.timer_done = TagArg(timer_done)
+        self.timer_acc = TagArg(timer_acc)
         self.on_preset = preset
         self.unit = _parse_time_unit(unit)
         self.maintained = maintained
         self.enable_condition = to_condition(enable_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        frac_key = f"_frac:{self.timer_acc.name}"
+        frac_key = f"_frac:{self.timer_acc.tag.name}"
         rung_key = self.memory_key("_timed_rung")
         rose = bool(enabled) and not ctx.get_memory(rung_key, False)
         ctx.set_memory(rung_key, bool(enabled))
         preset = resolve_preset_ctx(self.on_preset, ctx)
         timing = bool(ctx.get_tag(self.target.tag.name, False)) and (
-            ctx.get_tag(self.timer_acc.name, 0) < preset
+            ctx.get_tag(self.timer_acc.tag.name, 0) < preset
         )
         if rose and not timing:
             # A new on time, from 0.
             timing = True
-            ctx.set_tags({self.timer_acc.name: 0})
+            ctx.set_tags({self.timer_acc.tag.name: 0})
             ctx.set_memory(frac_key, 0)
         if timing:
-            acc_value, frac = _tick(ctx, self.timer_acc, self.unit)
+            acc_value, frac = _tick(ctx, self.timer_acc.tag, self.unit)
             ctx.set_memory(frac_key, frac)
             ctx.set_tags(
                 {
                     self.target.tag.name: acc_value < preset or (self.maintained and bool(enabled)),
-                    self.timer_acc.name: acc_value,
+                    self.timer_acc.tag.name: acc_value,
                 }
             )
             return
