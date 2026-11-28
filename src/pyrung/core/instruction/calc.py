@@ -298,7 +298,7 @@ def may_be_text(value: Any) -> bool:
 
 
 def _reads_text(source: Value | Span) -> bool:
-    """Return True if the formula *source* reads text, as :func:`may_be_text` tells."""
+    """Return True if the formula *source* may read text."""
     match source:
         case TagArg(tag=tag):
             return tag.type is TagType.CHAR
@@ -389,10 +389,14 @@ def infer_calc_mode(source: Value | Span, dest: Tag) -> CalcModeInference:
         case PointerArg(ref=ref):
             # The family comes from the block that the pointer reads, not from the pointer.
             tag_types.add(ref.block.type)
-        case RangeArg(span=span) | PointerRangeArg(span=span):
+        case RangeArg(span=span):
             tag_types.add(span.block.type)
         case ExprArg(expr=expr):
             _collect_calc_tag_types(expr, tag_types, set())
+        case PointerRangeArg():
+            # A pointer range adds no type, but a fixed range adds its block's type.  The
+            # roadmap lists the difference.
+            pass
         case ConstArg():
             pass
         case _:

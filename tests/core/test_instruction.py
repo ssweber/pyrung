@@ -1364,6 +1364,21 @@ class TestCalcInstruction:
         assert instr.mode_inference.mixed_families is True
         assert new_state.tags["Result"] == -1
 
+    def test_math_of_one_range_gets_its_block_type_only_from_a_fixed_range(self):
+        """A pointer range adds no type to the mode.  v0.18.1 does the same."""
+        from pyrung.core.instruction import CalcInstruction
+
+        words = Block("W", TagType.WORD, 1, 10)
+        ints = Block("I", TagType.INT, 1, 10)
+        flag = Bool("Flag")
+        fixed = CalcInstruction(words.select(1, 2), flag)
+        pointed = CalcInstruction(words.select(ints[1], ints[2]), flag)
+
+        assert fixed.mode_inference.has_hex_family is True
+        assert fixed.mode_inference.mixed_families is True
+        assert pointed.mode_inference.has_hex_family is False
+        assert pointed.mode_inference.mixed_families is False
+
     def test_math_constructor_rejects_mode_keyword(self):
         from pyrung.core.instruction import CalcInstruction
         from pyrung.core.tag import Word
