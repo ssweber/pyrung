@@ -230,9 +230,29 @@ def _device_id_value(device_id: TagArg | ConstArg[int], ctx: ScanContext) -> int
             assert_never(device_id)
 
 
-def _parsed_device_id(device_id: int | Tag) -> TagArg | ConstArg[int]:
+def _parsed_device_id(device_id: int | Tag | TagArg | ConstArg[int]) -> TagArg | ConstArg[int]:
     """Return the target's device id as a parsed operand."""
-    return TagArg(device_id) if isinstance(device_id, Tag) else ConstArg(device_id)
+    match device_id:
+        case TagArg() | ConstArg():
+            return device_id
+        case Tag():
+            return TagArg(device_id)
+        case _:
+            return ConstArg(device_id)
+
+
+def _parsed_payload(
+    call: str, arg: str, value: Tag | BlockRange | TagArg | RangeArg
+) -> TagArg | RangeArg:
+    """Return the tags that are sent or received as a parsed operand."""
+    if isinstance(value, TagArg | RangeArg):
+        return value
+    return _PAYLOAD.parse(call, arg, value)
+
+
+def _parsed_status(tag: Tag | TagArg) -> TagArg:
+    """Return a status tag as a parsed operand."""
+    return tag if isinstance(tag, TagArg) else TagArg(tag)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +291,15 @@ class ModbusSendInstruction(Instruction):
     word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
+
+    def __post_init__(self) -> None:
+        # The builder passes parsed operands.  An instruction built by hand may pass bare tags.
+        self.source = _parsed_payload("send()", "source", self.source)
+        self.sending = _parsed_status(self.sending)
+        self.success = _parsed_status(self.success)
+        self.error = _parsed_status(self.error)
+        self.exception_response = _parsed_status(self.exception_response)
+        self.device_id = _parsed_device_id(self.device_id)
 
     def always_execute(self) -> bool:
         return True
@@ -430,6 +459,15 @@ class ModbusReceiveInstruction(Instruction):
     word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
+
+    def __post_init__(self) -> None:
+        # The builder passes parsed operands.  An instruction built by hand may pass bare tags.
+        self.dest = _parsed_payload("receive()", "dest", self.dest)
+        self.receiving = _parsed_status(self.receiving)
+        self.success = _parsed_status(self.success)
+        self.error = _parsed_status(self.error)
+        self.exception_response = _parsed_status(self.exception_response)
+        self.device_id = _parsed_device_id(self.device_id)
 
     def always_execute(self) -> bool:
         return True
