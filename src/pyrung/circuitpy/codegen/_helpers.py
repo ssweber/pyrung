@@ -471,7 +471,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
     # float makes the log raise OverflowError.  The power is then 0 with SC43, as in the
     # core.  The jit cannot trace math.log.  So an exponent from POW_EXACT_MAX + 1 to
     # 2 ** 31 - 1 gives Inf without the log, which keeps a literal exponent traceable.
-    # The log cannot overflow in that range, so the core gives the same Inf.
+    # In that range, ln|base| * exp is above POW_LOG_LIMIT for every |base| > 1, so the
+    # core gives the same Inf.
     "_pow_calc": [
         "def _pow_calc(base, exp, flags):",
         "    if base == 0 and exp <= 0:",

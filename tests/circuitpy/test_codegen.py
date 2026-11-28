@@ -1786,10 +1786,11 @@ class TestBoardPeripheralsAndRunStop:
         assert tuple(plc.current_state.tags[tag.name] for tag in watch) == expected
 
     def test_a_large_literal_exponent_on_every_backend(self, monkeypatch):
-        """A literal exponent above 64 gives the CLICK's value, and the jit still runs it.
+        """A literal exponent above 64 stores the same value on every backend, and the jit still runs it.
 
-        A Dint stores the low 32 bits of the nearest double.  From an exponent of 1039,
-        a base of 2 or more is always past the double range.
+        pyrung stores the low 32 bits of the nearest double into a Dint.  From an exponent
+        of 1039, a base of 2 or more is always past the double range.  code.py reads the
+        guard's log for an exponent above 64, so the board never computes 3 ** 100.
         """
         count = Int("Count")
         base = Dint("Base", default=3)
@@ -1809,6 +1810,11 @@ class TestBoardPeripheralsAndRunStop:
 
         results = _on_every_backend(prog, monkeypatch, watch, scans=1)
         assert results == {name: expected for name in results}
+
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_pow_calc(_t_Base, 100," in code
 
         plc = PLC(prog)
         with jit_stats.collect() as stats:
