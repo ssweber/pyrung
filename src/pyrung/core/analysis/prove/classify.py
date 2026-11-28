@@ -1103,8 +1103,6 @@ def _interval_bounds(
         BinaryExpr,
         DoubleBinaryExpr,
         RangeAggregateExpr,
-        may_be_float,
-        to_double,
     )
 
     if isinstance(node, RangeAggregateExpr):
@@ -1148,18 +1146,7 @@ def _interval_bounds(
     a_lo, a_hi = left
     b_lo, b_hi = right
     ends = (a_lo, a_hi, b_lo, b_hi)
-    # At run time a double power of two ints is the exact power rounded to a double
-    # (DoubleBinaryExpr).  Rounding never reverses the order of two values, so the
-    # rounded corners bound the rounded power.  A Real operand can have int ends, such as
-    # a choice key of 10.  It holds 10.0 at run time, and the scan then calls pow().
-    round_power = (
-        isinstance(node, DoubleBinaryExpr)
-        and node.symbol == "**"
-        and all(type(end) is int for end in ends)
-        and not may_be_float(node.left)
-        and not may_be_float(node.right)
-    )
-    if isinstance(node, DoubleBinaryExpr) and not round_power:
+    if isinstance(node, DoubleBinaryExpr):
         # The step computes in doubles, so its corners must too.  A Dint stores the low
         # bits of the double.
         try:
@@ -1199,17 +1186,21 @@ def _interval_bounds(
         if max(abs(b_lo), abs(b_hi)) > _WIDEST_SHIFT:
             # The corner would build a huge int.
             return None
-        if a_lo < 0:
-            bounds = _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
-            if bounds is None or not round_power:
-                return bounds
-            lo, hi = (to_double(int(end)) for end in bounds)
-            return (lo, hi) if math.isfinite(lo) and math.isfinite(hi) else None
+        bounds = _power_bounds(node.op, a_lo, a_hi, b_lo, b_hi)
+        if bounds is None or not isinstance(node, DoubleBinaryExpr):
+            return bounds
+        if not all(type(end) is int for end in ends):
+            return bounds
+        # A scan rounds the exact power of two ints to a double, and it calls pow() when
+        # either operand is a float.  Int ends do not tell which.  A Real with a choice
+        # key of 10 holds 10.0, and a mean() of ints divides.  So the bounds cover both.
+        exact = _power_bounds(node.op, *ends, rounded=True)
+        if exact is None:
+            return None
+        return (min(bounds[0], exact[0]), max(bounds[1], exact[1]))
 
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
-        if round_power:
-            corners = [to_double(c) if type(c) is int else c for c in corners]
         # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer
         # stores 0 for it, and the corners do not bound 0.  An int past a double's range
         # raises OverflowError here.
@@ -1229,6 +1220,36 @@ _CORNER_SYMBOLS = frozenset({"+", "-", "*", "/", "//", "**", "<<", ">>"})
 #: The widest left shift, and the largest exponent, that ``_interval_bounds`` computes.
 #: 2 ** 1024 is past a double.
 _WIDEST_SHIFT = 1024
+
+
+def _power_bounds(
+    op: Any, a_lo: float, a_hi: float, b_lo: float, b_hi: float, *, rounded: bool = False
+) -> tuple[float, float] | None:
+    """Return bounds for ``op(a, b)``, a power, over two intervals, or None.
+
+    With *rounded*, each corner that is an int is rounded to a double, as a scan rounds
+    the exact power of two ints.  Rounding never reverses the order of two values, so the
+    rounded corners bound the rounded power.
+    """
+    from pyrung.core.expression import to_double
+
+    try:
+        if a_lo < 0:
+            bounds = _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
+            corners = list(bounds) if bounds is not None else None
+        else:
+            corners = [op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
+        if corners is None:
+            return None
+        if rounded:
+            corners = [to_double(c) if type(c) is int else c for c in corners]
+        # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer
+        # stores 0 for it, and the corners do not bound 0.
+        if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
+            return None
+    except (ArithmeticError, ValueError):
+        return None
+    return (min(corners), max(corners))
 
 
 def _negative_base_power_bounds(
@@ -1338,6 +1359,12 @@ def _domain_from_calc_expression(
 
             return tuple(sorted({_truncate_to_tag_type(value, target, mode) for value in values}))
 
+    points = _power_point_values(
+        expression, target, graph, all_exprs, known_domains, atom_index, mode
+    )
+    if points is not None:
+        return points
+
     bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
     if bounds is None:
         return None
@@ -1360,6 +1387,51 @@ def _domain_from_calc_expression(
             return None
         return tuple(range(lo_t, hi_t + 1))
     return None
+
+
+def _power_point_values(
+    expression: Any,
+    target: Tag,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]] | None,
+    mode: str,
+) -> tuple[Any, ...] | None:
+    """Return what a Math stores for a double power of two single ints, or None.
+
+    A scan gives either the exact power rounded to a double or ``pow()`` on floats
+    (``_interval_bounds``).  Past 2 ** 53 the two can be a double apart, which is wider
+    than ``_INTERVAL_DOMAIN_CAP``.  So this function lists both values.
+    """
+    from pyrung.core.expression import DoubleBinaryExpr, to_double
+    from pyrung.core.instruction.conversions import _truncate_to_tag_type
+
+    if not isinstance(expression, DoubleBinaryExpr) or expression.symbol != "**":
+        return None
+    left = _interval_bounds(expression.left, graph, all_exprs, known_domains, atom_index)
+    right = _interval_bounds(expression.right, graph, all_exprs, known_domains, atom_index)
+    if left is None or right is None or left[0] != left[1] or right[0] != right[1]:
+        return None
+    base, exponent = left[0], right[0]
+    if type(base) is not int or type(exponent) is not int or abs(exponent) > _WIDEST_SHIFT:
+        return None
+    try:
+        exact = expression.op(base, exponent)
+        results = (
+            to_double(exact) if type(exact) is int else exact,
+            expression.op(float(base), float(exponent)),
+        )
+    except (ArithmeticError, ValueError):
+        return None
+    # A fraction, such as 2 ** -1, takes the interval below, which allows for rounding.
+    if not all(isinstance(r, (int, float)) and math.isfinite(r) and r == int(r) for r in results):
+        return None
+    stored = {_truncate_to_tag_type(r, target, mode) for r in results}
+    # Like the interval below, this lists only whole numbers.
+    if not all(type(value) is int for value in stored):
+        return None
+    return tuple(sorted(stored))
 
 
 #: Operations that keep whole numbers whole (a Math's step past 2 ** 53 is a
