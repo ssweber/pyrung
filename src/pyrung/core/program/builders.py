@@ -27,6 +27,7 @@ from pyrung.core.instruction import (
     ToggleInstruction,
 )
 from pyrung.core.instruction.advanced import _BIT_RANGE
+from pyrung.core.instruction.out_variants import _PLAIN_TARGET, _TOGGLE_TARGET
 from pyrung.core.instruction.utils import parse_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
@@ -1182,6 +1183,11 @@ def off_delay(
     )
 
 
+# Each out-variant builder refuses a bad target before it reads the timers or the rung, so
+# a call with two errors names the target.  ``__init__`` parses the target again, for an
+# instruction built by hand.
+
+
 def _out_phase(
     phase: Any, func_name: str, side: str, *, preset_label: str | None = None
 ) -> tuple[Tag, Tag, Tag | int] | None:
@@ -1220,6 +1226,7 @@ def toggle(target: Tag | ImmediateRef) -> Tag | ImmediateRef:
             toggle(Light)
             toggle(Y[1].immediate)
     """
+    _TOGGLE_TARGET.parse("toggle()", "target", target)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("toggle")
     instruction = ToggleInstruction(target, enable_condition)
     instruction.source_file, instruction.source_line = source_file, source_line
@@ -1250,6 +1257,7 @@ def debounce(
         off: ``(timer, preset)`` for the off side.
         unit: Time unit for both presets (default ``"ms"``).
     """
+    _PLAIN_TARGET.parse("debounce()", "target", target)
     on_phase = _out_phase(on, "debounce", "on")
     off_phase = _out_phase(off, "debounce", "off")
     if on_phase is None or off_phase is None:
@@ -1296,6 +1304,7 @@ def flasher(
         off: ``(timer, preset)`` for the off phase.
         unit: Time unit for both presets (default ``"ms"``).
     """
+    _PLAIN_TARGET.parse("flasher()", "target", target)
     on_phase = _out_phase(on, "flasher", "on")
     off_phase = _out_phase(off, "flasher", "off")
     if on_phase is None or off_phase is None:
@@ -1346,6 +1355,7 @@ def timed(
         unit: Time unit (default ``"ms"``).
         maintained: Keep the target on while the rung stays true after the on time.
     """
+    _PLAIN_TARGET.parse("timed()", "target", target)
     phase = _out_phase((timer, preset), "timed", "on", preset_label="timed() preset")
     assert phase is not None
     canonical_unit = normalize_unit(unit)
