@@ -3475,10 +3475,10 @@ def _unmodeled_accumulators(program: Program) -> dict[str, str]:
                 out[instr.accumulator.tag.name] = f"time_drum ({reason})"
         elif isinstance(instr, (DebounceInstruction, FlasherInstruction)):
             verb = "debounce" if isinstance(instr, DebounceInstruction) else "flasher"
-            out[instr.on_acc.name] = verb
-            out[instr.off_acc.name] = verb
+            out[instr.on_acc.tag.name] = verb
+            out[instr.off_acc.tag.name] = verb
         elif isinstance(instr, TimedInstruction):
-            out[instr.timer_acc.name] = "timed"
+            out[instr.timer_acc.tag.name] = "timed"
     return out
 
 

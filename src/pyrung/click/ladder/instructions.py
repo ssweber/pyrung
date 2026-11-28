@@ -246,11 +246,11 @@ class _InstructionMixin:
         it.
         """
         if instruction_type == "TimedInstruction":
-            phases = [("on", instruction.timer_acc, instruction.on_preset)]
+            phases = [("on", instruction.timer_acc.tag, instruction.on_preset)]
         else:
             phases = [
-                ("on", instruction.on_acc, instruction.on_preset),
-                ("off", instruction.off_acc, instruction.off_preset),
+                ("on", instruction.on_acc.tag, instruction.on_preset),
+                ("off", instruction.off_acc.tag, instruction.off_preset),
             ]
         kwargs: dict[str, str] = {}
         for side, acc, preset in phases:

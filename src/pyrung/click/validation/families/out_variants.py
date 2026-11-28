@@ -97,7 +97,9 @@ def _operands(instruction: Any) -> list[Operand]:
         return list(declared_operands(instruction, {"target": "target"}))
     found = [Operand(0, "target", (("target", instruction.target.tag),))]
     for side, acc, preset in _SIDES[name]:
-        found.append(Operand(f"{side}_acc", f"{side} timer", ((acc, getattr(instruction, acc)),)))
+        found.append(
+            Operand(f"{side}_acc", f"{side} timer", ((acc, getattr(instruction, acc).tag),))
+        )
         found.append(
             Operand(
                 f"{side}_preset",
@@ -138,12 +140,12 @@ def _call(instruction: Any) -> Call:
     for side, acc, preset in _SIDES[name]:
         if name == "TimedInstruction":
             text += ", "
-            add("on_acc", _owner(instruction.timer_acc), "positional")
+            add("on_acc", _owner(instruction.timer_acc.tag), "positional")
             text += ", "
             add("on_preset", operand_name(_preset_value(instruction.on_preset)), "positional")
             continue
         text += f", {side}=("
-        add(f"{side}_acc", _owner(getattr(instruction, acc)), "keyword")
+        add(f"{side}_acc", _owner(getattr(instruction, acc).tag), "keyword")
         text += ", "
         add(f"{side}_preset", operand_name(_preset_value(getattr(instruction, preset))), "keyword")
         text += ")"
@@ -170,7 +172,7 @@ def _build(instruction: Any, exporter: Any) -> list[Any]:
     values: dict[str, Any] = {}
     for side, acc, preset in _SIDES[name]:
         values[f"{side}_acc"] = render_operand(
-            exporter, getattr(instruction, acc), acc, instruction
+            exporter, getattr(instruction, acc).tag, acc, instruction
         )
         values[f"{side}_preset"] = render_preset(
             exporter, getattr(instruction, preset), preset, instruction

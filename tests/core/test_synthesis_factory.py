@@ -45,7 +45,9 @@ def test_bool_feedback_rungs_are_one_debounce_coil() -> None:
     (coil,) = rung._instructions
     assert isinstance(coil, DebounceInstruction)
     assert coil.target.tag is Fb
-    assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
+    assert tuple(
+        arg.tag for arg in (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc)
+    ) == tuple(timers.values())
     assert (coil.on_preset.value, coil.off_preset.value, coil.unit.name) == (
         200,
         100,
@@ -80,7 +82,9 @@ def test_pulse_feedback_rungs_are_one_flasher_coil() -> None:
     (coil,) = rung._instructions
     assert isinstance(coil, FlasherInstruction)
     assert coil.target.tag is Fb
-    assert (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc) == tuple(timers.values())
+    assert tuple(
+        arg.tag for arg in (coil.on_done, coil.on_acc, coil.off_done, coil.off_acc)
+    ) == tuple(timers.values())
     # One unit for both sides, as on a CLICK: 8 ms rounds up to a second.
     assert (coil.on_preset.value, coil.off_preset.value, coil.unit.name) == (1, 40, "Ts")
 

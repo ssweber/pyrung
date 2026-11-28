@@ -220,10 +220,10 @@ _CASES = [
     (_event_drum(), "Y2", True, "fallthrough", ()),
     (_time_drum(), "Y2", True, "fallthrough", ()),
     (_time_event_drum(), "Y2", True, "fallthrough", ()),
-    (ToggleInstruction(TagArg(Bool("L")), Bool("En")), "L", True, "fallthrough", ()),
+    (ToggleInstruction(Bool("L"), Bool("En")), "L", True, "fallthrough", ()),
     (
         DebounceInstruction(
-            TagArg(Bool("V")),
+            Bool("V"),
             on_done=Bool("OnDone"),
             on_acc=Int("OnAcc"),
             on_preset=10,
@@ -239,7 +239,7 @@ _CASES = [
     ),
     (
         FlasherInstruction(
-            TagArg(Bool("B")),
+            Bool("B"),
             on_done=Bool("OnDone"),
             on_acc=Int("OnAcc"),
             on_preset=10,
@@ -255,7 +255,7 @@ _CASES = [
     ),
     (
         TimedInstruction(
-            TagArg(Bool("H")),
+            Bool("H"),
             timer_done=Bool("Done"),
             timer_acc=Int("Acc"),
             on_preset=10,

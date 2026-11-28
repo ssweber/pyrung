@@ -44,7 +44,7 @@ its rungs, keeps its keys.
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -224,24 +224,10 @@ def _timer_carries(instr: Instruction) -> tuple[tuple[str, int], ...]:
     unit = getattr(instr, "unit", None)
     if not isinstance(unit, TimeUnit):
         return ()
-    accumulators = (
-        _accumulator_tag(getattr(instr, f, None))
-        for f in ("accumulator", "on_acc", "off_acc", "timer_acc")
+    accumulators: Iterator[TagArg | None] = (
+        getattr(instr, f, None) for f in ("accumulator", "on_acc", "off_acc", "timer_acc")
     )
-    return tuple((f"_frac:{acc.name}", unit.ns) for acc in accumulators if acc is not None)
-
-
-def _accumulator_tag(value: Any) -> Any:
-    """Return the tag in an accumulator field, or None for a field the instruction lacks.
-
-    A timer or a counter holds its accumulator parsed.  ``debounce()``, ``flasher()``
-    and ``timed()`` hold theirs as a plain tag.
-    """
-    match value:
-        case TagArg(tag=tag):
-            return tag
-        case _:
-            return value
+    return tuple((f"_frac:{acc.tag.name}", unit.ns) for acc in accumulators if acc is not None)
 
 
 def _contacts_text(conditions: Iterable[Any]) -> tuple[str, ...]:

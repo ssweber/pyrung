@@ -417,7 +417,7 @@ def _evaluate_done_bits(
     findings: list[ClickFinding] = []
     for done_field, _acc_field in pairs:
         location = _instruction_location(base_location, f"instruction.{done_field}")
-        resolution = resolver.resolve_operand_slots(getattr(instruction, done_field))
+        resolution = resolver.resolve_operand_slots(getattr(instruction, done_field).tag)
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "operand"))
             continue
@@ -456,7 +456,7 @@ def _evaluate_timer_pairs(
     pairs = family.timer_pairs.get(type(instruction).__name__, ())
     findings = _evaluate_done_bits(instruction, pairs, base_location, profile, mode, resolver)
     for done_field, acc_field in pairs:
-        done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
+        done, acc = getattr(instruction, done_field).tag, getattr(instruction, acc_field).tag
         done_slots = resolver.resolve_operand_slots(done).slots
         acc_slots = resolver.resolve_operand_slots(acc).slots
         if len(done_slots) != 1 or len(acc_slots) != 1:

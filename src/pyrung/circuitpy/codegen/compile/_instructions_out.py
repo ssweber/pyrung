@@ -90,8 +90,8 @@ def _compile_debounce_instruction(
     sp8 = " " * (indent + 8)
     sp12 = " " * (indent + 12)
     rung_key = f"_debounce_rung:{ctx.state_key_for(instr)}"
-    on_write = _compile_lvalue(instr.on_acc, ctx)
-    off_write = _compile_lvalue(instr.off_acc, ctx)
+    on_write = _compile_lvalue(instr.on_acc.tag, ctx)
+    off_write = _compile_lvalue(instr.off_acc.tag, ctx)
     target_write = _compile_lvalue(instr.target.tag, ctx)
     return [
         f"{sp}_en = bool({enabled_expr})",
@@ -101,28 +101,28 @@ def _compile_debounce_instruction(
         f"{sp4}if not _was:",
         # A rise starts the on side from 0.
         f"{sp8}{on_write} = 0",
-        f"{sp8}{emit_frac(instr.on_acc, '0')}",
-        *_tick_lines(instr.on_acc, instr.unit, ctx, sp4),
-        f"{sp4}{emit_frac(instr.on_acc, '_new_frac')}",
-        f"{sp4}{emit_frac(instr.off_acc, '0')}",
+        f"{sp8}{emit_frac(instr.on_acc.tag, '0')}",
+        *_tick_lines(instr.on_acc.tag, instr.unit, ctx, sp4),
+        f"{sp4}{emit_frac(instr.on_acc.tag, '_new_frac')}",
+        f"{sp4}{emit_frac(instr.off_acc.tag, '0')}",
         f"{sp4}{on_write} = _acc",
         f"{sp4}{off_write} = 0",
         f"{sp4}if {emit_reached('_acc', f'int({_compile_preset(instr.on_preset, ctx)})')}:",
         f"{sp8}{target_write} = True",
         f"{sp}else:",
-        f"{sp4}{emit_frac_keep(instr.on_acc)}",
+        f"{sp4}{emit_frac_keep(instr.on_acc.tag)}",
         # With the coil off, the off TD holds its value, including one the ladder wrote.
         f"{sp4}if not {emit_truth(_compile_value(instr.target.tag, ctx))}:",
-        f"{sp8}{emit_frac_keep(instr.off_acc)}",
+        f"{sp8}{emit_frac_keep(instr.off_acc.tag)}",
         f"{sp4}else:",
         # The off side compares what it had reached before this scan, and not on the fall.
         f"{sp8}_timed_out = not _was and "
         + emit_reached(
-            f"int({_compile_value(instr.off_acc, ctx)})",
+            f"int({_compile_value(instr.off_acc.tag, ctx)})",
             f"int({_compile_preset(instr.off_preset, ctx)})",
         ),
-        *_tick_lines(instr.off_acc, instr.unit, ctx, sp8),
-        f"{sp8}{emit_frac(instr.off_acc, '_new_frac')}",
+        *_tick_lines(instr.off_acc.tag, instr.unit, ctx, sp8),
+        f"{sp8}{emit_frac(instr.off_acc.tag, '_new_frac')}",
         f"{sp8}{off_write} = _acc",
         f"{sp8}if _timed_out:",
         f"{sp12}{target_write} = False",
@@ -139,15 +139,15 @@ def _compile_flasher_phase(
     sp4 = sp + "    "
     if on_phase:
         acc, other, limit, other_phase = (
-            instr.on_acc,
-            instr.off_acc,
+            instr.on_acc.tag,
+            instr.off_acc.tag,
             "_on_preset",
             _FLASH_OFF_NEXT,
         )
     else:
         acc, other, limit, other_phase = (
-            instr.off_acc,
-            instr.on_acc,
+            instr.off_acc.tag,
+            instr.on_acc.tag,
             "_off_preset",
             _FLASH_ON_NEXT,
         )
@@ -156,8 +156,8 @@ def _compile_flasher_phase(
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
         f"{sp}if {emit_reached('_acc', limit)}:",
         f"{sp4}_phase = {other_phase}",
-        f"{sp4}{emit_frac(instr.on_acc, '0')}",
-        f"{sp4}{emit_frac(instr.off_acc, '0')}",
+        f"{sp4}{emit_frac(instr.on_acc.tag, '0')}",
+        f"{sp4}{emit_frac(instr.off_acc.tag, '0')}",
         f"{sp}else:",
         f"{sp4}{emit_frac(acc, '_new_frac')}",
         f"{sp4}{emit_frac_keep(other)}",
@@ -176,8 +176,8 @@ def _compile_flasher_instruction(
     sp8 = " " * (indent + 8)
     sp12 = " " * (indent + 12)
     phase_key = f"_flash_phase:{ctx.state_key_for(instr)}"
-    on_write = _compile_lvalue(instr.on_acc, ctx)
-    off_write = _compile_lvalue(instr.off_acc, ctx)
+    on_write = _compile_lvalue(instr.on_acc.tag, ctx)
+    off_write = _compile_lvalue(instr.off_acc.tag, ctx)
     target_write = _compile_lvalue(instr.target.tag, ctx)
     no_preset = " or ".join(
         emit_cmp(p, "<=", "0", paren=False) for p in ("_on_preset", "_off_preset")
@@ -203,17 +203,17 @@ def _compile_flasher_instruction(
         f"{sp12}_phase = {_FLASH_ON}",
         f"{sp12}{on_write} = 0",
         f"{sp12}{off_write} = 0",
-        f"{sp12}{emit_frac(instr.on_acc, '0')}",
-        f"{sp12}{emit_frac(instr.off_acc, '0')}",
+        f"{sp12}{emit_frac(instr.on_acc.tag, '0')}",
+        f"{sp12}{emit_frac(instr.off_acc.tag, '0')}",
         # The phase that starts now runs from 0, and the other's accumulator holds.
         f"{sp8}elif {phase_is(_FLASH_ON_NEXT)}:",
         f"{sp12}_phase = {_FLASH_ON}",
         f"{sp12}{on_write} = 0",
-        f"{sp12}{emit_frac(instr.on_acc, '0')}",
+        f"{sp12}{emit_frac(instr.on_acc.tag, '0')}",
         f"{sp8}elif {phase_is(_FLASH_OFF_NEXT)}:",
         f"{sp12}_phase = {_FLASH_OFF}",
         f"{sp12}{off_write} = 0",
-        f"{sp12}{emit_frac(instr.off_acc, '0')}",
+        f"{sp12}{emit_frac(instr.off_acc.tag, '0')}",
         # The coil shows the phase that runs this scan, even one that ends on it.
         f"{sp8}{target_write} = {phase_is(_FLASH_ON)}",
         f"{sp8}if {phase_is(_FLASH_ON)}:",
@@ -235,7 +235,7 @@ def _compile_timed_instruction(
     sp4 = " " * (indent + 4)
     rung_key = f"_timed_rung:{ctx.state_key_for(instr)}"
     target_write = _compile_lvalue(instr.target.tag, ctx)
-    acc_write = _compile_lvalue(instr.timer_acc, ctx)
+    acc_write = _compile_lvalue(instr.timer_acc.tag, ctx)
     timing = emit_cmp("_acc", "<", "_t_preset", paren=False)
     timing_target = f"({timing} or _en)" if instr.maintained else f"({timing})"
     held_target = "_en" if instr.maintained else "False"
@@ -245,18 +245,18 @@ def _compile_timed_instruction(
         f"{sp}{emit_mem_set(rung_key, '_en')}",
         f"{sp}_t_preset = int({_compile_preset(instr.on_preset, ctx)})",
         f"{sp}_timing = {emit_truth(_compile_value(instr.target.tag, ctx))} and (",
-        f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc, ctx)})', '<', '_t_preset', paren=False)}",
+        f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc.tag, ctx)})', '<', '_t_preset', paren=False)}",
         f"{sp})",
         f"{sp}if _rose and not _timing:",
         f"{sp4}_timing = True",
         f"{sp4}{acc_write} = 0",
-        f"{sp4}{emit_frac(instr.timer_acc, '0')}",
+        f"{sp4}{emit_frac(instr.timer_acc.tag, '0')}",
         f"{sp}if _timing:",
-        *_tick_lines(instr.timer_acc, instr.unit, ctx, sp4),
-        f"{sp4}{emit_frac(instr.timer_acc, '_new_frac')}",
+        *_tick_lines(instr.timer_acc.tag, instr.unit, ctx, sp4),
+        f"{sp4}{emit_frac(instr.timer_acc.tag, '_new_frac')}",
         f"{sp4}{target_write} = {timing_target}",
         f"{sp4}{acc_write} = _acc",
         f"{sp}else:",
-        f"{sp4}{emit_frac_keep(instr.timer_acc)}",
+        f"{sp4}{emit_frac_keep(instr.timer_acc.tag)}",
         f"{sp4}{target_write} = {held_target}",
     ]
