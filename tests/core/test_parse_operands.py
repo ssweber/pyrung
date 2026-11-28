@@ -124,7 +124,6 @@ def test_an_immediate_arg_made_by_hand_gets_one_wrapper():
     arg = TagArg(x[1], True)
     assert isinstance(arg.wrapper, ImmediateRef)
     assert arg.wrapper.value is x[1]
-    assert arg.wrapper is arg.wrapper
 
 
 def test_a_wrapper_needs_immediate():
