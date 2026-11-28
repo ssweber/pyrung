@@ -15,10 +15,13 @@ it to ``VARIANTS``.  To cover a rule, add cases to ``RULE_CASES``.
 
 from __future__ import annotations
 
+import json
+import os
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -525,6 +528,42 @@ def test_a_rule_refuses_what_click_refuses(
     cls: type[Instruction], args: dict[str, Callable[[], Any]]
 ) -> None:
     _check_case(BUILDERS[cls], cls, args, refused_as_on_click=True)
+
+
+# The words of every refusal in the sweep and the rule cases, by case.
+RECORDED_REFUSALS = Path(__file__).with_name("build_refusals.json")
+REGEN_ENV = "PYRUNG_REGEN_GOLDEN"
+
+
+def _every_case() -> Iterator[tuple[str, Builder, dict[str, Callable[[], Any]]]]:
+    """Yield the id, builder and arguments of each case in the sweep and in the rule cases."""
+    for param in _cases():
+        _cls, builder, arg, kind = param.values
+        yield str(param.id), builder, {arg: OPERANDS[kind]}
+    for name, cases in (("rule", RULE_CASES), ("rule as on CLICK", RULE_CASES_AS_ON_CLICK)):
+        for index, (cls, args) in enumerate(cases):
+            yield f"{name} {BUILDERS[cls].call}-{index}", BUILDERS[cls], args
+
+
+def test_every_refusal_keeps_its_recorded_words() -> None:
+    """Each refused case raises the error that build_refusals.json records for it.
+
+    The sweep compares a refusal with the words of the field's own parse(), so a change
+    to those words would pass there.  To record a change, run this test with
+    PYRUNG_REGEN_GOLDEN=1.  The run rewrites the file and fails.  Read the diff before
+    you commit it.
+    """
+    refusals: dict[str, str] = {}
+    for case_id, builder, args in _every_case():
+        try:
+            _build(builder, args)
+        except (TypeError, ValueError) as error:
+            refusals[case_id] = f"{type(error).__name__}: {error}"
+    if os.environ.get(REGEN_ENV) == "1":
+        text = json.dumps(refusals, indent=1, ensure_ascii=True) + "\n"
+        RECORDED_REFUSALS.write_text(text, encoding="utf-8", newline="\n")
+        pytest.fail(f"{RECORDED_REFUSALS.name} was rewritten because {REGEN_ENV}=1.")
+    assert refusals == json.loads(RECORDED_REFUSALS.read_text(encoding="utf-8"))
 
 
 def test_every_rule_has_a_refused_case_and_a_running_case() -> None:
