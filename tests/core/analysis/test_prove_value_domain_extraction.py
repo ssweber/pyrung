@@ -771,8 +771,11 @@ def test_a_step_past_2_53_holds_the_rounded_value_a_scan_stores(make, dest_type,
     produced = collect_produced_value_domains(logic, graph)
     structural = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
     assert stored <= set(structural["D3"])
-    # The validators list no domain for a mean(), and no domain leaves nothing out.
-    assert stored <= set(produced.get("D3", stored))
+    if expected is None:
+        # The validators list no domain for a mean(), and no domain leaves nothing out.
+        assert stored <= set(produced.get("D3", stored))
+    else:
+        assert stored <= set(produced["D3"])
 
 
 def test_check_keeps_a_comparison_with_a_value_an_xor_stores():
