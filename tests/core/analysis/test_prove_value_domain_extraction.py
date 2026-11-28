@@ -13,6 +13,7 @@ from pyrung.core import (
     Int,
     Program,
     Real,
+    TagType,
     Word,
     copy,
     math,
@@ -662,12 +663,12 @@ def _one_value(tag_type: type, name: str, value: int) -> Any:
     return tag_type(name, choices={value: "a"}, default=value, external=True)
 
 
-def _mean_of_ints() -> Any:
-    from pyrung.core import Block, TagType
+def _mean_of_ints(tag_type: TagType = TagType.DINT, value: int = 10) -> Any:
+    from pyrung.core import Block
 
-    block = Block("B", TagType.DINT, 1, 2)
+    block = Block("B", tag_type, 1, 2)
     for addr in (1, 2):
-        block.slot(addr, default=10, choices={10: "ten"}, external=True)
+        block.slot(addr, default=value, choices={value: "a"}, external=True)
     return block.select(1, 2).mean()
 
 
@@ -709,6 +710,72 @@ def test_a_power_of_single_values_holds_what_a_scan_stores(make, dest_type):
     assert stored in structural["D3"]
     assert len(structural["D3"]) <= 2
     assert stored in produced.get("D3", (stored,))
+
+
+_BIG = 2**20 + 1
+
+#: Formulas with an int step past 2 ** 53, and the value a scan stores for each.  The
+#: value is None where the scan calls ``pow()``, whose last bit depends on the platform.
+_STEPS_PAST_2_53 = {
+    "dint_product_of_three": (
+        lambda: (
+            _one_value(Dint, "A", _BIG) * _one_value(Dint, "B", _BIG) * _one_value(Dint, "C", _BIG)
+        ),
+        Dint,
+        3145728,
+    ),
+    "dint_product_with_a_constant": (
+        lambda: (
+            LiteralExpr(2**31 - 1) * _one_value(Dint, "A", 2**31 - 1) * _one_value(Dint, "B", 3)
+        ),
+        Dint,
+        0,
+    ),
+    "hex_word_3_to_35": (lambda: _one_value(Word, "A", 3) ** 35, Word, 38808),
+    "hex_word_3_to_41": (lambda: _one_value(Word, "A", 3) ** 41, Word, 49152),
+    "hex_mean_of_191s_to_7": (lambda: _mean_of_ints(TagType.WORD, 191) ** 7, Word, None),
+}
+
+
+@pytest.mark.parametrize(
+    "make, dest_type, expected", _STEPS_PAST_2_53.values(), ids=_STEPS_PAST_2_53
+)
+def test_a_step_past_2_53_holds_the_rounded_value_a_scan_stores(make, dest_type, expected):
+    """Check that each domain of D3 lists what a scan stores for a step past 2 ** 53.
+
+    A Math rounds each int step past 2 ** 53 to the nearest double.  The exact step
+    has other low bits, so a domain built from it leaves out the stored value.  A
+    ``mean()`` returns a float, so a hex Math calls ``pow()`` on it.  On Windows
+    ``pow()`` can be one double away from the rounded exact power.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import (
+        _collect_all_exprs,
+        _collect_structural_domains,
+        collect_produced_value_domains,
+    )
+    from pyrung.core.compiled_plc import CompiledPLC
+
+    with Program(strict=False) as logic:
+        formula = make()
+        with rung():
+            math(formula, dest_type("D3"))
+    graph = build_program_graph(logic)
+    stored = set()
+    for runner in (PLC(logic), CompiledPLC(logic)):
+        runner.step()
+        stored.add(runner.current_state.tags["D3"])
+    assert len(stored) == 1
+    if expected is not None:
+        assert stored == {expected}
+    produced = collect_produced_value_domains(logic, graph)
+    structural = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+    assert stored <= set(structural["D3"])
+    if expected is None:
+        # The validators list no domain for a mean(), and no domain leaves nothing out.
+        assert stored <= set(produced.get("D3", stored))
+    else:
+        assert stored <= set(produced["D3"])
 
 
 def test_check_keeps_a_comparison_with_a_value_an_xor_stores():

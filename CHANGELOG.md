@@ -20,6 +20,7 @@
 - A `fork()` taken before the first scan is now stopped after `stop()`, and has `battery_present` False after you clear it (it was in RUN with the battery present).
 - `math()` no longer hangs on a power past the double range, such as `5 ** DD[1]` with DD1 = 2147483647, in any runner or in the generated CircuitPython code. Into an `Int`, a `Dint` or a `Word` it stores 0 and sets `system.fault.out_of_range`, as a CLICK does.
 - A validation finding on a `math()` of one operand now shows the operand, as in `math(DS1, DS5)` (it showed `math(LiveTag, DS5)`).
+- `check()` no longer reports a comparison as always false when a step of a `math()` formula passes 2 ** 53. A CLICK rounds that step to a double. With `A`, `B` and `C` as inputs whose only choice is 1048577, `math(A * B * C, D)` stores 3145728. 0.18.1 reported `D == 3145728` as always false.
 
 ## v0.19.0 (2026-11-27)
 
