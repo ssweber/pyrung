@@ -147,13 +147,13 @@ class SearchInstruction(OneShotMixin, Instruction):
                 "search() expects a comparison expression, "
                 f"e.g. DS.select(1, 10) >= 100, got {type(comparison).__name__}"
             )
+        self.found: TagArg = _FOUND.parse_tag("search()", "found", found)
+        self.result: TagArg = _RESULT.parse_tag("search()", "result", result)
         if comparison.operator not in _SEARCH_OPERATOR_MAP:
             raise ValueError(
                 f"Invalid search condition: {comparison.operator!r}. "
                 "Expected one of: ==, !=, <, <=, >, >="
             )
-        self.found: TagArg = _FOUND.parse_tag("search()", "found", found)
-        self.result: TagArg = _RESULT.parse_tag("search()", "result", result)
         self.search_range: Span = _SEARCH_RANGE.parse(
             "search()", "search_range", comparison.search_range
         )

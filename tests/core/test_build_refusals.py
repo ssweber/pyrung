@@ -756,3 +756,20 @@ def test_forloop_refuses_a_wrong_count_before_its_body() -> None:
         with rung(x[3]):
             with pytest.raises(TypeError, match=r"^forloop\(\) got None as count"):
                 forloop(None)
+
+
+def test_search_refuses_found_and_result_before_the_operator() -> None:
+    from pyrung.core.memory_block import RangeComparison
+
+    # The DSL's operators make only valid comparisons, so this one is made by hand.
+    comparison = RangeComparison(ds.select(1, 2), "<>", 0)
+    with Program(strict=False):
+        with rung(x[3]):
+            with pytest.raises(TypeError) as refused:
+                search(comparison, result=ds[5], found=ds[6])
+            assert str(refused.value) == "search() got the Int tag DS6 as found. Pass one Bool tag."
+            with pytest.raises(TypeError) as refused:
+                search(comparison, result=c[5], found=c[6])
+            assert str(refused.value) == (
+                "search() got the Bool tag C5 as result. Pass one Int or Dint tag."
+            )
