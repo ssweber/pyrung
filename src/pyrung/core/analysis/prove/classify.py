@@ -1103,6 +1103,7 @@ def _interval_bounds(
         BinaryExpr,
         DoubleBinaryExpr,
         RangeAggregateExpr,
+        may_be_float,
         to_double,
     )
 
@@ -1149,11 +1150,14 @@ def _interval_bounds(
     ends = (a_lo, a_hi, b_lo, b_hi)
     # At run time a double power of two ints is the exact power rounded to a double
     # (DoubleBinaryExpr).  Rounding never reverses the order of two values, so the
-    # rounded corners bound the rounded power.
+    # rounded corners bound the rounded power.  A Real operand can have int ends, such as
+    # a choice key of 10.  It holds 10.0 at run time, and the scan then calls pow().
     round_power = (
         isinstance(node, DoubleBinaryExpr)
         and node.symbol == "**"
         and all(type(end) is int for end in ends)
+        and not may_be_float(node.left)
+        and not may_be_float(node.right)
     )
     if isinstance(node, DoubleBinaryExpr) and not round_power:
         # The step computes in doubles, so its corners must too.  A Dint stores the low

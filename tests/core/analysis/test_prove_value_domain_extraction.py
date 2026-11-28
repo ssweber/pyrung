@@ -658,6 +658,34 @@ def test_a_power_past_2_53_has_the_low_bits_of_the_nearest_double():
     assert plc.current_state.tags["D3"] == -167772160
 
 
+def test_a_power_of_a_real_holds_what_a_scan_stores():
+    """List what a scan stores for ``R ** 23`` into a Dint, with a Real R of 10.
+
+    The choice key 10 is an int, but R holds 10.0 at run time.  A scan then computes the
+    power with the C library's ``pow()``, which on Windows is one double above 10 ** 23.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import (
+        _collect_all_exprs,
+        _collect_structural_domains,
+        collect_produced_value_domains,
+    )
+
+    r = Real("R", choices={10: "a"}, default=10, external=True)
+    d3 = Dint("D3")
+    with Program(strict=False) as logic:
+        with rung():
+            math(r**23, d3)
+    graph = build_program_graph(logic)
+    plc = PLC(logic)
+    plc.step()
+    stored = plc.current_state.tags["D3"]
+    produced = collect_produced_value_domains(logic, graph)
+    structural = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+    assert stored in structural["D3"]
+    assert stored in produced.get("D3", (stored,))
+
+
 def test_check_keeps_a_comparison_with_a_value_an_xor_stores():
     """``math(A ^ 1, D3)`` with A = 4 stores 5, so ``D3 == 5`` is not always false.
 
