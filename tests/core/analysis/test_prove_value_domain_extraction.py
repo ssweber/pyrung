@@ -666,7 +666,8 @@ def _mean_of_ints() -> Any:
     from pyrung.core import Block, TagType
 
     block = Block("B", TagType.DINT, 1, 2)
-    block.slot(1, 2, default=10, choices={10: "ten"}, external=True)
+    for addr in (1, 2):
+        block.slot(addr, default=10, choices={10: "ten"}, external=True)
     return block.select(1, 2).mean()
 
 
