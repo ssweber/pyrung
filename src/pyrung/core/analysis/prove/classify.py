@@ -65,6 +65,7 @@ from pyrung.core.analysis.reverse_edges import (
 from pyrung.core.analysis.reverse_edges import (
     tag_name_from_value as _tag_name_from_value,
 )
+from pyrung.core.analysis.reverse_edges import value_tag_name
 from pyrung.core.analysis.simplified import Atom, Expr, _condition_to_expr, simplified_forms
 from pyrung.core.expression import is_randint_tag, randint_sites
 from pyrung.core.input_overrides import held_candidates
@@ -82,6 +83,7 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
+    operand_tag_names,
     parse_value,
 )
 from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
@@ -285,7 +287,7 @@ def _collect_implicit_edge_condition_exprs(
         for field_name in getattr(type(instr), "_writes", ()):
             value = getattr(instr, field_name)
             for target in value if isinstance(value, tuple) else (value,):
-                if any(name in upstream for name in _fixed_tag_names(target)):
+                if any(name in upstream for name in operand_tag_names(target)):
                     return True
         return False
 
@@ -434,24 +436,24 @@ def _comparison_influencing_tags(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _source_tag_name(instr.source)
+            source_name = value_tag_name(instr.source)
             if source_name is None:
                 continue
-            for tn in _operand_tag_names(instr.dest):
+            for tn in operand_tag_names(instr.dest, _expand_indirect_tag_names):
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, FillInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _source_tag_name(instr.value)
+            source_name = value_tag_name(instr.value)
             if source_name is None:
                 continue
-            for tn in _operand_tag_names(instr.dest):
+            for tn in operand_tag_names(instr.dest, _expand_indirect_tag_names):
                 target_to_sources.setdefault(tn, set()).add(source_name)
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _operand_tag_names(instr.source)
-            dest_names = _operand_tag_names(instr.dest)
+            source_names = operand_tag_names(instr.source, _expand_indirect_tag_names)
+            dest_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
             if source_names and dest_names and len(source_names) == len(dest_names):
                 for src, dst in zip(source_names, dest_names, strict=True):
                     target_to_sources.setdefault(dst, set()).add(src)
@@ -809,7 +811,7 @@ def _compute_stepping_tags(
                     arithmetic.add(target_name)
 
             if isinstance(instr, CopyInstruction) and instr.convert is None:
-                source_name = _source_tag_name(instr.source)
+                source_name = value_tag_name(instr.source)
                 if source_name is not None and source_name != target_name:
                     copy_targets[target_name] = source_name
                 elif source_name is None:
@@ -1532,8 +1534,8 @@ def _domain_from_blockcopy(
     With an indexed window on either side (``DS.select(Ptr, Ptr + 1)``) the
     position is unknown, so the target takes any source element's value.
     """
-    source_names = _operand_tag_names(instr.source)
-    dest_names = _operand_tag_names(instr.dest)
+    source_names = operand_tag_names(instr.source, _expand_indirect_tag_names)
+    dest_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
     if not dest_names or target_name not in dest_names:
         return ()
     if _has_pointers(instr.source) or _has_pointers(instr.dest):
@@ -1996,7 +1998,7 @@ def collect_produced_value_domains(
             source = instr.value
 
         if source is not None:
-            source_name = _source_tag_name(source)
+            source_name = value_tag_name(source)
             if source_name is not None:
                 # An identity self-copy only retains the already-accounted-for
                 # value; it is not an unknown producer.
@@ -2019,7 +2021,7 @@ def collect_produced_value_domains(
             return refs is not None and target_name not in refs and refs <= known.keys()
 
         if isinstance(instr, BlockCopyInstruction):
-            sources = _fixed_tag_names(instr.source)
+            sources = operand_tag_names(instr.source)
             return bool(sources) and set(sources) <= known.keys()
 
         # Drums, searches, and converting copies have intrinsic finite domains;
@@ -2045,7 +2047,7 @@ def collect_produced_value_domains(
                 # A self-copy contributes no new value beyond retention.
                 if isinstance(instr, CopyInstruction | FillInstruction):
                     source = instr.source if isinstance(instr, CopyInstruction) else instr.value
-                    if _source_tag_name(source) == target_name:
+                    if value_tag_name(source) == target_name:
                         continue
                 domain = _domain_from_write_instruction(
                     instr,
@@ -2105,39 +2107,6 @@ def _expand_indirect_tag_names(dest: Any) -> list[str]:
             return []
 
 
-def _fixed_tag_names(arg: Value | Span) -> list[str]:
-    """Return the names of the tags that *arg* names at fixed addresses, in address order.
-
-    A pointer, a constant and an expression name none.
-    """
-    match arg:
-        case TagArg(tag=tag):
-            return [tag.name]
-        case RangeArg(span=span):
-            return [tag.name for tag in span.tags()]
-        case PointerArg() | PointerRangeArg() | ConstArg() | ExprArg():
-            return []
-        case _:
-            assert_never(arg)
-
-
-def _operand_tag_names(arg: Value | Span) -> list[str]:
-    """Return the names of the tags that *arg* can name, in address order.
-
-    A pointer names the elements that :func:`_expand_indirect_tag_names` lists.  A
-    constant and an expression name none.
-    """
-    match arg:
-        case PointerArg(ref=ref):
-            return _expand_indirect_tag_names(ref)
-        case PointerRangeArg(span=span):
-            return _expand_indirect_tag_names(span)
-        case TagArg() | RangeArg() | ConstArg() | ExprArg():
-            return _fixed_tag_names(arg)
-        case _:
-            assert_never(arg)
-
-
 def _has_pointers(span: Span) -> bool:
     """Return whether the scan reads the ends of *span* from pointers."""
     match span:
@@ -2147,22 +2116,6 @@ def _has_pointers(span: Span) -> bool:
             return False
         case _:
             assert_never(span)
-
-
-def _source_tag_name(source: Value) -> str | None:
-    """Return the name of the tag that the source of a copy or a fill reads, or None.
-
-    Return None for a pointer, a constant, or an expression that is more than one tag.
-    """
-    match source:
-        case TagArg(tag=tag):
-            return tag.name
-        case ExprArg(expr=expr):
-            return _tag_name_from_value(expr)
-        case PointerArg() | ConstArg():
-            return None
-        case _:
-            assert_never(source)
 
 
 def _unsupported_reverse_sources(
@@ -2194,7 +2147,7 @@ def _unsupported_reverse_sources(
                     source_name = _tag_name_from_value(instr.expression.right)
         if source_name is None:
             return []
-        target_names = _operand_tag_names(instr.dest)
+        target_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
         uncovered = [
             tn
             for tn in target_names
@@ -2205,10 +2158,10 @@ def _unsupported_reverse_sources(
 
     elif isinstance(instr, CopyInstruction | FillInstruction):
         source = instr.source if isinstance(instr, CopyInstruction) else instr.value
-        source_name = _source_tag_name(source)
+        source_name = value_tag_name(source)
         if source_name is None:
             return []
-        target_names = _operand_tag_names(instr.dest)
+        target_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
         uncovered = [
             tn
             for tn in target_names
@@ -2218,8 +2171,8 @@ def _unsupported_reverse_sources(
             return [(source_name, uncovered)]
 
     elif isinstance(instr, BlockCopyInstruction):
-        source_names = _operand_tag_names(instr.source)
-        dest_names = _operand_tag_names(instr.dest)
+        source_names = operand_tag_names(instr.source, _expand_indirect_tag_names)
+        dest_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
         result: list[tuple[str, list[str]]] = []
         if source_names and dest_names:
             if len(source_names) == len(dest_names):
@@ -2362,28 +2315,28 @@ def _backward_propagate_comparison_boundaries(
         if isinstance(instr, CopyInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _source_tag_name(instr.source)
+            source_name = value_tag_name(instr.source)
             if source_name is None:
                 continue
-            for target_name in _operand_tag_names(instr.dest):
+            for target_name in operand_tag_names(instr.dest, _expand_indirect_tag_names):
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, FillInstruction):
             if instr.convert is not None:
                 continue
-            source_name = _source_tag_name(instr.value)
+            source_name = value_tag_name(instr.value)
             if source_name is None:
                 continue
-            for target_name in _operand_tag_names(instr.dest):
+            for target_name in operand_tag_names(instr.dest, _expand_indirect_tag_names):
                 reverse_edges.setdefault(source_name, []).append((target_name, _IDENTITY, None))
                 covered_pairs.add((source_name, target_name))
 
         elif isinstance(instr, BlockCopyInstruction):
             if instr.convert is not None:
                 continue
-            source_names = _fixed_tag_names(instr.source)
-            dest_names = _operand_tag_names(instr.dest)
+            source_names = operand_tag_names(instr.source)
+            dest_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
             if source_names and dest_names:
                 if len(source_names) == len(dest_names):
                     for src, dst in zip(source_names, dest_names, strict=True):
@@ -2544,7 +2497,7 @@ def _backward_propagate_comparison_boundaries(
     for instr in walk_instructions(program):
         if carried_back and isinstance(instr, CalcInstruction):
             # Whatever shape it is in, a Math no edge covers has no way back from its target.
-            dest_names = _operand_tag_names(instr.dest)
+            dest_names = operand_tag_names(instr.dest, _expand_indirect_tag_names)
             for source_name in sorted(carried_back & _extract_tag_names(instr.expression, {})):
                 for target_name in dest_names:
                     if (

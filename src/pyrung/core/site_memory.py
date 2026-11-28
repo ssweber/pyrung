@@ -48,8 +48,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.operands import TagArg
-from pyrung.core.instruction.resolvers import operand_object
+from pyrung.core.instruction.operands import TagArg, operand_object
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:

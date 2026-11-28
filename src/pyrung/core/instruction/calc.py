@@ -49,12 +49,12 @@ from .operands import (
     Value,
     ValueOperand,
     check_rules,
+    operand_object,
 )
 from .resolvers import (
     _raise_fault,
     _set_fault_address_error,
     _set_fault_out_of_range,
-    operand_object,
 )
 from .utils import guard_oneshot_execution
 

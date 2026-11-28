@@ -22,7 +22,7 @@ single useful sound bound.
 
 from __future__ import annotations
 
-from typing import Any, assert_never, cast
+from typing import Any, assert_never
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.crossing import (
@@ -63,7 +63,7 @@ class _CounterDoneCrossing(BaseCrossing):
                     AffineCmp(acc, self._op, preset_tag.name, offset=self._frontier_offset)
                 )
             case ConstArg(value=bound):
-                return single(Cmp(acc, self._op, cast(int, bound) + self._frontier_offset))
+                return single(Cmp(acc, self._op, bound + self._frontier_offset))
             case _:
                 assert_never(preset)
 

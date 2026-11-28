@@ -28,7 +28,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.resolvers import operand_object
+from pyrung.core.instruction.operands import operand_object
 from pyrung.core.rung import Rung
 
 if TYPE_CHECKING:

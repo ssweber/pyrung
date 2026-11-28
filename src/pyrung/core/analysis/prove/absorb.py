@@ -32,7 +32,7 @@ from __future__ import annotations
 import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, assert_never, cast
+from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.simplified import Atom, Expr
 from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, Value
@@ -163,7 +163,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
             case TagArg(tag=preset_tag):
                 preset_tags[done_name] = preset_tag.name
             case ConstArg(value=value):
-                presets[done_name] = int(cast(int, value))
+                presets[done_name] = value
             case _:
                 assert_never(instr.preset)
 

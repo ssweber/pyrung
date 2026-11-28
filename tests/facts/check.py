@@ -1047,8 +1047,8 @@ def _bands(facts: Facts) -> dict[str, _Band]:
             ends = [getattr(instr, f, None) for f in ("on_preset", "off_preset")]
             for acc in accs:
                 if acc is not None:
-                    steps[acc.name] = math.ceil(DT * 1e9 / instr.unit.ns)
-                    presets[acc.name] = [bound(end) for end in ends if end is not None]
+                    steps[acc.tag.name] = math.ceil(DT * 1e9 / instr.unit.ns)
+                    presets[acc.tag.name] = [bound(end) for end in ends if end is not None]
     prior = facts.prior
     bands: dict[str, _Band] = {}
 

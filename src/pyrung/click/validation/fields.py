@@ -27,13 +27,12 @@ from pyrung.core.expression import Expression
 from pyrung.core.instruction.operands import (
     ConstArg,
     ExprArg,
-    PointerArg,
-    PointerRangeArg,
     Preset,
     RangeArg,
     Span,
     TagArg,
     Value,
+    operand_object,
 )
 from pyrung.core.memory_block import BlockRange, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
@@ -351,29 +350,6 @@ def memory_types(operand: Any, resolver: _ResolutionCache) -> set[str]:
     """Return the CLICK banks that *operand* maps to."""
     slots = resolver.resolve_operand_slots(operand_object(operand)).slots
     return {slot.memory_type for slot in slots}
-
-
-def operand_object(value: Any) -> Any:
-    """Return the tag, range, pointer, expression or constant inside a parsed operand.
-
-    The checks in this module read a condition's operands and an instruction's operands
-    alike. They call this function on an instruction's operand first. The function drops
-    ``immediate()``, because those checks read the tag inside it.
-    Any value that is not a parsed operand comes back unchanged.
-    """
-    match value:
-        case TagArg(tag=tag):
-            return tag
-        case RangeArg(span=span) | PointerRangeArg(span=span):
-            return span
-        case PointerArg(ref=ref):
-            return ref
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=constant):
-            return constant
-        case _:
-            return value
 
 
 def _range_text(exporter: Any, span: BlockRange, path: str, instruction: Any) -> tuple[str, Any]:
@@ -775,7 +751,6 @@ __all__ = [
     "default_place",
     "evaluate_family",
     "memory_types",
-    "operand_object",
     "refusals_of",
     "render_arg",
     "render_operand",

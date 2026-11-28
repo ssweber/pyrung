@@ -30,11 +30,9 @@ from pyrung.core.instruction.operands import (
     ConstArg,
     ExprArg,
     PointerArg,
-    PointerRangeArg,
-    RangeArg,
-    Span,
     TagArg,
     Value,
+    operand_tags,
 )
 from pyrung.core.tag import ImmediateRef, Tag
 
@@ -79,22 +77,6 @@ _CallerMap = dict[str, list[_CallerEntry]]
 # ---------------------------------------------------------------------------
 # Target extraction helpers
 # ---------------------------------------------------------------------------
-
-
-def operand_tags(operand: Value | Span) -> tuple[Tag, ...]:
-    """Return the tags that a parsed operand names at a fixed address, in the order of the range.
-
-    A pointer, a range with pointers, an expression and a constant name none.
-    """
-    match operand:
-        case TagArg(tag=tag):
-            return (tag,)
-        case RangeArg(span=span):
-            return tuple(span.tags())
-        case PointerArg() | PointerRangeArg() | ExprArg() | ConstArg():
-            return ()
-        case _:
-            assert_never(operand)
 
 
 def _resolve_tag_names(target: Any) -> list[str]:

@@ -54,9 +54,9 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
+    operand_object,
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.validation.walker import operand_object
 
 _COMPARE_SYMBOLS: dict[type, str] = {
     CompareEq: "==",
@@ -129,7 +129,7 @@ def operand_name(value: Any) -> str:
     )
     from pyrung.core.structure import InstanceView
 
-    inner = operand_object(value)[0]
+    inner = operand_object(value)
     if inner is not value:  # a parsed operand
         return operand_name(inner)
     if isinstance(value, ImmediateRef):

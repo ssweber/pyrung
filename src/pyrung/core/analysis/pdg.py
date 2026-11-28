@@ -16,7 +16,7 @@ from pyrung.core.instruction.advanced import SearchInstruction
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.instruction.operands import RangeArg, TagArg
+from pyrung.core.instruction.operands import RangeArg, TagArg, operand_object
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -35,7 +35,6 @@ from .write_sites import (
     instruction_fault_writes,
     instruction_partial_write_targets,
     instruction_write_targets,
-    operand_leaf,
 )
 
 if TYPE_CHECKING:
@@ -1121,7 +1120,7 @@ def _extract_tag_names(
     seen: set[int] = set()
 
     def walk(current: Any) -> None:
-        current = operand_leaf(current)
+        current = operand_object(current)
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -1226,7 +1225,7 @@ def _extract_write_targets(
     seen: set[int] = set()
 
     def walk_target(current: Any) -> None:
-        current = operand_leaf(current)
+        current = operand_object(current)
         if current is None:
             return
         if isinstance(current, (bool, int, float, str, bytes, bytearray, Enum)):
@@ -2112,7 +2111,7 @@ def _visit_indirect_refs(
 
     *visit_range*, when given, is also called on every ``IndirectBlockRange``.
     """
-    obj = operand_leaf(obj)
+    obj = operand_object(obj)
     if obj is None or isinstance(
         obj,
         (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType, Tag, Block),

@@ -60,9 +60,9 @@ raw value again.  A reader that takes the operands of every instruction calls
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, assert_never
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, assert_never, final
 
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter, to_text
@@ -83,6 +83,7 @@ _NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL
 # ``vars()`` through a program still reach the tags inside them.
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class TagArg:
     """One tag.  *immediate* is True when the author wrapped it in ``immediate()``.
@@ -99,6 +100,7 @@ class TagArg:
         _check_wrapper(self, self.tag)
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class PointerArg:
     """One element that a pointer picks when the scan runs, such as ``DS[Ptr]``."""
@@ -111,17 +113,23 @@ class PointerArg:
         return self.ref.block
 
 
+_Constant = TypeVar("_Constant", covariant=True)
+
+
+@final
 @dataclass(frozen=True, eq=False)
-class ConstArg:
+class ConstArg(Generic[_Constant]):
     """A constant, such as 5, 1.5, True or "AB".
 
     *value* can be any other object that the field accepts, such as a structure that
-    ``copy()`` writes into a TXT.  The scan stores it as it is.
+    ``copy()`` writes into a TXT.  The scan stores it as it is.  A preset holds a
+    ``ConstArg[int]``, so its readers need no test of the type.
     """
 
-    value: object
+    value: _Constant
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class ExprArg:
     """An expression that the scan evaluates, such as ``DS1 + 1``."""
@@ -129,6 +137,7 @@ class ExprArg:
     expr: Expression
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class RangeArg:
     """A range with fixed ends, such as ``DS.select(1, 10)``.
@@ -144,6 +153,7 @@ class RangeArg:
         _check_wrapper(self, self.span)
 
 
+@final
 @dataclass(frozen=True, eq=False)
 class PointerRangeArg:
     """A range whose ends the scan reads, such as ``DS.select(Lo, Hi)``."""
@@ -174,9 +184,88 @@ Span = RangeArg | PointerRangeArg
 """What a field that takes a range holds, such as the destination of ``fill()``."""
 Coil = TagArg | RangeArg
 """What a coil writes, such as the target of ``out()``: one tag, or a range with fixed ends."""
-Preset = TagArg | ConstArg
+Preset = TagArg | ConstArg[int]
 """What a preset or a step number holds, such as the preset of ``on_delay()``: a tag or an
 integer constant."""
+
+
+def operand_object(value: Any) -> Any:
+    """Return the tag, range, pointer, expression or constant inside a parsed operand.
+
+    Return any other value unchanged.  A reader that walks every field of an instruction
+    calls this on each value, so it reaches the tags inside a parsed operand.  The
+    result drops ``immediate()``.  :func:`operand_parts` also says whether the operand
+    was in it.
+    """
+    return operand_parts(value)[0]
+
+
+def operand_parts(value: Any) -> tuple[Any, bool]:
+    """Return the object inside a parsed operand, and whether it is in ``immediate()``.
+
+    Return any other value unchanged, with False.
+    """
+    match value:
+        case (
+            TagArg(tag=held_object, immediate=immediate)
+            | RangeArg(span=held_object, immediate=immediate)
+        ):
+            return held_object, immediate
+        case (
+            PointerArg(ref=held_object)
+            | PointerRangeArg(span=held_object)
+            | ExprArg(expr=held_object)
+            | ConstArg(value=held_object)
+        ):
+            return held_object, False
+        case _:
+            return value, False
+
+
+def operand_tags(operand: Value | Span) -> tuple[Tag, ...]:
+    """Return the tags that *operand* names at fixed addresses, in the order of its range.
+
+    A pointer, a range with pointers, an expression and a constant name none.
+    """
+    match operand:
+        case TagArg(tag=tag):
+            return (tag,)
+        case RangeArg(span=span):
+            return tuple(span.tags())
+        case PointerArg() | PointerRangeArg() | ExprArg() | ConstArg():
+            return ()
+        case _:
+            assert_never(operand)
+
+
+def operand_tag_names(
+    operand: Value | Span, expand: Callable[[Any], list[str]] | None = None
+) -> list[str]:
+    """Return the names of the tags that *operand* can name, in the order of its range.
+
+    *expand* lists the names for a pointer or a range with pointers.  Without it they
+    name none, and neither does a constant or an expression.
+    """
+    match operand:
+        case PointerArg(ref=pointer) | PointerRangeArg(span=pointer):
+            return [] if expand is None else expand(pointer)
+        case TagArg() | RangeArg() | ConstArg() | ExprArg():
+            return [tag.name for tag in operand_tags(operand)]
+        case _:
+            assert_never(operand)
+
+
+def plain_tag_name(operand: Any) -> str | None:
+    """Return the name of the tag in *operand* if it is one tag without ``immediate()``.
+
+    Return None for anything else.  The readers that call this skip a tag in
+    ``immediate()``.
+    """
+    match operand:
+        case TagArg(tag=tag, immediate=False):
+            return tag.name
+        case _:
+            return None
 
 
 def held(arg: Value | Span) -> Any:

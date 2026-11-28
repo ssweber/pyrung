@@ -53,7 +53,14 @@ from pyrung.core.analysis.write_sites import (
     instruction_write_targets,
     instruction_written_tags,
 )
-from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, Value
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    TagArg,
+    Value,
+    operand_tags,
+)
 from pyrung.core.tag import ImmediateRef, tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
@@ -69,7 +76,6 @@ from pyrung.core.validation._common import (
     _scope_reach_chains,
     _tag_name,
     iter_rungs,
-    operand_tags,
     site_frame,
     walk_instructions,
 )

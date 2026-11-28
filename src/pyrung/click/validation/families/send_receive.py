@@ -11,6 +11,7 @@ from typing import Any
 
 from laddercodec import Receive, Send
 
+from pyrung.core.instruction.operands import operand_object
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, is_modbus_status_tag
 from pyrung.core.tag import Tag
 from pyrung.core.validation.render import Call, call_of, operand_name
@@ -20,7 +21,6 @@ from ..fields import (
     Operand,
     Unbuildable,
     _address_text,
-    operand_object,
     refusals_of,
     render_arg,
     render_operand,

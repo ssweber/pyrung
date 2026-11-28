@@ -10,9 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.operands import ConstArg
+from pyrung.core.instruction.operands import ConstArg, operand_tags
 from pyrung.core.tag import Tag
-from pyrung.core.validation._common import WriteSite, operand_tags, site_frame
+from pyrung.core.validation._common import WriteSite, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.severity import Severity

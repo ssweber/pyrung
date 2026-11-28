@@ -31,6 +31,7 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
+    operand_object,
 )
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.memory_block import BlockRange
@@ -317,7 +318,7 @@ class _InstructionMixin:
                 ),
                 source=instruction,
             )
-        if _plain_text_converter(_authored_value(value), tag) is not None:
+        if _plain_text_converter(operand_object(value), tag) is not None:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
@@ -929,25 +930,6 @@ class _InstructionMixin:
         if not parts:
             return f"{name}()"
         return f"{name}({','.join(parts)})"
-
-
-def _authored_value(value: Value) -> Any:
-    """Return the tag, pointer, expression or constant inside *value*.
-
-    ``_plain_text_converter`` reads the operand that the author passed. It finds the same
-    conversion for a tag with or without ``immediate()``.
-    """
-    match value:
-        case TagArg(tag=tag):
-            return tag
-        case PointerArg(ref=ref):
-            return ref
-        case ExprArg(expr=expr):
-            return expr
-        case ConstArg(value=constant):
-            return constant
-        case _:
-            assert_never(value)
 
 
 # ---- External target / remote-start helpers ----

@@ -25,7 +25,7 @@ from pyrung.core.crossing import (
     Literal,
     invert_affine_candidate,
 )
-from pyrung.core.instruction.operands import TagArg
+from pyrung.core.instruction.operands import TagArg, plain_tag_name
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -292,7 +292,7 @@ def writer_value_facts(program: Any, pdg: ProgramGraph) -> dict[str, tuple[Write
                 instr = _writer_for_tag(rung_obj, tag_name)
                 if not (
                     isinstance(instr, OutInstruction)
-                    and _plain_tag_name(instr.target) == tag_name
+                    and plain_tag_name(instr.target) == tag_name
                     and not getattr(instr, "_oneshot", False)
                 ):
                     continue
@@ -314,18 +314,6 @@ def writer_value_facts(program: Any, pdg: ProgramGraph) -> dict[str, tuple[Write
     result = {tag: tuple(v) for tag, v in facts.items()}
     object.__setattr__(pdg, "_writer_value_facts_cache", result)
     return result
-
-
-def _plain_tag_name(arg: Any) -> str | None:
-    """Return the name of the tag in *arg* if it is one tag without ``immediate()``, else None.
-
-    The readers in this module skip a tag in ``immediate()``.
-    """
-    match arg:
-        case TagArg(tag=tag, immediate=False):
-            return tag.name
-        case _:
-            return None
 
 
 def _named_copy_source(instr: Any) -> str | None:

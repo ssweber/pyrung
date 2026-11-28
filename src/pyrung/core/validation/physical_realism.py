@@ -16,13 +16,12 @@ from pyrung.core.condition import (
     FallingEdgeCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.instruction.operands import ConstArg
+from pyrung.core.instruction.operands import ConstArg, operand_tags
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import (
     WriteSite,
     _chain_pair_mutually_exclusive,
     _collect_write_sites,
-    operand_tags,
     site_frame,
 )
 from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin

@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.validation._common import operand_tags, walk_instructions
+from pyrung.core.instruction.operands import operand_tags
+from pyrung.core.validation._common import walk_instructions
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program

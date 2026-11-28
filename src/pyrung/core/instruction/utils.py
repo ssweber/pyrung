@@ -127,7 +127,7 @@ def resolve_preset_ctx(preset: Preset, ctx: ScanContext) -> int:
         case TagArg(tag=tag):
             return ctx.get_tag(tag.name, tag.default)
         case ConstArg(value=value):
-            return cast(int, value)
+            return value
         case _:
             assert_never(preset)
 

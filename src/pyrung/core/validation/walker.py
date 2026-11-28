@@ -41,12 +41,8 @@ from pyrung.core.expression import (
     Expression,
 )
 from pyrung.core.instruction.operands import (
-    ConstArg,
-    ExprArg,
-    PointerArg,
-    PointerRangeArg,
-    RangeArg,
-    TagArg,
+    operand_object,
+    operand_parts,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -143,28 +139,6 @@ def _instruction_fields(instr: Any) -> tuple[str, ...] | None:
 # ---------------------------------------------------------------------------
 # Value classification
 # ---------------------------------------------------------------------------
-
-
-def operand_object(value: Any) -> tuple[Any, bool]:
-    """Return the object inside a parsed operand, and whether it is in ``immediate()``.
-
-    Return any other value unchanged, with False.  ``walk_program()`` and
-    ``walk_rung_operands()`` call it on each value that they meet.
-    ``walk_rung_operands()`` also calls it on each item of a tuple, so it finds the tags
-    in a drum's outputs.
-    """
-    match value:
-        case TagArg(tag=inner, immediate=immediate) | RangeArg(span=inner, immediate=immediate):
-            return inner, immediate
-        case (
-            PointerArg(ref=inner)
-            | PointerRangeArg(span=inner)
-            | ExprArg(expr=inner)
-            | ConstArg(value=inner)
-        ):
-            return inner, False
-        case _:
-            return value, False
 
 
 def _classify_immediate(wrapped: Any) -> tuple[ValueKind, str, str, dict[str, str | int | bool]]:
@@ -452,7 +426,7 @@ def walk_rung_operands(
                 walk_value(cond)
 
     def walk_value(value: Any) -> None:
-        value = operand_object(value)[0]
+        value = operand_object(value)
         value_id = id(value)
         if value_id in seen_values:
             return
@@ -759,7 +733,7 @@ class _Walker:
         instr_type: str | None,
         arg_path: str,
     ) -> None:
-        inner, immediate = operand_object(obj)
+        inner, immediate = operand_parts(obj)
         if immediate:
             # The guard keys on the ImmediateRef that the author passed.
             key = obj.wrapper

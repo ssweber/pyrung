@@ -27,9 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.write_sites import operand_leaf
 from pyrung.core.context import RungId
-from pyrung.core.instruction.operands import ConstArg, TagArg
+from pyrung.core.instruction.operands import ConstArg, TagArg, operand_object
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal import CausalChain
@@ -45,7 +44,7 @@ def find_tag_object(logic: list[Rung], tag_name: str) -> Tag | None:
 
     for rung in logic:
         for instr in rung._instructions:
-            target = operand_leaf(getattr(instr, "target", None))
+            target = operand_object(getattr(instr, "target", None))
             if isinstance(target, TagClass) and target.name == tag_name:
                 return target
         # Also check conditions for tag references
@@ -392,7 +391,7 @@ def _tag_index(program: Any) -> dict[str, Tag]:
                     note(getattr(node, "value", None))
             for instr in rung._instructions:
                 for attr in ("target", "dest", "source"):
-                    note(operand_leaf(getattr(instr, attr, None)))
+                    note(operand_object(getattr(instr, attr, None)))
     return index
 
 

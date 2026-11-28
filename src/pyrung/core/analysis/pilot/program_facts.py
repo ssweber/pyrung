@@ -14,7 +14,14 @@ from pyrung.core.analysis.pdg import ProgramGraph, TagRole, resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import single_calc_source
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _expr_tag_names, _values_match
-from pyrung.core.instruction.operands import ConstArg, Dest, ExprArg, PointerArg, TagArg, Value
+from pyrung.core.instruction.operands import (
+    ConstArg,
+    ExprArg,
+    PointerArg,
+    TagArg,
+    Value,
+    plain_tag_name,
+)
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import tag_written_from_outside
 
@@ -108,8 +115,8 @@ def compute_reference_constants(
         for rung in rungs:
             for instruction in getattr(rung, "_instructions", ()):
                 if isinstance(instruction, CopyInstruction):
-                    source_name = _plain_tag_name(instruction.source)
-                    destination_name = copy_dest_name(instruction.dest)
+                    source_name = plain_tag_name(instruction.source)
+                    destination_name = plain_tag_name(instruction.dest)
                     if (
                         source_name
                         and destination_name
@@ -162,34 +169,6 @@ def compute_reference_constants(
         return tag is None or not tag_written_from_outside(tag)
 
     return frozenset(name for name in candidates if _is_program_constant(name))
-
-
-def _plain_tag_name(source: Value) -> str | None:
-    """Return the name of the tag that the source of a copy reads, or None.
-
-    A pointer, a constant, an expression and an ``immediate()`` tag give None.
-    """
-    match source:
-        case TagArg(tag=tag, immediate=False):
-            return tag.name
-        case TagArg() | PointerArg() | ConstArg() | ExprArg():
-            return None
-        case _:
-            assert_never(source)
-
-
-def copy_dest_name(dest: Dest) -> str | None:
-    """Return the name of the tag that a copy writes, or None.
-
-    A pointer and an ``immediate()`` tag give None.
-    """
-    match dest:
-        case TagArg(tag=tag, immediate=False):
-            return tag.name
-        case TagArg() | PointerArg():
-            return None
-        case _:
-            assert_never(dest)
 
 
 def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:

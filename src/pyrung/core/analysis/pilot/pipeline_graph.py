@@ -25,9 +25,8 @@ from typing import TYPE_CHECKING, Any, assert_never
 
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute, expand_routes
 from pyrung.core.analysis.pilot.navigation_contracts import _context_value_key
-from pyrung.core.analysis.pilot.program_facts import copy_dest_name
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg
+from pyrung.core.instruction.operands import ConstArg, ExprArg, PointerArg, TagArg, plain_tag_name
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -686,7 +685,7 @@ def _scan_indirect_copy_targets(program: Any) -> set[str]:
                     continue
                 match instr.source:
                     case PointerArg():
-                        dest_name = copy_dest_name(instr.dest)
+                        dest_name = plain_tag_name(instr.dest)
                         if dest_name:
                             targets.add(dest_name)
                     case TagArg() | ConstArg() | ExprArg():
