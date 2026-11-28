@@ -30,7 +30,8 @@ Groups (this is the brief for the tool, written after two branches regressed how
     forloop    a For calling a subroutine over Int and Dint counts (declared 0..5, choices, a
                body-rung contact the body writes), and a producer in a subroutine the For calls
     system     a copy of a system tag that the runtime writes (the scan counter, an RTC field),
-               compared with a value that the runtime gives it
+               compared with a value that the runtime gives it; a clock set before the first
+               scan and after one scan; a held timer beside a copy of the RTC hour
     preset     a negative preset, written as a literal and as a tag: a counter held in
                reset, the same counter staged below its preset, an on-delay
     accs       a count a copy stages past its preset, counts compared with each other
@@ -1711,10 +1712,11 @@ _add(
 # --------------------------------------------------------------------------- system
 
 
-def _copied_system_tag(source, at_least, rtc=None):
+def _copied_system_tag(source, at_least, rtc=None, steps=0):
     """Go latches Hit once a copy of *source* is at least *at_least*.
 
-    The runtime writes *source*, so the copy can hold values that no rung writes.
+    The runtime writes *source*, so the copy can hold values that no rung writes.  The session
+    steps *steps* scans before it sets *rtc*.
     """
 
     def build():
@@ -1726,11 +1728,35 @@ def _copied_system_tag(source, at_least, rtc=None):
             with rung(go, copied >= at_least):
                 latch(hit)
         plc = PLC(prog, dt=0.01)
+        for _ in range(steps):
+            plc.step()
         if rtc is not None:
             plc.set_rtc(rtc)
         return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
 
     return build
+
+
+def _timer_beside_rtc_copy():
+    """En times a 3 s on-delay that latches Hit, beside a copy of the RTC hour.
+
+    The session sets the RTC after one scan.  how() drops the plan's temporary logic and runs
+    the plan again from its first scan.  That run must keep the clock the session set.
+    """
+    en, hit = Bool("En", external=True), Bool("Hit")
+    hour = Int("H")
+    wait = Timer.clone("W")
+    with Program(strict=False) as prog:
+        with rung():
+            copy(system.rtc.hour, hour)
+        with rung(en):
+            on_delay(wait, 3000)
+        with rung(wait.Done):
+            latch(hit)
+    plc = PLC(prog, dt=0.01)
+    plc.step()
+    plc.set_rtc(datetime(2026, 6, 15, 13, 30, 20))
+    return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
 
 
 _add(
@@ -1743,6 +1769,12 @@ _add(
     "system/copy of the rtc hour reaches 13",
     _copied_system_tag(system.rtc.hour, 13, datetime(2026, 6, 15, 13, 30, 20)),
 )
+_add(
+    "system",
+    "system/copy of the rtc hour set after a scan reaches 13",
+    _copied_system_tag(system.rtc.hour, 13, datetime(2026, 6, 15, 13, 30, 20), steps=1),
+)
+_add("system", "system/timer beside a copy of the rtc hour", _timer_beside_rtc_copy)
 
 
 # --------------------------------------------------------------------------- preset
