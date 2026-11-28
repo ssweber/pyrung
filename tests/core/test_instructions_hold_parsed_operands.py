@@ -11,15 +11,16 @@ fails here until someone lists its fields.
 
 from __future__ import annotations
 
+import importlib
 import inspect
+import pkgutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-import pyrung.circuitpy  # noqa: F401 - imports every instruction class
-import pyrung.click  # noqa: F401
+import pyrung
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
 from pyrung.core.instruction.base import Instruction
@@ -57,7 +58,9 @@ STRUCTURAL: dict[str, tuple[str, ...]] = {
     "EventDrumInstruction": ("events", *_DRUM_CONDITIONS),
     "FillInstruction": (),
     "FlasherInstruction": ("enable_condition",),
-    # forloop() makes the tag that holds the loop's index.
+    # forloop() makes the tag that holds the loop's index, and the author never passes it.
+    # send() and receive() differ.  The author may pass each status tag, so the tag is parsed
+    # even when the builder makes a hidden one.
     "ForLoopInstruction": ("idx_tag",),
     "FunctionCallInstruction": (),
     # A coil keeps the tags of its target, read from the parsed target, to write them fast.
@@ -88,6 +91,9 @@ STRUCTURAL: dict[str, tuple[str, ...]] = {
 
 def _instruction_classes() -> set[str]:
     """Return the name of each instruction class in pyrung that a program can hold."""
+    # Import every module, so that a class counts even when no package imports its module.
+    for module in pkgutil.walk_packages(pyrung.__path__, "pyrung."):
+        importlib.import_module(module.name)
     found: set[str] = set()
     pending = [Instruction]
     while pending:
