@@ -30,6 +30,7 @@ from pyrung.core.expression import (
     CALC_OPS,
     DOMAIN_LIMITED_MATH_FUNCS,
     DOUBLE_EXACT_LIMIT,
+    POW_EXACT_MAX,
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
@@ -182,14 +183,13 @@ def _compile_expression_impl(
             if calc_op and expr.symbol == "**":
                 # The core computes a power of two ints exactly and rounds it to a double
                 # (DoubleBinaryExpr).  _pow and _pow_calc compute the same power, and
-                # float(_dbl()) rounds it.  A double step always returns a float
-                # (_int_bound).  The jit cannot trace _pow_calc, because its flags
-                # parameter has a default.  So an exponent from 1 to 64, which needs no
-                # guard, calls _pow.
+                # _dbl() rounds it.  float() keeps the step a float, as _int_bound expects
+                # of a double step.  The jit cannot trace _pow_calc's log, so a literal
+                # exponent that needs no guard calls _pow (_exact_power_literal).
                 ctx.mark_helper("_math_func")
                 ctx.mark_helper("_pow")
                 ctx.mark_helper("_dbl")
-                if _small_count_literal(expr.right, low=1):
+                if _exact_power_literal(expr.right):
                     return f"float(_dbl(_pow({left}, {right})))"
                 ctx.mark_helper("_pow_calc")
                 ctx.mark_helper("_term_fail")
@@ -225,11 +225,11 @@ def _compile_expression_impl(
             if expr.symbol in ("<<", ">>"):
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
-        if calc_op and expr.symbol == "**" and not _small_count_literal(expr.right, low=1):
+        if calc_op and expr.symbol == "**" and not _exact_power_literal(expr.right):
             # A Math's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
             # a negative power is +Inf.  A complex result is 0 with SC46.  An integer
-            # power past the double range is Inf without being computed.  An exponent
-            # from 1 to 64 is cheap to compute, so that power stays inline.
+            # power past the double range is Inf without being computed.  A literal
+            # exponent that needs no guard stays inline (_exact_power_literal).
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")
@@ -658,9 +658,18 @@ def _reads_int_of_float(expr: Any) -> bool:
     return False
 
 
-def _small_count_literal(expr: Any, *, low: int = 0) -> bool:
-    """Return whether *expr* is an int constant from *low* to 64."""
-    return _non_negative_int_literal(expr) and low <= expr.value <= 64
+def _small_count_literal(expr: Any) -> bool:
+    """Return whether *expr* is an int constant from 0 to 64."""
+    return _non_negative_int_literal(expr) and expr.value <= 64
+
+
+def _exact_power_literal(expr: Any) -> bool:
+    """Return whether *expr* is an int exponent from 1 to ``POW_EXACT_MAX``.
+
+    The exact power is cheap for such an exponent, so it needs no guard.  The jit traces
+    ``_pow``, but it cannot trace the log in ``_pow_calc``.
+    """
+    return _non_negative_int_literal(expr) and 1 <= expr.value <= POW_EXACT_MAX
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:

@@ -16,7 +16,7 @@ from pyrung.circuitpy.codegen._constants import (
     _INT_MAX,
     _INT_MIN,
 )
-from pyrung.core.expression import POW_LOG_LIMIT
+from pyrung.core.expression import POW_EXACT_MAX, POW_LOG_LIMIT
 from pyrung.core.storage import CHAR_CODE_MAX, NOT_A_CHAR, REAL_MAX, WORD_STORE_FLOOR
 
 
@@ -469,16 +469,21 @@ _HELPER_DEFS: dict[str, list[str]] = {
     # +/-Inf for an integer power past the double range.  It reads only a log and never
     # computes that power (core int_power_past_doubles).  An exponent too large for a
     # float makes the log raise OverflowError.  The power is then 0 with SC43, as in the
-    # core.
+    # core.  The jit cannot trace math.log.  So an exponent from POW_EXACT_MAX + 1 to
+    # 2 ** 31 - 1 gives Inf without the log, which keeps a literal exponent traceable.
+    # The log cannot overflow in that range, so the core gives the same Inf.
     "_pow_calc": [
-        "def _pow_calc(base, exp, flags=None):",
+        "def _pow_calc(base, exp, flags):",
         "    if base == 0 and exp <= 0:",
         '        return 0 if exp == 0 else float("inf")',
         "    if type(base) is int and type(exp) is int and exp > 0 and abs(base) > 1:",
-        "        try:",
-        f"            past = math.log(abs(base)) * exp > {POW_LOG_LIMIT!r}",
-        "        except OverflowError:",
-        "            return _term_fail(flags, 43)",
+        f"        if {POW_EXACT_MAX} < exp <= {2**31 - 1}:",
+        "            past = True",
+        "        else:",
+        "            try:",
+        f"                past = math.log(abs(base)) * exp > {POW_LOG_LIMIT!r}",
+        "            except OverflowError:",
+        "                return _term_fail(flags, 43)",
         "        if past:",
         '            return float("-inf") if base < 0 and exp % 2 else float("inf")',
         "    try:",

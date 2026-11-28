@@ -1785,6 +1785,37 @@ class TestBoardPeripheralsAndRunStop:
         assert stats.scans["loop"] > 0
         assert tuple(plc.current_state.tags[tag.name] for tag in watch) == expected
 
+    def test_a_large_literal_exponent_on_every_backend(self, monkeypatch):
+        """A literal exponent above 64 gives the CLICK's value, and the jit still runs it.
+
+        A Dint stores the low 32 bits of the nearest double.  From an exponent of 1039,
+        a base of 2 or more is always past the double range.
+        """
+        count = Int("Count")
+        base = Dint("Base", default=3)
+        hundredth = Dint("Hundredth")
+        far_dint = Dint("FarDint")
+        far_real = Real("FarReal")
+        with Program(strict=False) as prog:
+            with rung():
+                # The count changes every scan, so a long run_for() goes through the jit.
+                math(count + 1, count)
+                math(base**100, hundredth)
+                math(base**1039, far_dint)
+                math(base**1039, far_real)
+        low = int(float(3**100)) & 0xFFFF_FFFF
+        watch = (hundredth, far_dint, far_real)
+        expected = (low - (1 << 32) if low >= 1 << 31 else low, 0, float("inf"))
+
+        results = _on_every_backend(prog, monkeypatch, watch, scans=1)
+        assert results == {name: expected for name in results}
+
+        plc = PLC(prog)
+        with jit_stats.collect() as stats:
+            plc.run_for(30.0)
+        assert stats.scans["loop"] > 0
+        assert tuple(plc.current_state.tags[tag.name] for tag in watch) == expected
+
     @staticmethod
     def _non_finite_real(operand: str) -> tuple[Real, list]:
         """Return a Real that scan 0 sets to +Inf, -Inf or NaN, and the Math instructions that set it.

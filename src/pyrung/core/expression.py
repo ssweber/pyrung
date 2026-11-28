@@ -190,6 +190,10 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
 #: marks a finite power as Inf.
 POW_LOG_LIMIT = 720.0
 
+#: ln(2) * 1039 is above ``POW_LOG_LIMIT``.  So an int base of 2 or more to a power above
+#: ``POW_EXACT_MAX`` is always past the double range.  Up to it, the exact power is cheap.
+POW_EXACT_MAX = int(POW_LOG_LIMIT / math.log(2))
+
 
 def int_power_past_doubles(a: Numeric, b: Numeric) -> bool:
     """Return whether ``a ** b`` of two ints is surely past the double range.
