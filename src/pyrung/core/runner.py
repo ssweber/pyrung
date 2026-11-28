@@ -3082,8 +3082,8 @@ class PLC:
             # A set_rtc() made after the last scan is only in the live clock.
             rtc_base = (self._rtc_base, self._rtc_base_sim_time)
         elif target_scan_id >= self._initial_scan_id or self._log_holds_lineage:
-            # This runner's log holds the clock that each scan ran on, including a clock that
-            # a fork recorded at its first scan.  The parent's epoch does not hold that one.
+            # This runner's log gives the clock in effect at each scan.  At a fork's first scan,
+            # that is the clock the fork was made with, and the parent's epoch does not hold it.
             rtc_base = (self._replay_rtc_at_state(historical_state, self._scan_log), timestamp)
         else:
             rtc_base = (historical_owner.rtc_at(historical_state), timestamp)
