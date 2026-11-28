@@ -69,10 +69,10 @@ def _modbus_client_spec_for_instruction(
     # The generated code takes its connection from ModbusClientConfig, so a CLICK-only form
     # on the instruction's own target would be dropped without a word.
     raw = instr.raw_target
-    if isinstance(instr.device_id, Tag):
+    if isinstance(instr.device_id, TagArg):
         raise TypeError(
             f"Modbus target {instr.target_name!r} reads its device_id from the tag "
-            f"{instr.device_id.name!r}. The P1AM takes device_id as an int. Pass a number."
+            f"{instr.device_id.tag.name!r}. The P1AM takes device_id as an int. Pass a number."
         )
     if isinstance(raw, ModbusTcpTarget) and raw.com_port != "ethernet":
         raise ValueError(
@@ -106,7 +106,7 @@ def _modbus_client_spec_for_instruction(
                 if modbus_quantity == 1
                 else 16
             )
-            busy_tag = instr.sending
+            busy_tag = instr.sending.tag
         else:
             function_code = (
                 2
@@ -117,7 +117,7 @@ def _modbus_client_spec_for_instruction(
                 if ra.register_type == RegisterType.INPUT
                 else 3
             )
-            busy_tag = instr.receiving
+            busy_tag = instr.receiving.tag
             ctx.mark_helper("_store_copy_value_to_type")
 
         state_key = ctx.state_key_for(instr)
@@ -135,9 +135,9 @@ def _modbus_client_spec_for_instruction(
             is_coil=is_coil,
             word_order="low_high" if instr.word_swap else "high_low",
             busy=_modbus_client_symbol_spec(busy_tag, ctx),
-            success=_modbus_client_symbol_spec(instr.success, ctx),
-            error=_modbus_client_symbol_spec(instr.error, ctx),
-            exception_response=_modbus_client_symbol_spec(instr.exception_response, ctx),
+            success=_modbus_client_symbol_spec(instr.success.tag, ctx),
+            error=_modbus_client_symbol_spec(instr.error.tag, ctx),
+            exception_response=_modbus_client_symbol_spec(instr.exception_response.tag, ctx),
         )
         ctx.modbus_client_specs_by_instruction[id(instr)] = spec
         ctx.modbus_client_specs.append(spec)
@@ -162,7 +162,7 @@ def _modbus_client_spec_for_instruction(
             if modbus_quantity == 1
             else 16
         )
-        busy_tag = instr.sending
+        busy_tag = instr.sending.tag
     else:
         function_code = (
             2
@@ -173,7 +173,7 @@ def _modbus_client_spec_for_instruction(
             if 4 in mapping.function_codes
             else 3
         )
-        busy_tag = instr.receiving
+        busy_tag = instr.receiving.tag
         ctx.mark_helper("_store_copy_value_to_type")
 
     state_key = ctx.state_key_for(instr)
@@ -190,9 +190,9 @@ def _modbus_client_spec_for_instruction(
         items=item_specs,
         is_coil=mapping.is_coil,
         busy=_modbus_client_symbol_spec(busy_tag, ctx),
-        success=_modbus_client_symbol_spec(instr.success, ctx),
-        error=_modbus_client_symbol_spec(instr.error, ctx),
-        exception_response=_modbus_client_symbol_spec(instr.exception_response, ctx),
+        success=_modbus_client_symbol_spec(instr.success.tag, ctx),
+        error=_modbus_client_symbol_spec(instr.error.tag, ctx),
+        exception_response=_modbus_client_symbol_spec(instr.exception_response.tag, ctx),
     )
     ctx.modbus_client_specs_by_instruction[id(instr)] = spec
     ctx.modbus_client_specs.append(spec)

@@ -140,17 +140,17 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets.append(instr.completion_flag.tag.name)
     elif isinstance(instr, ModbusSendInstruction):
         targets = [
-            instr.sending.name,
-            instr.success.name,
-            instr.error.name,
-            instr.exception_response.name,
+            instr.sending.tag.name,
+            instr.success.tag.name,
+            instr.error.tag.name,
+            instr.exception_response.tag.name,
         ]
     elif isinstance(instr, ModbusReceiveInstruction):
         targets = [
-            instr.receiving.name,
-            instr.success.name,
-            instr.error.name,
-            instr.exception_response.name,
+            instr.receiving.tag.name,
+            instr.success.tag.name,
+            instr.error.tag.name,
+            instr.exception_response.tag.name,
         ]
 
     return [(name, itype) for name in targets]

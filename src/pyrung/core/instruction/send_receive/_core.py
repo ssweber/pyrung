@@ -28,7 +28,7 @@ from pyrung.core.tag import Tag, TagType
 
 from ..base import Instruction
 from ..conversions import _store_copy_value_to_tag_type
-from ..operands import PayloadOperand, RangeArg, TagArg, TextInto, check_rules
+from ..operands import ConstArg, PayloadOperand, RangeArg, TagArg, TextInto, check_rules
 from . import backends as _backends
 from .helpers import (
     _addresses_for_count,
@@ -215,15 +215,24 @@ def _status_tags(
     )
 
 
-def _device_id_value(device_id: int | Tag, ctx: ScanContext) -> int:
+def _device_id_value(device_id: TagArg | ConstArg[int], ctx: ScanContext) -> int:
     """Return the device id: the number itself, or the value its DS tag holds as the request starts.
 
     A value that no device can answer to is passed on as it is.  What a CLICK does with
     such a value is not yet known.
     """
-    if isinstance(device_id, Tag):
-        return int(ctx.get_tag(device_id.name, device_id.default))
-    return device_id
+    match device_id:
+        case TagArg(tag=tag):
+            return int(ctx.get_tag(tag.name, tag.default))
+        case ConstArg(value=value):
+            return value
+        case _:
+            assert_never(device_id)
+
+
+def _parsed_device_id(device_id: int | Tag) -> TagArg | ConstArg[int]:
+    """Return the target's device id as a parsed operand."""
+    return TagArg(device_id) if isinstance(device_id, Tag) else ConstArg(device_id)
 
 
 # ---------------------------------------------------------------------------
@@ -250,13 +259,13 @@ class ModbusSendInstruction(Instruction):
     start: int
     addresses: tuple[int, ...]
     source: TagArg | RangeArg
-    sending: Tag
-    success: Tag
-    error: Tag
-    exception_response: Tag
+    sending: TagArg
+    success: TagArg
+    error: TagArg
+    exception_response: TagArg
     host: str | None = None
     port: int = 502
-    device_id: int | Tag = 1
+    device_id: TagArg | ConstArg[int] = ConstArg(1)
     timeout_s: float = 1.0
     remote_address: ModbusAddress | None = None
     word_swap: bool = False
@@ -301,7 +310,7 @@ class ModbusSendInstruction(Instruction):
 
     @property
     def _io_key(self) -> str:
-        return f"send:{self.target_name}:{self.sending.name}"
+        return f"send:{self.target_name}:{self.sending.tag.name}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         io = ctx.modbus_io
@@ -316,7 +325,7 @@ class ModbusSendInstruction(Instruction):
         pending = ctx.modbus_requests.get(id(self))
         if pending is not None:
             if not pending.future.done():
-                ctx.set_tag(self.sending.name, True)
+                ctx.set_tag(self.sending.tag.name, True)
                 return
 
             try:
@@ -327,17 +336,17 @@ class ModbusSendInstruction(Instruction):
             del ctx.modbus_requests[id(self)]
             if result.ok:
                 drain_writes: dict[str, Any] = {
-                    self.sending.name: False,
-                    self.success.name: True,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
+                    self.sending.tag.name: False,
+                    self.success.tag.name: True,
+                    self.error.tag.name: False,
+                    self.exception_response.tag.name: 0,
                 }
             else:
                 drain_writes = {
-                    self.sending.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: int(result.exception_code),
+                    self.sending.tag.name: False,
+                    self.success.tag.name: False,
+                    self.error.tag.name: True,
+                    self.exception_response.tag.name: int(result.exception_code),
                 }
             ctx.set_tags(drain_writes)
             ctx.record_io_drain(
@@ -361,10 +370,10 @@ class ModbusSendInstruction(Instruction):
             future=self._submit(source_tags, values, device_id)
         )
         submit_writes: dict[str, Any] = {
-            self.sending.name: True,
-            self.success.name: False,
-            self.error.name: False,
-            self.exception_response.name: 0,
+            self.sending.tag.name: True,
+            self.success.tag.name: False,
+            self.error.tag.name: False,
+            self.exception_response.tag.name: 0,
         }
         ctx.set_tags(submit_writes)
         ctx.record_io_submit(key, IoSubmitRecord(tag_writes=tuple(submit_writes.items())))
@@ -375,17 +384,17 @@ class ModbusSendInstruction(Instruction):
         if drain is not None:
             ctx.set_tags(dict(drain.tag_writes))
             return
-        if ctx.get_tag(self.sending.name) is True:
+        if ctx.get_tag(self.sending.tag.name) is True:
             return
         if not enabled:
             return
         if ctx.has_replay_io_submit(key):
             ctx.set_tags(
                 {
-                    self.sending.name: True,
-                    self.success.name: False,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
+                    self.sending.tag.name: True,
+                    self.success.tag.name: False,
+                    self.error.tag.name: False,
+                    self.exception_response.tag.name: 0,
                 }
             )
 
@@ -409,13 +418,13 @@ class ModbusReceiveInstruction(Instruction):
     start: int
     addresses: tuple[int, ...]
     dest: TagArg | RangeArg
-    receiving: Tag
-    success: Tag
-    error: Tag
-    exception_response: Tag
+    receiving: TagArg
+    success: TagArg
+    error: TagArg
+    exception_response: TagArg
     host: str | None = None
     port: int = 502
-    device_id: int | Tag = 1
+    device_id: TagArg | ConstArg[int] = ConstArg(1)
     timeout_s: float = 1.0
     remote_address: ModbusAddress | None = None
     word_swap: bool = False
@@ -474,7 +483,7 @@ class ModbusReceiveInstruction(Instruction):
 
     @property
     def _io_key(self) -> str:
-        return f"recv:{self.target_name}:{self.receiving.name}"
+        return f"recv:{self.target_name}:{self.receiving.tag.name}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         io = ctx.modbus_io
@@ -489,7 +498,7 @@ class ModbusReceiveInstruction(Instruction):
         pending = ctx.modbus_requests.get(id(self))
         if pending is not None:
             if not pending.future.done():
-                ctx.set_tag(self.receiving.name, True)
+                ctx.set_tag(self.receiving.tag.name, True)
                 return
 
             target_tags = pending.target_tags or []
@@ -501,10 +510,10 @@ class ModbusReceiveInstruction(Instruction):
             del ctx.modbus_requests[id(self)]
             if not result.ok:
                 drain_writes: dict[str, Any] = {
-                    self.receiving.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: int(result.exception_code),
+                    self.receiving.tag.name: False,
+                    self.success.tag.name: False,
+                    self.error.tag.name: True,
+                    self.exception_response.tag.name: int(result.exception_code),
                 }
                 ctx.set_tags(drain_writes)
                 ctx.record_io_drain(
@@ -521,10 +530,10 @@ class ModbusReceiveInstruction(Instruction):
             unpacked = self._unpack_result(result, target_tags)
             if len(unpacked) != len(target_tags):
                 drain_writes = {
-                    self.receiving.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: 0,
+                    self.receiving.tag.name: False,
+                    self.success.tag.name: False,
+                    self.error.tag.name: True,
+                    self.exception_response.tag.name: 0,
                 }
                 ctx.set_tags(drain_writes)
                 ctx.record_io_drain(
@@ -546,10 +555,10 @@ class ModbusReceiveInstruction(Instruction):
                 tag.name: typed_val
                 for tag, typed_val in zip(target_tags, typed_values, strict=True)
             }
-            drain_writes[self.receiving.name] = False
-            drain_writes[self.success.name] = True
-            drain_writes[self.error.name] = False
-            drain_writes[self.exception_response.name] = 0
+            drain_writes[self.receiving.tag.name] = False
+            drain_writes[self.success.tag.name] = True
+            drain_writes[self.error.tag.name] = False
+            drain_writes[self.exception_response.tag.name] = 0
             ctx.set_tags(drain_writes)
             ctx.record_io_drain(
                 key,
@@ -571,10 +580,10 @@ class ModbusReceiveInstruction(Instruction):
             target_tags=dest_tags,
         )
         submit_writes: dict[str, Any] = {
-            self.receiving.name: True,
-            self.success.name: False,
-            self.error.name: False,
-            self.exception_response.name: 0,
+            self.receiving.tag.name: True,
+            self.success.tag.name: False,
+            self.error.tag.name: False,
+            self.exception_response.tag.name: 0,
         }
         ctx.set_tags(submit_writes)
         ctx.record_io_submit(key, IoSubmitRecord(tag_writes=tuple(submit_writes.items())))
@@ -585,17 +594,17 @@ class ModbusReceiveInstruction(Instruction):
         if drain is not None:
             ctx.set_tags(dict(drain.tag_writes))
             return
-        if ctx.get_tag(self.receiving.name) is True:
+        if ctx.get_tag(self.receiving.tag.name) is True:
             return
         if not enabled:
             return
         if ctx.has_replay_io_submit(key):
             ctx.set_tags(
                 {
-                    self.receiving.name: True,
-                    self.success.name: False,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
+                    self.receiving.tag.name: True,
+                    self.success.tag.name: False,
+                    self.error.tag.name: False,
+                    self.exception_response.tag.name: 0,
                 }
             )
 
@@ -735,13 +744,13 @@ def send(
         start=start_addr,
         addresses=addresses,
         source=payload,
-        sending=sending,
-        success=success,
-        error=error,
-        exception_response=exception_response,
+        sending=TagArg(sending),
+        success=TagArg(success),
+        error=TagArg(error),
+        exception_response=TagArg(exception_response),
         host=host,
         port=port,
-        device_id=device_id,
+        device_id=_parsed_device_id(device_id),
         timeout_s=timeout_s,
         remote_address=remote_address,
         word_swap=word_swap,
@@ -806,13 +815,13 @@ def receive(
         start=start_addr,
         addresses=addresses,
         dest=payload,
-        receiving=receiving,
-        success=success,
-        error=error,
-        exception_response=exception_response,
+        receiving=TagArg(receiving),
+        success=TagArg(success),
+        error=TagArg(error),
+        exception_response=TagArg(exception_response),
         host=host,
         port=port,
-        device_id=device_id,
+        device_id=_parsed_device_id(device_id),
         timeout_s=timeout_s,
         remote_address=remote_address,
         word_swap=word_swap,

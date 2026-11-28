@@ -35,7 +35,7 @@ from pyrung.core.instruction.operands import (
 )
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.memory_block import BlockRange
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import TagType
 from pyrung.core.validation.render import operand_name
 
 from ._loop_items import is_own_rung, loop_item_rung
@@ -875,7 +875,7 @@ class _InstructionMixin:
         """
         rendered: dict[str, str] = {}
         for name in (busy_name, "success", "error", "exception_response"):
-            tag = getattr(instruction, name)
+            tag = getattr(instruction, name).tag
             if not is_modbus_status_tag(tag.name):
                 rendered[name] = self._render_operand(
                     tag, path=f"{path}.{name}", source=instruction
@@ -886,13 +886,13 @@ class _InstructionMixin:
         """Return the target constructor, with a DS device ID written as its address."""
         from pyrung.core.instruction.send_receive import ModbusRtuTarget, ModbusTcpTarget
 
-        device_id = instruction.device_id
-        if isinstance(device_id, Tag):
-            device_id_text = self._render_operand(
-                device_id, path=f"{path}.device_id", source=instruction
-            )
-        else:
-            device_id_text = str(device_id)
+        match instruction.device_id:
+            case TagArg(tag=tag):
+                device_id_text = self._render_operand(
+                    tag, path=f"{path}.device_id", source=instruction
+                )
+            case ConstArg(value=value):
+                device_id_text = str(value)
         raw_target = instruction.raw_target
         if isinstance(raw_target, ModbusRtuTarget):
             parts = [

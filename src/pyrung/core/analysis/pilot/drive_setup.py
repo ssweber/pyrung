@@ -267,7 +267,7 @@ def modbus_levers(program: Any) -> frozenset[str] | None:
         elif not isinstance(instr, ModbusSendInstruction):
             continue
         found = True
-        levers.update((instr.success.name, instr.error.name))
+        levers.update((instr.success.tag.name, instr.error.tag.name))
     return frozenset(levers) if found else None
 
 

@@ -369,10 +369,10 @@ def _receive_instruction() -> ModbusReceiveInstruction:
         start=1,
         addresses=(1,),
         dest=TagArg(Int("InboundValue")),
-        receiving=Bool("RequestActive"),
-        success=Bool("RequestSucceeded"),
-        error=Bool("RequestFailed"),
-        exception_response=Int("RequestCode"),
+        receiving=TagArg(Bool("RequestActive")),
+        success=TagArg(Bool("RequestSucceeded")),
+        error=TagArg(Bool("RequestFailed")),
+        exception_response=TagArg(Int("RequestCode")),
     )
 
 

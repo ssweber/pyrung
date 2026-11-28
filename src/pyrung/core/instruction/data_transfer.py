@@ -760,10 +760,11 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 "blockcopy() reads a range from .select(). Use copy() to copy one value, "
                 "or fill() to write one value into a range."
             )
-        self.authored_dest = dest
+        authored_dest = dest
         self.source: Span = RANGE.parse("blockcopy()", "source", source)
         dest = _block_copy_dest(self.source, dest)
         self.dest: Span = RANGE.parse("blockcopy()", "dest", dest)
+        self.authored_dest: Value | Span = parse_value(authored_dest)
         match self.source, self.dest:
             case RangeArg(span=fixed_source), RangeArg(span=fixed_dest):
                 # len() counts what execute() copies: the fields of a named_array, not its gaps.

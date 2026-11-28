@@ -235,9 +235,8 @@ def _authored_range_tags(
     its own address, as ``x1`` spells X001, each later name takes the same form, such as
     ``x3``. So the two ends of the range read alike.
     """
-    authored = getattr(instruction, f"authored_{attribute}", None)
-    match value:
-        case RangeArg(span=span, immediate=False) if isinstance(authored, Tag):
+    match value, getattr(instruction, f"authored_{attribute}", None):
+        case RangeArg(span=span, immediate=False), TagArg(tag=authored, immediate=False):
             pass
         case _:
             return None

@@ -36,7 +36,7 @@ def _send_operands(instruction: Any) -> list[Operand]:
     for name in _STATUS_BITS:
         bit = getattr(instruction, name)
         # A status bit that the author left off holds a hidden tag, which CLICK never sees.
-        if not is_modbus_status_tag(bit.name):
+        if not is_modbus_status_tag(bit.tag.name):
             operands.append(Operand(name, f"{name.replace('_', ' ')} flag", ((name, bit),)))
     return operands
 
