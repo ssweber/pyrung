@@ -3033,9 +3033,13 @@ class PLC:
         historical_owner = self._causal_lineage.owner_at(target_scan_id)
         if historical_owner is None:
             raise KeyError(target_scan_id)
+        # The tip state holds each stop() and battery change made since the last scan.
         # A runner's first scan belongs to its parent's epoch, but this runner ran on from
         # its own edit of that state (a harness moving a count, a tip seed).
-        if target_scan_id == self._initial_scan_id:
+        at_tip = target_scan_id == self._state.scan_id
+        if at_tip:
+            historical_state = self._state
+        elif target_scan_id == self._initial_scan_id:
             historical_state = self._initial_state
         else:
             historical_state = historical_owner.state_at(target_scan_id)
@@ -3083,6 +3087,10 @@ class PLC:
                 self._causal_lineage.seal_through(target_scan_id),
             )
             fork._causal_initial_tags = dict(self._causal_initial_tags)
+        if at_tip and self._rtc_at_sim_time(historical_state.timestamp) != parent_rtc_at_fork_point:
+            # The log records a set_rtc() made after the last scan for the next scan, so the
+            # read above misses it.  The fork records it again for its own next scan.
+            fork._set_rtc_and_record(self._rtc_base, self._rtc_base_sim_time)
         if self._harness is not None:
             # Re-install the feedback harness on the fork (it rebuilds its plant
             # rungs against the fork's tags; accumulator state rides the inherited
@@ -3843,11 +3851,13 @@ class PLC:
         current_plant = self._earlier_plant_at(target_scan_id) is None
         if current_plant and self._harness is not None:
             self._harness.fork_onto(replay, as_recorded=True)
-        # A stop() or a battery change after the last scan is in history's tip state.  One
-        # after an earlier scan belongs to the next scan, as a force or a patch does.
+        # A stop() or a battery change after the last scan is in history's tip state, and a
+        # set_rtc() is in the live clock.  Each one after an earlier scan belongs to the next
+        # scan, as a force or a patch does.
         if target_scan_id == self._state.scan_id:
             for event in lifecycle_by_scan.get(target_scan_id + 1, []):
                 _apply_lifecycle_to_replay(replay, event)
+            replay._set_rtc_internal(self._rtc_base, self._rtc_base_sim_time)
         return replay
 
     def _start_from_state(self, state: SystemState) -> None:
