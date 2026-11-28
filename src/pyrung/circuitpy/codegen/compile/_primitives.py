@@ -189,7 +189,7 @@ def _compile_expression_impl(
                 ctx.mark_helper("_math_func")
                 ctx.mark_helper("_pow")
                 ctx.mark_helper("_dbl")
-                if _exact_power_literal(expr.right):
+                if _exact_power_literal(expr.right, ctx):
                     return f"float(_dbl(_pow({left}, {right})))"
                 ctx.mark_helper("_pow_calc")
                 ctx.mark_helper("_term_fail")
@@ -225,7 +225,7 @@ def _compile_expression_impl(
             if expr.symbol in ("<<", ">>"):
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
-        if calc_op and expr.symbol == "**" and not _exact_power_literal(expr.right):
+        if calc_op and expr.symbol == "**" and not _exact_power_literal(expr.right, ctx):
             # A Math's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
             # a negative power is +Inf.  A complex result is 0 with SC46.  An integer
             # power past the double range is Inf without being computed.  A literal
@@ -663,13 +663,16 @@ def _small_count_literal(expr: Any) -> bool:
     return _non_negative_int_literal(expr) and expr.value <= 64
 
 
-def _exact_power_literal(expr: Any) -> bool:
-    """Return whether *expr* is an int exponent from 1 to ``POW_EXACT_MAX``.
+def _exact_power_literal(expr: Any, ctx: CodegenContext) -> bool:
+    """Return whether *expr* is a literal exponent whose power skips ``_pow_calc``'s guard.
 
-    The exact power is cheap for such an exponent, so it needs no guard.  The jit traces
-    ``_pow``, but it cannot trace the log in ``_pow_calc``.
+    The jit traces ``_pow``, but it cannot trace the log in ``_pow_calc``.  So the kernel
+    computes the exact power for an exponent up to ``POW_EXACT_MAX``.  On the board a
+    Dint to the 1038th power has about 32000 bits, and nothing traces code.py.  So
+    code.py computes the exact power only up to 64 and reads the log above it.
     """
-    return _non_negative_int_literal(expr) and 1 <= expr.value <= POW_EXACT_MAX
+    limit = POW_EXACT_MAX if ctx.kernel_runtime else 64
+    return _non_negative_int_literal(expr) and 1 <= expr.value <= limit
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
