@@ -749,15 +749,16 @@ def test_a_step_past_2_53_holds_the_rounded_value_a_scan_stores(make, dest_type,
         _collect_structural_domains,
         collect_produced_value_domains,
     )
+    from pyrung.core.compiled_plc import CompiledPLC
 
     with Program(strict=False) as logic:
         formula = make()
         with rung():
             math(formula, dest_type("D3"))
     graph = build_program_graph(logic)
-    plc = PLC(logic)
-    plc.step()
-    assert plc.current_state.tags["D3"] == expected
+    for runner in (PLC(logic), CompiledPLC(logic)):
+        runner.step()
+        assert runner.current_state.tags["D3"] == expected
     produced = collect_produced_value_domains(logic, graph)
     structural = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
     assert expected in structural["D3"]
