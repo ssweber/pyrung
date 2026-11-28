@@ -135,9 +135,6 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
         self._ins = parse_ins("run_function()", ins or {})
         self._outs: dict[Any, Dest] = _OUTS.parse("run_function()", "outs", outs or {})
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
-
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: _read_in(src, ctx) for name, src in self._ins.items()}
@@ -181,9 +178,6 @@ class EnabledFunctionCallInstruction(Instruction):
         self._ins = parse_ins("run_enabled_function()", ins or {})
         self._outs: dict[Any, Dest] = _OUTS.parse("run_enabled_function()", "outs", outs or {})
         self._enable_condition = enable_condition
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: _read_in(src, ctx) for name, src in self._ins.items()}
@@ -358,9 +352,6 @@ class ForLoopInstruction(OneShotMixin, Instruction):
             else:
                 flat.extend(item._instructions)
         self.instructions = flat
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed the count."""
 
     def iterations(self, ctx: ScanContext) -> int:
         """Return how many times the body runs this scan, reading the count now.

@@ -8,6 +8,7 @@ from typing import Any
 from pyrung.core._source import _capture_source, _capture_with_call_arg_lines
 from pyrung.core.condition import ConditionTerm
 from pyrung.core.instruction import ForLoopInstruction
+from pyrung.core.instruction.control import _COUNT
 from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.tag import Tag, TagType
 
@@ -282,7 +283,7 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
                     break_loop()
     """
     # Refuse a wrong count here, before the loop's body is built.
-    ForLoopInstruction.check_values("forloop()", {"count": count})
+    _COUNT.parse("forloop()", "count", count)
     source_file, source_line = _capture_source(depth=2)
     return ForLoop(count, oneshot=oneshot, source_file=source_file, source_line=source_line)
 

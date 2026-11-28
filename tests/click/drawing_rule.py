@@ -38,7 +38,7 @@ from pyrung.core.condition import (
     Condition,
     NormallyClosedCondition,
 )
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import operand_object
 from pyrung.core.rung import Rung
 from tests.click.helpers import exec_with_source
 
@@ -290,7 +290,7 @@ def output_conditions(program: Any, mapping: Any) -> dict[str, tuple[list[Condit
         _outputs(rung, list(rung._conditions), found)
         for instruction, conditions in found:
             if type(instruction).__name__ == "OutInstruction":
-                result[address(as_authored(instruction.target))] = (conditions, address)
+                result[address(operand_object(instruction.target))] = (conditions, address)
                 continue
             count += 1
             key = f"{type(instruction).__name__}#{count}"

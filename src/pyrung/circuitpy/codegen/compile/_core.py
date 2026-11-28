@@ -95,7 +95,7 @@ from pyrung.core.instruction.operands import (
     Span,
     TagArg,
     Value,
-    inner,
+    operand_object,
 )
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
@@ -904,7 +904,7 @@ def _compile_for_loop_instruction(
     indent: int,
 ) -> list[str]:
     count = instr.count
-    count_expr = _compile_value(inner(count), ctx)
+    count_expr = _compile_value(operand_object(count), ctx)
     depth = ctx._for_loop_depth
     suffix = "" if depth == 0 else f"_{depth + 1}"
     iterations_var = f"_iterations{suffix}"

@@ -17,7 +17,7 @@ from .base import Instruction
 from .conversions import (
     _clamp_dint,
 )
-from .operands import Preset, TagArg, inner
+from .operands import Preset, TagArg, operand_object
 from .utils import (
     instruction_condition_view,
     parse_preset,
@@ -168,7 +168,7 @@ class CountUpInstruction(Instruction):
             accumulator=self.accumulator.tag,
             done=self.done_bit.tag,
             progress=None,
-            preset=inner(self.preset),
+            preset=operand_object(self.preset),
             direction=1,
             # One count per rising edge: an on scan, then an off scan.
             rate_per_scan=lambda _dt: 0.5,
@@ -289,7 +289,7 @@ class CountDownInstruction(Instruction):
             accumulator=self.accumulator.tag,
             done=self.done_bit.tag,
             progress=None,
-            preset=inner(self.preset),
+            preset=operand_object(self.preset),
             direction=-1,
             rate_per_scan=lambda _dt: 0.5,
             advance=ConditionDemand(self.down_condition),

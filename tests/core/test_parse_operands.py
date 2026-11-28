@@ -1,7 +1,7 @@
 """The parse that copy(), fill() and blockcopy() run on each operand.
 
 Each parse function returns one result type, or raises the refusal that the operand's
-declaration gives. held() returns the object that the author passed, and inner() returns
+declaration gives. operand_object() returns the object that the author passed, and operand_object() returns
 it without its immediate().
 """
 
@@ -22,9 +22,7 @@ from pyrung.core.instruction.operands import (
     PointerRangeArg,
     RangeArg,
     TagArg,
-    as_authored,
-    held,
-    inner,
+    operand_object,
     parse_value,
 )
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -43,8 +41,8 @@ def test_a_tag_parses_to_a_tag_arg():
     assert arg.tag is Count
     assert arg.immediate is False
     assert arg.wrapper is None
-    assert held(arg) is Count
-    assert inner(arg) is Count
+    assert operand_object(arg) is Count
+    assert operand_object(arg) is Count
 
 
 def test_an_immediate_tag_keeps_the_authored_wrapper():
@@ -53,9 +51,8 @@ def test_an_immediate_tag_keeps_the_authored_wrapper():
     assert isinstance(arg, TagArg)
     assert arg.tag is x[1]
     assert arg.immediate is True
-    assert held(arg) is wrapped
-    assert held(arg) is held(arg)
-    assert inner(arg) is x[1]
+    assert arg.wrapper is wrapped
+    assert operand_object(arg) is x[1]
 
 
 def test_a_fixed_range_parses_to_a_range_arg():
@@ -64,8 +61,8 @@ def test_a_fixed_range_parses_to_a_range_arg():
     assert isinstance(arg, RangeArg)
     assert arg.span is span
     assert arg.immediate is False
-    assert held(arg) is span
-    assert inner(arg) is span
+    assert operand_object(arg) is span
+    assert operand_object(arg) is span
 
 
 def test_an_immediate_range_keeps_the_authored_wrapper():
@@ -75,8 +72,8 @@ def test_an_immediate_range_keeps_the_authored_wrapper():
     assert isinstance(arg, RangeArg)
     assert arg.span is span
     assert arg.immediate is True
-    assert held(arg) is wrapped
-    assert inner(arg) is span
+    assert arg.wrapper is wrapped
+    assert operand_object(arg) is span
 
 
 @pytest.mark.parametrize(
@@ -90,8 +87,8 @@ def test_a_pointer_parses_to_a_pointer_arg(ref, ref_type):
     assert isinstance(arg, PointerArg)
     assert arg.ref is ref
     assert arg.block is ds
-    assert held(arg) is ref
-    assert inner(arg) is ref
+    assert operand_object(arg) is ref
+    assert operand_object(arg) is ref
 
 
 def test_a_range_with_pointer_ends_parses_to_a_pointer_range_arg():
@@ -99,8 +96,8 @@ def test_a_range_with_pointer_ends_parses_to_a_pointer_range_arg():
     arg = parse_value(span)
     assert isinstance(arg, PointerRangeArg)
     assert arg.span is span
-    assert held(arg) is span
-    assert inner(arg) is span
+    assert operand_object(arg) is span
+    assert operand_object(arg) is span
 
 
 def test_an_expression_parses_to_an_expr_arg():
@@ -108,7 +105,7 @@ def test_an_expression_parses_to_an_expr_arg():
     arg = parse_value(expr)
     assert isinstance(arg, ExprArg)
     assert arg.expr is expr
-    assert held(arg) is expr
+    assert operand_object(arg) is expr
 
 
 @pytest.mark.parametrize("value", [5, 1.5, True, "AB"])
@@ -116,15 +113,14 @@ def test_a_constant_parses_to_a_const_arg(value):
     arg = parse_value(value)
     assert isinstance(arg, ConstArg)
     assert arg.value is value
-    assert held(arg) is value
-    assert inner(arg) is value
+    assert operand_object(arg) is value
+    assert operand_object(arg) is value
 
 
 def test_an_immediate_arg_made_by_hand_gets_one_wrapper():
     arg = TagArg(x[1], True)
     assert isinstance(arg.wrapper, ImmediateRef)
     assert arg.wrapper.value is x[1]
-    assert held(arg) is held(arg)
 
 
 def test_a_wrapper_needs_immediate():
@@ -139,11 +135,11 @@ def test_a_wrapper_must_wrap_the_operand():
         RangeArg(ds.select(1, 2), True, immediate(x.select(1, 2)))
 
 
-def test_as_authored_returns_any_other_value_unchanged():
+def test_operand_object_returns_any_other_value_unchanged():
     expr = Count + 1
     for value in (Count, expr, 5, None, ds.select(1, 2)):
-        assert as_authored(value) is value
-    assert as_authored(parse_value(expr)) is expr
+        assert operand_object(value) is value
+    assert operand_object(parse_value(expr)) is expr
 
 
 def test_tag_parse_returns_a_tag_or_a_pointer():
@@ -202,7 +198,7 @@ def test_the_instructions_hold_only_parsed_operands():
     wrapped = immediate(x[1])
     copy = CopyInstruction(wrapped, Count)
     assert isinstance(copy.source, TagArg)
-    assert held(copy.source) is wrapped
+    assert copy.source.wrapper is wrapped
     assert isinstance(copy.dest, TagArg)
 
     fill = FillInstruction(Count * 2, df.select(Lo, Hi))

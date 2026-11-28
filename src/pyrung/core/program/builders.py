@@ -26,6 +26,7 @@ from pyrung.core.instruction import (
     TimeEventDrumInstruction,
     ToggleInstruction,
 )
+from pyrung.core.instruction.advanced import _BIT_RANGE
 from pyrung.core.instruction.utils import parse_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
@@ -263,7 +264,7 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
             shift(C.select(2, 7)).clock(ClockBit).reset(ResetBit)
     """
     # Refuse a wrong range here, before .clock() and .reset() build the instruction.
-    ShiftInstruction.check_values("shift()", {"bit_range": bit_range})
+    _BIT_RANGE.parse("shift()", "bit_range", bit_range)
     data_condition, source_file, source_line = _capture_rung_condition_and_source("shift")
     return ShiftBuilder(bit_range, data_condition, source_file, source_line)
 

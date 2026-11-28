@@ -62,9 +62,6 @@ class OutInstruction(OneShotMixin, Instruction):
         self.target: Coil = COIL.parse("out()", "target", target)
         self._static_targets = coil_tags(self.target)
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because ``__init__`` checked the target before it parsed it."""
-
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         targets = self._static_targets
         if not enabled:
@@ -106,9 +103,6 @@ class LatchInstruction(Instruction):
         check_rules({}, self._operand_rules, "latch()", {"target": target})
         self.target: Coil = COIL.parse("latch()", "target", target)
         self._static_targets = coil_tags(self.target)
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because ``__init__`` checked the target before it parsed it."""
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:

@@ -1,12 +1,12 @@
 """Each instruction refuses an operand when the program is built, or writes a result with it.
 
 The cases come from each instruction's ``_operands`` and ``_operand_rules``.  For every
-field that they name, the sweep tries every operand in ``OPERANDS``.  Then it builds the
-same program with the check turned off, and steps it with each set of data in ``DATA``.
+field that they name, the sweep tries every operand in ``OPERANDS``.
 
-- If the check refuses the operand, each run must raise or write no tag.  The run may
-  set a fault flag.
-- If the check accepts the operand, at least one run must write a tag.
+- If the parse refuses the operand, the error names the call.  When the field's
+  declaration refuses the operand, the error has the declaration's words.
+- If the parse accepts the operand, at least one run with the data in ``DATA`` must
+  write a tag.
 
 To cover an instruction that declares operands, add its builder to ``BUILDERS``.  To
 sweep another form of the same instruction, such as ``copy()`` with ``convert=``, add
@@ -71,9 +71,13 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
+from pyrung.core.instruction.operands import EachOperand
 from pyrung.core.rung import Rung
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+# The refusal of a coil's target, which does not start with the call.
+_COIL_REFUSAL = "Expected Tag, BlockRange from .select(), or immediate(...) wrapper, got "
 
 # The data that each scan runs with.  Whether an operand writes a result can depend on
 # the data, as for a Char tag in math().
@@ -160,8 +164,9 @@ def _search(found: Any, result: Any) -> None:
     search(ds.select(1, 2) >= 0, result=result, found=found)
 
 
-def _returns_r(*_args: Any) -> dict[str, int]:
-    return {"r": 1}
+def _returns_r(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+    # A function's result of "1" stores into a tag of each type, a Char tag too.
+    return {"r": "1"}
 
 
 def _run_function(outs: Any) -> None:
@@ -178,7 +183,7 @@ class Builder:
 
     ``accepted`` maps each argument to a kind in ``OPERANDS``.  ``build`` takes the
     arguments as keywords.  ``name`` tells a variant from the plain call in a case id.
-    With ``writes`` False, an operand that the check accepts must run with some data,
+    With ``writes`` False, an operand that the parse accepts must run with some data,
     but need not write.
     """
 
@@ -241,41 +246,9 @@ VARIANTS: list[tuple[type[Instruction], Builder]] = [
     )
 ]
 
-# Operands that the builder refused before ``_operands`` existed, and that may run
-# without the check.  The check keeps refusing them.  Before the check, search() refused
-# a found that is not a Bool tag, and a result that is not an Int or Dint tag.
-REFUSED_BEFORE = {
-    (ShiftInstruction, "bit_range", "Bool range in immediate()"),
-    *(
-        (SearchInstruction, "found", kind)
-        for kind in (
-            "expression with a list in it",
-            "expression with a condition in it",
-            "Int tag",
-            "Dint tag",
-            "Word tag",
-            "Real tag",
-            "Char tag",
-            "Char tag holding a digit",
-        )
-    ),
-    *(
-        (SearchInstruction, "result", kind)
-        for kind in (
-            "expression with a list in it",
-            "expression with a condition in it",
-            "Bool tag",
-            "Word tag",
-            "Real tag",
-            "Char tag",
-            "Char tag holding a digit",
-        )
-    ),
-}
-
-# Operands that write a result without the check, and that the check refuses because
-# CLICK refuses them.  CLICK's For refuses a count with a decimal point.  CLICK's Math,
-# Out and Set refuse a TXT, and without the check they store a number or a bit in it.
+# Operands that the parse refuses because CLICK refuses them, though pyrung could write
+# a result with them.  CLICK's For refuses a count with a decimal point.  CLICK's Math,
+# Out and Set refuse a TXT.
 REFUSED_AS_ON_CLICK = {
     (ForLoopInstruction, "count", "real constant"),
     (ForLoopInstruction, "count", "whole real constant"),
@@ -292,7 +265,7 @@ REFUSED_AS_ON_CLICK = {
     (LatchInstruction, "target", "Char range"),
 }
 
-# Operands that the check accepts, and that write nothing with any data.  The check does
+# Operands that the parse accepts, and that write nothing with any data.  The parse does
 # not read what a count evaluates to.  A randint() with a Real bound always draws 0, and
 # a count of 0 runs no iteration.
 WRITE_NOTHING = {
@@ -332,8 +305,8 @@ RULE_CASES: list[tuple[type[Instruction], dict[str, Callable[[], Any]]]] = [
     (LatchInstruction, {"target": lambda: c[3]}),
 ]
 
-# Cases that the rules refuse because CLICK refuses them.  Without the check, each one
-# stores a number or a bit in a TXT.
+# Cases that the rules refuse because CLICK refuses them.  pyrung could store a number or
+# a bit in the TXT.
 RULE_CASES_AS_ON_CLICK: list[tuple[type[Instruction], dict[str, Callable[[], Any]]]] = [
     (CalcInstruction, {"expression": lambda: "A", "dest": lambda: txt[3]}),
     (CalcInstruction, {"expression": lambda: ds[1] * (1, 2), "dest": lambda: txt[3]}),
@@ -461,53 +434,54 @@ def _writes_with_some_data(program: Program, *, writes: bool = True) -> None:
     pytest.fail(f"No set of data writes a tag: {outcomes}")
 
 
+def _declared_refusal(
+    cls: type[Instruction], builder: Builder, args: dict[str, Callable[[], Any]]
+) -> str | None:
+    """Return the words of the refusal that the declaration of a field in *args* gives.
+
+    Return None if no declaration refuses its value.
+    """
+    for field, operand in cls._operands.items():
+        arg = operand.arg or field
+        if arg in args:
+            value = args[arg]()
+            if isinstance(operand, EachOperand):
+                # The function builders pass the operand as outs={"r": ...}.
+                value = {"r": value}
+            try:
+                operand.parse(builder.call, arg, value)
+            except (TypeError, ValueError) as error:
+                return str(error)
+    return None
+
+
 def _check_case(
     builder: Builder,
     cls: type[Instruction],
     args: dict[str, Callable[[], Any]],
-    monkeypatch: pytest.MonkeyPatch,
     *,
-    refused_before: bool = False,
     refused_as_on_click: bool = False,
     writes: bool = True,
 ) -> None:
-    """Refuse the operands at build if and only if no set of ``DATA`` lets them write.
+    """Refuse the operands at build with the parse's words, or write a result with them.
 
-    With *refused_before*, a refused operand may write without the check.  With
-    *refused_as_on_click*, the operands must be refused, and may write without the check.
+    With *refused_as_on_click*, the operands must be refused.
     """
     try:
         program = _build(builder, args)
-    except Exception as error:  # noqa: BLE001 - some builders refuse with AttributeError
-        refusal = error
+    except (TypeError, ValueError) as refusal:
+        message = str(refusal)
     else:
-        assert not refused_as_on_click, "the check accepts the operand"
+        assert not refused_as_on_click, "the parse accepts the operand"
         _writes_with_some_data(program, writes=writes and builder.writes)
         return
-    message = str(refusal)
     assert message.isascii()
-    with monkeypatch.context() as unchecked:
-        unchecked.setattr(Instruction, "check_values", classmethod(lambda *_: None))
-        try:
-            program = _build(builder, args)
-        except Exception as earlier:  # noqa: BLE001
-            # The form fails to build without the check too.  Either the instruction
-            # refuses it with its own message, or the builder's check refuses it first.
-            if (type(earlier), str(earlier)) != (type(refusal), message):
-                assert message.startswith(f"{builder.call} got "), message
-            return
-        assert isinstance(refusal, (TypeError, ValueError))
-        assert message.startswith(f"{builder.call} got "), message
-        assert any(arg in message for arg in args), message
-        if refused_before or refused_as_on_click:
-            return
-        # The check refuses only an operand that writes nothing, whatever the data.
-        for data in DATA:
-            try:
-                written = _run(program, data)
-            except Exception:  # noqa: BLE001, S112 - an error on a scan writes nothing
-                continue
-            assert written == set(), (cls.__name__, data, written)
+    assert message.startswith(f"{builder.call} ") or message.startswith(_COIL_REFUSAL), message
+    declared = _declared_refusal(cls, builder, args)
+    # copy() and fill() refuse some operands with words of their own before they parse
+    # their fields, such as a missing source or a range as copy()'s target.
+    if declared is not None and builder.call not in ("copy()", "fill()"):
+        assert message == declared
 
 
 def test_every_instruction_that_checks_operands_has_a_builder() -> None:
@@ -521,14 +495,11 @@ def test_an_operand_is_refused_at_build_or_writes(
     builder: Builder,
     arg: str,
     kind: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _check_case(
         builder,
         cls,
         {arg: OPERANDS[kind]},
-        monkeypatch,
-        refused_before=(cls, arg, kind) in REFUSED_BEFORE,
         refused_as_on_click=(cls, arg, kind) in REFUSED_AS_ON_CLICK,
         writes=(cls, arg, kind) not in WRITE_NOTHING,
     )
@@ -540,9 +511,9 @@ def test_an_operand_is_refused_at_build_or_writes(
     ids=[f"{BUILDERS[cls].call}-{i}" for i, (cls, _) in enumerate(RULE_CASES)],
 )
 def test_a_rule_refuses_at_build_or_writes(
-    cls: type[Instruction], args: dict[str, Callable[[], Any]], monkeypatch: pytest.MonkeyPatch
+    cls: type[Instruction], args: dict[str, Callable[[], Any]]
 ) -> None:
-    _check_case(BUILDERS[cls], cls, args, monkeypatch)
+    _check_case(BUILDERS[cls], cls, args)
 
 
 @pytest.mark.parametrize(
@@ -551,9 +522,9 @@ def test_a_rule_refuses_at_build_or_writes(
     ids=[f"{BUILDERS[cls].call}-{i}" for i, (cls, _) in enumerate(RULE_CASES_AS_ON_CLICK)],
 )
 def test_a_rule_refuses_what_click_refuses(
-    cls: type[Instruction], args: dict[str, Callable[[], Any]], monkeypatch: pytest.MonkeyPatch
+    cls: type[Instruction], args: dict[str, Callable[[], Any]]
 ) -> None:
-    _check_case(BUILDERS[cls], cls, args, monkeypatch, refused_as_on_click=True)
+    _check_case(BUILDERS[cls], cls, args, refused_as_on_click=True)
 
 
 def test_every_rule_has_a_refused_case_and_a_running_case() -> None:

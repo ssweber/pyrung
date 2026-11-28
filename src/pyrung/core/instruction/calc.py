@@ -475,14 +475,16 @@ class CalcInstruction(OneShotMixin, Instruction):
         dest: Any,
         *,
         oneshot: bool = False,
+        call: str = "math()",
     ):
+        # A refusal names *call*, the call that the author wrote.
         OneShotMixin.__init__(self, oneshot)
-        self.source_expression: Value | Span = _SOURCE.parse("math()", "expression", expression)
-        self.dest: TagArg = _DEST.parse_tag("math()", "dest", dest)
+        self.source_expression: Value | Span = _SOURCE.parse(call, "expression", expression)
+        self.dest: TagArg = _DEST.parse_tag(call, "dest", dest)
         check_rules(
             self._operands,
             self._operand_rules,
-            "math()",
+            call,
             {"source_expression": expression, "dest": dest},
         )
         check_float_literals(expression)
@@ -500,9 +502,6 @@ class CalcInstruction(OneShotMixin, Instruction):
         # The analyses and the code generator read this formula.  calc_form() rewrites
         # it for the mode.  It is not a parse result.
         self.expression = calc_form(expression, self.mode, doubles=doubles)
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

@@ -15,8 +15,7 @@ from pyrung.core.instruction.operands import (
     COIL,
     RangeArg,
     TagArg,
-    held,
-    inner,
+    operand_object,
 )
 from pyrung.core.program import latch, out, reset
 
@@ -40,8 +39,8 @@ def test_an_immediate_coil_tag_keeps_the_authored_wrapper():
     arg = COIL.parse("out()", "target", wrapped)
     assert isinstance(arg, TagArg)
     assert arg.immediate is True
-    assert held(arg) is wrapped
-    assert inner(arg) is y[1]
+    assert arg.wrapper is wrapped
+    assert operand_object(arg) is y[1]
 
 
 def test_a_coil_range_parses_to_a_range_arg():
@@ -57,7 +56,7 @@ def test_an_immediate_coil_range_keeps_the_authored_wrapper():
     arg = COIL.parse("out()", "target", wrapped)
     assert isinstance(arg, RangeArg)
     assert arg.immediate is True
-    assert held(arg) is wrapped
+    assert arg.wrapper is wrapped
 
 
 @pytest.mark.parametrize(
@@ -139,7 +138,7 @@ def test_each_coil_holds_only_its_parsed_target():
         TagArg,
         TagArg,
     ]
-    assert held(targets[4]) is wrapped
+    assert targets[4].wrapper is wrapped
     assert [arg.immediate for arg in targets] == [
         False,
         True,

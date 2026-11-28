@@ -339,20 +339,13 @@ def renders_in_full(instr: Any) -> bool:
     return type(instr).__name__ in _IN_FULL or _call_operands(instr) is not None
 
 
-def _value_text(value: Any) -> ArgumentText:
-    """Return the text of an operand, or the text of each item of a list."""
-    if isinstance(value, list):
-        return [operand_name(item) for item in value]
-    return operand_name(value)
-
-
 def _operand_text(instr: Any, name: str, attribute: str | tuple[str, ...]) -> ArgumentText:
     """Return the text of the argument *name*, which the attribute or attributes hold."""
     if isinstance(attribute, str):
         # An instruction can hold an operand in another form than the author wrote. For
         # example, blockcopy() holds a dest tag as the range it writes. The call shows
         # what the author wrote.
-        return _value_text(getattr(instr, f"authored_{attribute}", getattr(instr, attribute)))
+        return operand_name(getattr(instr, f"authored_{attribute}", getattr(instr, attribute)))
     compose = getattr(instr, "_call_argument", None)
     if compose is not None:
         return compose(name, operand_name)
@@ -483,7 +476,7 @@ def _declared_arguments(instr: Any) -> tuple[str, list[tuple[str, ArgumentText, 
     for name, attribute in cls._call_keyword_operands:
         value = getattr(instr, f"authored_{attribute}", getattr(instr, attribute))
         if value is not None:
-            args.append((name, _value_text(value), "keyword"))
+            args.append((name, operand_name(value), "keyword"))
     for name in cls._call_keywords:
         text = _keyword_text(instr, name)
         if text is not None:

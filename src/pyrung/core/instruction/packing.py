@@ -110,9 +110,6 @@ class PackBitsInstruction(OneShotMixin, Instruction):
             {"bit_block": bit_block, "dest": dest},
         )
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
-
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -160,9 +157,6 @@ class PackWordsInstruction(OneShotMixin, Instruction):
         self.word_block: Span = _TWO_WORDS.parse("pack_words()", "word_block", word_block)
         self.dest: Dest = _WIDE_REGISTER.parse("pack_words()", "dest", dest)
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
-
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -208,9 +202,6 @@ class PackTextInstruction(OneShotMixin, Instruction):
         self.source_range: Span = _CHARS.parse("pack_text()", "source_range", source_range)
         self.dest: Dest = _REGISTER.parse("pack_text()", "dest", dest)
         self.allow_whitespace = bool(allow_whitespace)
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer
@@ -273,9 +264,6 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
     def dest(self) -> Span:
         return self.bit_block
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
-
     @guard_oneshot_execution
     @_skip_on_bad_pointer
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -327,9 +315,6 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
     @property
     def dest(self) -> Span:
         return self.word_block
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing. ``__init__`` has already parsed every operand and checked the rules."""
 
     @guard_oneshot_execution
     @_skip_on_bad_pointer

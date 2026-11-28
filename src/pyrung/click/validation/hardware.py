@@ -18,7 +18,7 @@ from pyrung.core.instruction.conversions import (
     _render_text_from_numeric,
     copy_source_kind,
 )
-from pyrung.core.instruction.operands import ConstArg, TagArg, inner
+from pyrung.core.instruction.operands import ConstArg, TagArg, operand_object
 from pyrung.core.memory_block import _element_name, _store_block, block_room
 from pyrung.core.tag import TagType
 from pyrung.core.validation.walker import ProgramLocation
@@ -129,7 +129,7 @@ def _evaluate_wide_copy_constant(
         return []
     if not isinstance(value, ConstArg) or copy_source_kind(value) != LITERAL:
         return []
-    resolution = resolver.resolve_operand_slots(inner(dest))
+    resolution = resolver.resolve_operand_slots(operand_object(dest))
     if resolution.unresolved:
         return []
     dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in resolution.slots))
@@ -284,7 +284,7 @@ def constant_text_past_bank_advice(instruction: Any, resolver: _ResolutionCache)
     if type(instruction).__name__ != "CopyInstruction":
         return None
     written = _fewest_elements_written(instruction)
-    resolution = resolver.resolve_operand_slots(inner(instruction.dest))
+    resolution = resolver.resolve_operand_slots(operand_object(instruction.dest))
     if written is None or resolution.unresolved or len(resolution.slots) != 1:
         return None
     address = resolution.slots[0].address

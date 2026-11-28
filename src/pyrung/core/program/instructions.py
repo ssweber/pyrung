@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import (
@@ -46,12 +46,10 @@ def _attach_instruction(
     instruction: Any,
     source_file: str | None,
     source_line: int | None,
-    *,
-    call: str | None = None,
 ) -> None:
     """Attach source metadata and append an instruction to the current rung."""
     instruction.source_file, instruction.source_line = source_file, source_line
-    ctx._rung.add_instruction(instruction, call=call)
+    ctx._rung.add_instruction(instruction)
 
 
 def _capture_instruction_context(
@@ -71,24 +69,15 @@ def _add_instruction(
     instruction_cls: type[Instruction],
     *args: Any,
     source_depth: int = 4,
-    operands: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
-    """Build an instruction, capture source metadata, and append it to the rung.
-
-    *operands* maps field names to the values to check before the instruction is built.
-    Pass it when ``__init__`` reads something from an operand, such as the type of a
-    destination.  The check then refuses a wrong operand before ``__init__`` raises
-    ``AttributeError``.
-    """
+    """Build an instruction, capture source metadata, and append it to the rung."""
     ctx, source_file, source_line = _capture_instruction_context(
         func_name,
         source_depth=source_depth,
     )
-    if operands is not None:
-        instruction_cls.check_values(f"{func_name}()", operands)
     instruction = instruction_cls(*args, **kwargs)
-    _attach_instruction(ctx, instruction, source_file, source_line, call=f"{func_name}()")
+    _attach_instruction(ctx, instruction, source_file, source_line)
     return instruction
 
 
@@ -414,7 +403,6 @@ class _MathInstruction:
             expression,
             dest,
             oneshot=oneshot,
-            operands={"source_expression": expression, "dest": dest},
         )
         return dest
 
@@ -468,7 +456,7 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
         expression,
         dest,
         oneshot=oneshot,
-        operands={"source_expression": expression, "dest": dest},
+        call="calc()",
     )
     return dest
 
@@ -504,7 +492,6 @@ def search(
         found=found,
         continuous=continuous,
         oneshot=oneshot,
-        operands={"found": found, "result": result},
     )
     return result
 

@@ -506,9 +506,6 @@ class CopyInstruction(OneShotMixin, Instruction):
     def target(self) -> Dest:
         return self.dest
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
-
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         resolved_target: Tag | None
@@ -793,9 +790,6 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 convert = to_value
         self.convert = convert
 
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
-
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
@@ -911,9 +905,6 @@ class FillInstruction(OneShotMixin, Instruction):
         self.value: Value = _one_value(VALUE.parse("fill()", "value", value))
         check_rules(self._operands, self._operand_rules, "fill()", {"value": value, "dest": dest})
         self.convert = _plain_text_converter(value, dest)
-
-    def check_operands(self, call: str | None = None) -> None:
-        """Do nothing, because the builder parsed every operand."""
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

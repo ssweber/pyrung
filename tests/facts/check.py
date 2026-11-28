@@ -116,7 +116,7 @@ from pyrung.core.analysis.write_sites import (
     static_write_target_names,
 )
 from pyrung.core.expression import randint_sites
-from pyrung.core.instruction.operands import as_authored
+from pyrung.core.instruction.operands import operand_object
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
@@ -437,7 +437,7 @@ def hold_scans(program: Any) -> int:
     longest = 0
     for instr in walk_instructions(program):
         if isinstance(instr, (OnDelayInstruction, OffDelayInstruction)) and isinstance(
-            preset := as_authored(instr.preset), int
+            preset := operand_object(instr.preset), int
         ):
             longest = max(longest, math.ceil(preset * instr.unit.ns / (DT * 1e9)))
     return min(400, max(30, longest + 10))
@@ -492,7 +492,7 @@ def _tag_names(expr: Any) -> set[str]:
 
 def _preset_scans(preset: Any, unit_ns: int | None, values: Mapping[str, list[Any]]) -> int:
     """Return the scans to reach *preset*, a count for a counter or a time for a timer."""
-    preset = as_authored(preset)
+    preset = operand_object(preset)
     if _is_number(preset):
         reach = preset
     else:
@@ -870,9 +870,9 @@ def _done_relations(facts: Facts) -> dict[str, _DoneRule]:
     owners: dict[str, Any] = {}
     for instr in walk_instructions(facts.program):
         if isinstance(instr, kinds):
-            owners[as_authored(instr.done_bit).name] = instr
+            owners[operand_object(instr.done_bit).name] = instr
         elif isinstance(instr, TimeDrumInstruction):
-            owners[as_authored(instr.completion_flag).name] = instr
+            owners[operand_object(instr.completion_flag).name] = instr
     names = facts.prior.stateful_names
     found = {}
     for spec in facts.prior.state_key_done_specs:
@@ -881,11 +881,11 @@ def _done_relations(facts: Facts) -> dict[str, _DoneRule]:
         if instr is None:
             continue
         if isinstance(instr, TimeDrumInstruction):
-            last = as_authored(instr.presets[-1])
+            last = operand_object(instr.presets[-1])
             preset = last if _is_number(last) else last.name
-            step = as_authored(instr.current_step).name
+            step = operand_object(instr.current_step).name
             found[done] = _DoneRule(spec.kind, spec.acc_name, preset, step, len(instr.presets))
-        elif _is_number(authored := as_authored(instr.preset)):
+        elif _is_number(authored := operand_object(instr.preset)):
             preset = facts.done_presets.get(done, authored)
             found[done] = _DoneRule(spec.kind, spec.acc_name, preset)
         else:
@@ -1033,14 +1033,14 @@ def _bands(facts: Facts) -> dict[str, _Band]:
     presets: dict[str, list[Any]] = {}
 
     def bound(value: Any) -> Any:
-        value = as_authored(value)
+        value = operand_object(value)
         return value if _is_number(value) else value.name
 
     for instr in walk_instructions(facts.program):
         if isinstance(instr, timers):
-            steps[as_authored(instr.accumulator).name] = math.ceil(DT * 1e9 / instr.unit.ns)
+            steps[operand_object(instr.accumulator).name] = math.ceil(DT * 1e9 / instr.unit.ns)
         if isinstance(instr, (*timers, CountUpInstruction, CountDownInstruction)):
-            presets[as_authored(instr.accumulator).name] = [bound(instr.preset)]
+            presets[operand_object(instr.accumulator).name] = [bound(instr.preset)]
         # A coil with its own timers compares each accumulator with both of its presets.
         if isinstance(instr, (DebounceInstruction, FlasherInstruction, TimedInstruction)):
             accs = [getattr(instr, f, None) for f in ("on_acc", "off_acc", "timer_acc")]
