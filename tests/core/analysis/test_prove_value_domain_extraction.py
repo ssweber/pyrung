@@ -734,7 +734,6 @@ _STEPS_PAST_2_53 = {
 }
 
 
-@pytest.mark.xfail(strict=True, reason="the prover keeps a step past 2 ** 53 exact")
 @pytest.mark.parametrize(
     "make, dest_type, expected", _STEPS_PAST_2_53.values(), ids=_STEPS_PAST_2_53
 )
