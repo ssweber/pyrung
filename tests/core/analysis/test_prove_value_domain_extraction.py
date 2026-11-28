@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from pyrung.core import (
     PLC,
     Bool,
+    Dint,
     Int,
     Program,
     Real,
@@ -19,6 +22,7 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
+from pyrung.core.expression import LiteralExpr
 
 # ===================================================================
 # Group 2: Value domain extraction
@@ -574,6 +578,16 @@ def _odd_power_of_a_negative() -> Program:
     return logic
 
 
+def _power_past_2_53() -> Program:
+    go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
+    n, d3 = Int("N"), Dint("D3")
+    with Program(strict=False) as logic:
+        _picked(go_a, go_b, n, 1, 2, 3)
+        with rung():
+            math(LiteralExpr(10) ** LiteralExpr(23), d3)
+    return logic
+
+
 def _floor_division_by_a_span_through_zero() -> Program:
     go_a, go_b = Bool("GoA", external=True), Bool("GoB", external=True)
     d, d3 = Int("D"), Int("D3")
@@ -593,6 +607,7 @@ _STORED_VALUE_PROGRAMS = {
     "wide_power": _wide_power,
     "power_of_a_negative": _power_of_a_negative,
     "odd_power_of_a_negative": _odd_power_of_a_negative,
+    "power_past_2_53": _power_past_2_53,
     "floor_division_by_a_span_through_zero": _floor_division_by_a_span_through_zero,
 }
 
@@ -625,6 +640,75 @@ def test_each_math_domain_holds_every_value_a_scan_stores(build):
             for domain in domains:
                 if "D3" in domain:
                     assert stored in domain["D3"], (go_a, go_b, stored, domain["D3"])
+
+
+def test_a_power_past_2_53_has_the_low_bits_of_the_nearest_double():
+    """List -167772160 for ``10 ^ 23`` into a Dint, and check that a scan stores it.
+
+    The nearest double to 10 ** 23 has those low 32 bits.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import collect_produced_value_domains
+
+    logic = _power_past_2_53()
+    domains = collect_produced_value_domains(logic, build_program_graph(logic))
+    assert -167772160 in domains["D3"]
+    plc = PLC(logic)
+    plc.step()
+    assert plc.current_state.tags["D3"] == -167772160
+
+
+def _one_value(tag_type: type, name: str, value: int) -> Any:
+    return tag_type(name, choices={value: "a"}, default=value, external=True)
+
+
+def _mean_of_ints() -> Any:
+    from pyrung.core import Block, TagType
+
+    block = Block("B", TagType.DINT, 1, 2)
+    for addr in (1, 2):
+        block.slot(addr, default=10, choices={10: "ten"}, external=True)
+    return block.select(1, 2).mean()
+
+
+_SINGLE_VALUE_POWERS = {
+    "dint_10_to_23": (lambda: _one_value(Dint, "A", 10) ** 23, Dint),
+    "real_10_to_23": (lambda: _one_value(Real, "R", 10) ** 23, Dint),
+    "mean_of_10s_to_23": (lambda: _mean_of_ints() ** 23, Dint),
+    "int_minus_1779_to_5": (lambda: _one_value(Int, "A", -1779) ** 5, Dint),
+    "int_minus_1972_to_6_into_int": (lambda: _one_value(Int, "A", -1972) ** 6, Int),
+}
+
+
+@pytest.mark.parametrize("make, dest_type", _SINGLE_VALUE_POWERS.values(), ids=_SINGLE_VALUE_POWERS)
+def test_a_power_of_single_values_holds_what_a_scan_stores(make, dest_type):
+    """List what a scan stores for a power past 2 ** 53 of one base and one exponent.
+
+    A scan rounds the exact power when both operands are ints.  It calls ``pow()`` when
+    either is a float, as a Real or a ``mean()`` is, even when the value is 10.  On Windows
+    ``pow()`` can be one double away from the exact power.  So the domain lists one or
+    two values.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import (
+        _collect_all_exprs,
+        _collect_structural_domains,
+        collect_produced_value_domains,
+    )
+
+    with Program(strict=False) as logic:
+        power = make()
+        with rung():
+            math(power, dest_type("D3"))
+    graph = build_program_graph(logic)
+    plc = PLC(logic)
+    plc.step()
+    stored = plc.current_state.tags["D3"]
+    produced = collect_produced_value_domains(logic, graph)
+    structural = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+    assert stored in structural["D3"]
+    assert len(structural["D3"]) <= 2
+    assert stored in produced.get("D3", (stored,))
 
 
 def test_check_keeps_a_comparison_with_a_value_an_xor_stores():

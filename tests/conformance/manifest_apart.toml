@@ -394,3 +394,12 @@ double_overflow = 1
 minus_sign = 2
 by_zero = 3
 zero_sum = 4
+
+[groups.pow_doubles]
+base = 2401 # Conf_PowDoubles: DS2401..DS2450
+slots = 4
+
+[groups.pow_doubles.cases]
+low_bits_into_dd = 1
+double_low_bits = 2
+infinite_power = 3

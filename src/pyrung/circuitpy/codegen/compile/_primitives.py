@@ -30,6 +30,7 @@ from pyrung.core.expression import (
     CALC_OPS,
     DOMAIN_LIMITED_MATH_FUNCS,
     DOUBLE_EXACT_LIMIT,
+    POW_EXACT_MAX,
     BinaryExpr,
     CalcBinaryExpr,
     CalcUnaryExpr,
@@ -176,10 +177,24 @@ def _compile_expression_impl(
             block_snapshots=block_snapshots,
             strict=strict,
         )
-        if isinstance(expr, DoubleBinaryExpr):
-            left, right = _double_operands(expr, left, right)
         calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
         flags = CALC_FLAGS if strict else None
+        if isinstance(expr, DoubleBinaryExpr):
+            if calc_op and expr.symbol == "**":
+                # The core computes a power of two ints exactly and rounds it to a double
+                # (DoubleBinaryExpr).  _pow and _pow_calc compute the same power, and
+                # _dbl() rounds it.  float() keeps the step a float, as _int_bound expects
+                # of a double step.  The jit cannot trace _pow_calc's log, so a literal
+                # exponent that needs no guard calls _pow (_exact_power_literal).
+                ctx.mark_helper("_math_func")
+                ctx.mark_helper("_pow")
+                ctx.mark_helper("_dbl")
+                if _exact_power_literal(expr.right, ctx):
+                    return f"float(_dbl(_pow({left}, {right})))"
+                ctx.mark_helper("_pow_calc")
+                ctx.mark_helper("_term_fail")
+                return f"float(_dbl(_pow_calc({left}, {right}, {flags})))"
+            left, right = _double_operands(expr, left, right)
         if expr.op is _op_hex_div:
             # A hex Math's / rounds the quotient down (core _op_hex_div).  // gives the same
             # quotient for whole operands.  The fast path takes a Word tag or a whole constant
@@ -210,9 +225,11 @@ def _compile_expression_impl(
             if expr.symbol in ("<<", ">>"):
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
-        if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
+        if calc_op and expr.symbol == "**" and not _exact_power_literal(expr.right, ctx):
             # A Math's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
-            # a negative power is +Inf.  A complex result is 0 with SC46.
+            # a negative power is +Inf.  A complex result is 0 with SC46.  An integer
+            # power past the double range is Inf without being computed.  A literal
+            # exponent that needs no guard stays inline (_exact_power_literal).
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")
@@ -642,7 +659,20 @@ def _reads_int_of_float(expr: Any) -> bool:
 
 
 def _small_count_literal(expr: Any) -> bool:
+    """Return whether *expr* is an int constant from 0 to 64."""
     return _non_negative_int_literal(expr) and expr.value <= 64
+
+
+def _exact_power_literal(expr: Any, ctx: CodegenContext) -> bool:
+    """Return whether *expr* is a literal exponent whose power skips ``_pow_calc``'s guard.
+
+    The jit traces ``_pow``, but it cannot trace the log in ``_pow_calc``.  So the kernel
+    computes the exact power for an exponent up to ``POW_EXACT_MAX``.  On the board a
+    Dint to the 1038th power has about 32000 bits, and nothing traces code.py.  So
+    code.py computes the exact power only up to 64 and reads the log above it.
+    """
+    limit = POW_EXACT_MAX if ctx.kernel_runtime else 64
+    return _non_negative_int_literal(expr) and 1 <= expr.value <= limit
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:

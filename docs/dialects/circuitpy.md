@@ -266,7 +266,7 @@ The P1AM-200 runs CircuitPython, which imposes limits beyond what the pyrung sim
 - **No TLS.** Modbus TCP and any network traffic run unencrypted. Keep the P1AM-200 on a trusted, isolated network.
 - **Single-threaded.** The scan loop is cooperative. Long-running `FunctionCallInstruction` callables block the entire scan (and may trip the watchdog).
 - **Limited memory.** CircuitPython has a small heap. Programs with many tags or large blocks may hit memory limits, so test on hardware early.
-- **No doubles.** A CLICK computes a `math()` into a `Real` in doubles. CircuitPython's floats have about 22 bits of precision, so `code.py` computes `+`, `-`, `*` and MOD of integer tags as exact integers. `DD1 - DD2` with 100000001 and 100000000 then stores 1.0. A zero from these is 0.0. A CLICK stores -0.0 for some of them, such as `-DS[1]` with DS1 = 0.
+- **No doubles.** A CLICK computes a `math()` into a `Real` in doubles. CircuitPython's floats have about 22 bits of precision, so `code.py` computes `+`, `-`, `*` and MOD of integer tags as exact integers. `DD1 - DD2` with 100000001 and 100000000 then stores 1.0. A zero from these is 0.0. A CLICK stores -0.0 for some of them, such as `-DS[1]` with DS1 = 0. `code.py` rounds a power of integers above 2 ** 53 to the board's float. So `3 ** 35` into a `Dint` should store 0 on the board (no one has read it on a P1AM-200). A CLICK stores -651126888.
 
 ## External resources
 

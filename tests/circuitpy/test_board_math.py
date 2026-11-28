@@ -7,7 +7,12 @@ through the board's rounding. It also rounds the stored value the same way.
 
 from __future__ import annotations
 
+import math as pymath
+from typing import Any
+
+from pyrung import LiteralExpr
 from pyrung.circuitpy import generate_circuitpy
+from pyrung.circuitpy.codegen._helpers import _HELPER_DEFS
 from pyrung.core import Dint, Program, Real, copy, math, rung
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_scan_time_and_stop import _circuitpython_float, _hw
@@ -45,3 +50,32 @@ def test_a_difference_of_large_dints_into_a_real_stores_the_exact_difference(
     stored = namespace[_context_for_program(program, hw).symbol_for_tag(total)]
     # A 30-bit float of 100000001 is 100000000, so a step in floats would store 0.0.
     assert _circuitpython_float(stored) == 1.0
+
+
+def test_a_power_past_2_53_into_a_dint_stores_the_low_bits_of_the_board_float(
+    monkeypatch,
+) -> None:
+    # code.py computes 3 ** 35 exactly and then rounds it to the board's float.  That
+    # float is a multiple of 2 ** 34, so its low 32 bits are 0.  A CLICK stores
+    # -651126888.  The docs give this value, and no one has read it on a P1AM-200.
+    power = Dint("Power")
+    with Program(strict=False) as program:
+        with rung():
+            math(LiteralExpr(3) ** 35, power)
+    hw = _hw()
+    result = generate_circuitpy(program, hw, target_scan_ms=10.0, runstop=None)
+    source = _BOARD_FLOAT + result.code.replace("float(", "_board_float(")
+    namespace = _run_single_scan_source(source, monkeypatch, _StubBase())
+    assert namespace[_context_for_program(program, hw).symbol_for_tag(power)] == 0
+
+
+def test_a_power_whose_exponent_is_past_the_float_range_is_zero_with_sc43() -> None:
+    # The guard's log raises OverflowError for such an exponent.  A Math's literal is cut
+    # to 32 bits first, so only a direct call reaches this case.
+    namespace: dict[str, Any] = {"math": pymath}
+    names = ("_term_fail", "_math_func", "_pow", "_pow_calc")
+    source = [line for name in names for line in _HELPER_DEFS[name]]
+    exec("\n".join(source), namespace)
+    flags: list[int] = []
+    assert namespace["_pow_calc"](2, 10**400, flags) == 0
+    assert flags == [43]

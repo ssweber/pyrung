@@ -110,6 +110,7 @@ from tests.conformance.math import (
     test_math_range,
     test_math_terms,
     test_numeric,
+    test_pow_doubles,
     test_real_sum,
     test_store_probe,
     test_term_zero,
@@ -377,6 +378,8 @@ APART_GROUPS = [
     test_hex_div_down.group,
     # Which fault flags a Math sets, read on a CLICK in a program of its own.
     test_math_flags.group,
+    # What a decimal Math's power stores into a DS, a DD and a DF, read on a CLICK.
+    test_pow_doubles.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -436,9 +439,9 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow5_reads": ApartPart(("fill_binary", "math_range")),
     # Math formulas typed without brackets, read in CLICK's order.
     "follow5_order": ApartPart(("math_order",)),
-    # What a hex Math's division and MOD store, and which fault flags a Math sets.  A CLICK
-    # was read making each in a program of its own.
-    "follow6_reads": ApartPart(("hex_divmod", "hex_div_down", "math_flags")),
+    # What a hex Math's division and MOD store, which fault flags a Math sets, and what a
+    # decimal Math's power stores.  A CLICK was read making each in a program of its own.
+    "follow6_reads": ApartPart(("hex_divmod", "hex_div_down", "math_flags", "pow_doubles")),
     # Values staged for raw Modbus reads, and the echo of raw writes. test_raw_requests uses
     # them.
     "modbus_raw": ApartPart(("modbus_raw",)),
