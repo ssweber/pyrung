@@ -594,8 +594,6 @@ class _ScanWrites:
             if isinstance(item, CallInstruction):
                 callees.add(item.subroutine_name)
             for target in instruction_write_targets(item):
-                if isinstance(target, ImmediateRef):
-                    target = target.value
                 if isinstance(target, Tag):
                     writes.names[target.name] = target
                 elif isinstance(target, BlockRange):

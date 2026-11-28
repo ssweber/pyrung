@@ -283,14 +283,11 @@ class _RowBuilder:
         from pyrung.core.analysis.pdg import _extract_instruction_writes, _extract_tag_names
         from pyrung.core.analysis.write_sites import instruction_write_targets
         from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-        from pyrung.core.tag import ImmediateRef
 
         writes, _target_reads, implicit = _extract_instruction_writes(instr, self._tag_refs)
         out = set(writes) | implicit
         banks: set[str] = set()
         for dest in instruction_write_targets(instr):
-            if isinstance(dest, ImmediateRef):
-                dest = dest.value
             if _is_unbounded(dest):
                 banks.add(self._note_bank(dest.block))
         children: list[_Writes] = []

@@ -374,7 +374,6 @@ def _tag_index(program: Any) -> dict[str, Tag]:
     index: dict[str, TagClass] = {}
 
     def note(value: Any) -> None:
-        value = _unwrap_target(value)
         if isinstance(value, TagClass):
             index.setdefault(value.name, value)
 
@@ -387,8 +386,8 @@ def _tag_index(program: Any) -> dict[str, Tag]:
                     subs = getattr(node, "conditions", None)
                     if subs is not None:
                         stack.extend(subs)
-                    note(getattr(node, "tag", None))
-                    note(getattr(node, "value", None))
+                    note(_unwrap_target(getattr(node, "tag", None)))
+                    note(_unwrap_target(getattr(node, "value", None)))
             for instr in rung._instructions:
                 for attr in ("target", "dest", "source"):
                     note(operand_object(getattr(instr, attr, None)))

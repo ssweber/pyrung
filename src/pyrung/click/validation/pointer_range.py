@@ -113,8 +113,6 @@ def _uses(instruction: Any) -> list[tuple[str, Any]]:
 
 
 def _is_write(instruction: Any, ref: Any) -> bool:
-    # immediate() accepts only a tag or a range with fixed ends. So no write target is a
-    # pointer inside immediate().
     return any(target is ref for target in instruction_write_targets(instruction))
 
 

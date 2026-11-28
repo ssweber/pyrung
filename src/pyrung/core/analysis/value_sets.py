@@ -110,12 +110,7 @@ def _scan(value: Any) -> tuple[set[str], list[Any]]:
 
 
 def _targets(instr: Any) -> list[Any]:
-    out = []
-    for target in instruction_write_targets(instr):
-        while isinstance(target, ImmediateRef):
-            target = target.value
-        out.append(target)
-    return out
+    return list(instruction_write_targets(instr))
 
 
 def _is_plain_copy(instr: Any) -> bool:

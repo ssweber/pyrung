@@ -17,6 +17,7 @@
 
 - `how()` now finds a plan through an `IntEnum` command register that the ladder clears with `copy(Cmd.NONE, Request)` (it found none). `how()` reads a `copy()` or `fill()` of an `IntEnum` member as the member's number (it read `Cmd.NONE` as a tag named `NONE`). A plan no longer waits for a tag named after a member.
 - `math()` no longer hangs on a power past the double range, such as `5 ** DD[1]` with DD1 = 2147483647, in any runner or in the generated CircuitPython code. Into an `Int`, a `Dint` or a `Word` it stores 0 and sets `system.fault.out_of_range`, as a CLICK does.
+- A validation finding on a `math()` of one operand now shows the operand, as in `math(DS1, DS5)` (it showed `math(LiveTag, DS5)`).
 
 ## v0.19.0 (2026-11-27)
 

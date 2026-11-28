@@ -441,7 +441,6 @@ class _TranslatorMixin:
         path: str,
         source: Any,
         allow_immediate: bool = False,
-        immediate_context: str = "",
     ) -> str:
         if isinstance(value, ImmediateRef):
             if not allow_immediate:
@@ -452,12 +451,7 @@ class _TranslatorMixin:
                     ),
                     source=source,
                 )
-            return self._render_immediate_operand(
-                value,
-                path=path,
-                source=source,
-                context=immediate_context,
-            )
+            return self._render_immediate_contact(value, path=path, source=source)
         if isinstance(value, Tag):
             return self._resolve_tag(value, path=path, source=source)
         if isinstance(value, BlockRange):
@@ -606,36 +600,18 @@ class _TranslatorMixin:
             path=path,
             source=source,
             allow_immediate=True,
-            immediate_context="contact",
         )
 
-    def _render_immediate_operand(
-        self,
-        immediate_ref: ImmediateRef,
-        *,
-        path: str,
-        source: Any,
-        context: str,
+    def _render_immediate_contact(
+        self, immediate_ref: ImmediateRef, *, path: str, source: Any
     ) -> str:
-        wrapped = immediate_ref.value
-
-        if context == "contact":
-            tag = self._require_tag(
-                wrapped,
-                path=path,
-                source=source,
-                message="Immediate contact requires a Tag operand.",
-            )
-            return self._fn(
-                "immediate",
-                self._resolve_tag(tag, path=f"{path}.value", source=source),
-            )
-
-        self._raise_issue(
+        tag = self._require_tag(
+            immediate_ref.value,
             path=path,
-            message=f"Unknown immediate render context: {context!r}.",
             source=source,
+            message="Immediate contact requires a Tag operand.",
         )
+        return self._fn("immediate", self._resolve_tag(tag, path=f"{path}.value", source=source))
 
     def _render_immediate_coil(self, target: Coil, *, path: str, source: Any) -> str:
         """Return a coil's ``immediate()`` target, and refuse one that is not in Y."""

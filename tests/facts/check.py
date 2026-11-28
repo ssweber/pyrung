@@ -1491,15 +1491,12 @@ def declared_writes(instr: Any, tags: Mapping[str, Any]) -> Callable[[str], bool
     from pyrung.core.analysis.prove.absorb import _all_write_targets
     from pyrung.core.analysis.prove.classify import _expand_indirect_tag_names
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
-    from pyrung.core.tag import ImmediateRef
 
     names = set(instruction_fault_writes(instr))
     names.update(name for name, _kind in _all_write_targets(instr))
     blocks: set[str] = set()
     for target in instruction_write_targets(instr):
         names |= static_write_target_names(target)
-        if isinstance(target, ImmediateRef):
-            target = target.value
         indirect = (IndirectRef, IndirectExprRef, IndirectBlockRange)
         if isinstance(target, indirect) and not _expand_indirect_tag_names(target):
             blocks.add(target.block.name)

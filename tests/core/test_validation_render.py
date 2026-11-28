@@ -146,6 +146,23 @@ def test_a_copy_shows_only_the_converter_that_its_author_wrote() -> None:
     assert render_instruction(copy, "")[0] == "copy(Count, Shown)"
 
 
+def test_a_math_of_one_operand_shows_the_operand() -> None:
+    from pyrung import Int, immediate
+    from pyrung.click import ClickBlocks
+    from pyrung.core.instruction import CalcInstruction
+    from pyrung.core.validation.render import render_instruction
+
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, *_ = ClickBlocks()
+    for source, shown in [
+        (ds[1], "DS1"),
+        (ds[Int("Ptr")], "DS[Ptr]"),
+        (immediate(xd[1]), "XD1"),
+        (5, "5"),
+    ]:
+        calc = CalcInstruction(source, ds[5])
+        assert render_instruction(calc, "")[0] == f"math({shown}, DS5)"
+
+
 def test_pack_and_unpack_render_both_operands() -> None:
     from pyrung import Block, Dint, TagType
     from pyrung.core.instruction import (

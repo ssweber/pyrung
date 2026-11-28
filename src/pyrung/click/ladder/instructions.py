@@ -76,7 +76,6 @@ class _InstructionMixin:
             path: str,
             source: Any,
             allow_immediate: bool = False,
-            immediate_context: str = "",
         ) -> str: ...
         def _render_arg(self, arg: Value | Span, *, path: str, source: Any) -> str: ...
         def _render_block_range(

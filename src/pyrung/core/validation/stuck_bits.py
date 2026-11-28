@@ -61,7 +61,7 @@ from pyrung.core.instruction.operands import (
     Value,
     operand_tags,
 )
-from pyrung.core.tag import ImmediateRef, tag_written_from_outside
+from pyrung.core.tag import tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
     WriteSite,
@@ -231,12 +231,9 @@ def _pointer_sides(
         index = node_index.get(id(node)) if node is not None else None
         for instr in _instructions_with_loop_bodies(rung._instructions):
             pointers = [
-                leaf
+                target
                 for target in instruction_write_targets(instr)
-                if isinstance(
-                    leaf := target.value if isinstance(target, ImmediateRef) else target,
-                    (IndirectRef, IndirectExprRef, IndirectBlockRange),
-                )
+                if isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange))
             ]
             if not pointers:
                 continue

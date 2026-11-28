@@ -49,7 +49,6 @@ from .operands import (
     Value,
     ValueOperand,
     check_rules,
-    operand_object,
 )
 from .resolvers import (
     _raise_fault,
@@ -298,6 +297,23 @@ def may_be_text(value: Any) -> bool:
     return isinstance(value, str)
 
 
+def _reads_text(source: Value | Span) -> bool:
+    """Return True if the formula *source* reads text, as :func:`may_be_text` tells."""
+    match source:
+        case TagArg(tag=tag):
+            return tag.type is TagType.CHAR
+        case PointerArg(ref=ref):
+            return ref.block.type is TagType.CHAR
+        case RangeArg() | PointerRangeArg():
+            return False
+        case ExprArg(expr=expr):
+            return may_be_text(expr)
+        case ConstArg(value=value):
+            return isinstance(value, str)
+        case _:
+            assert_never(source)
+
+
 def cut_int_constants(value: Any) -> Any:
     """Return *value* (a Math expression) with each integer constant cut to 32 bits, signed.
 
@@ -364,11 +380,23 @@ def calc_form(expression: Any, mode: CalcMode, *, doubles: CalcDoubles = "none")
     return _rebuild(expression, form)
 
 
-def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
-    """Infer Math arithmetic mode and whether the expression mixes mode families."""
-    tag_types: set[TagType] = set()
-    _collect_calc_tag_types(expression, tag_types, set())
-    tag_types.add(dest.type)
+def infer_calc_mode(source: Value | Span, dest: Tag) -> CalcModeInference:
+    """Infer Math arithmetic mode and whether the formula *source* mixes mode families."""
+    tag_types: set[TagType] = {dest.type}
+    match source:
+        case TagArg(tag=tag):
+            tag_types.add(tag.type)
+        case PointerArg(ref=ref):
+            # The family comes from the block that the pointer reads, not from the pointer.
+            tag_types.add(ref.block.type)
+        case RangeArg(span=span) | PointerRangeArg(span=span):
+            tag_types.add(span.block.type)
+        case ExprArg(expr=expr):
+            _collect_calc_tag_types(expr, tag_types, set())
+        case ConstArg():
+            pass
+        case _:
+            assert_never(source)
 
     has_hex_family = any(_calc_family_for_tag_type(tag_type) == "hex" for tag_type in tag_types)
     has_decimal_family = any(
@@ -488,14 +516,12 @@ class CalcInstruction(OneShotMixin, Instruction):
             {"source_expression": expression, "dest": dest},
         )
         check_float_literals(expression)
-        # The mode and the text check read the tag or range without its immediate().
-        source = operand_object(self.source_expression)
-        self.mode_inference = infer_calc_mode(source, self.dest.tag)
+        self.mode_inference = infer_calc_mode(self.source_expression, self.dest.tag)
         self.mode = self.mode_inference.mode
         # Only a Real shows the sign of a 0, so only a Math into a Real computes every
         # step in doubles.  Text keeps Python's ops, so "5" * 2 is "55".
         doubles: CalcDoubles = "power"
-        if may_be_text(source):
+        if _reads_text(self.source_expression):
             doubles = "none"
         elif self.dest.tag.type is TagType.REAL:
             doubles = "all"

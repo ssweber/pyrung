@@ -1453,8 +1453,7 @@ def _instruction_may_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
     may: set[str] = set()
     for target in instruction_write_targets(instr):
         names = _extract_write_targets(target, tag_refs)[0]
-        leaf = target.value if isinstance(target, ImmediateRef) else target
-        dynamic = isinstance(leaf, IndirectRef | IndirectExprRef | IndirectBlockRange)
+        dynamic = isinstance(target, IndirectRef | IndirectExprRef | IndirectBlockRange)
         if any(target is p for p in partial) or (dynamic and len(names) > 1):
             may |= names
         else:
@@ -2213,8 +2212,6 @@ def _named_write_dests(instr: Any) -> list[str]:
     """
     out: list[str] = []
     for dest in instruction_write_targets(instr):
-        if isinstance(dest, ImmediateRef):
-            dest = dest.value
         if isinstance(dest, Tag):
             out.append(dest.name)
     return out
@@ -2273,8 +2270,6 @@ def _collect_indirect_writes(
     def _check_instruction(instr: Any, node_index: int) -> None:
         cls = type(instr)
         for dest in instruction_write_targets(instr):
-            if isinstance(dest, ImmediateRef):
-                dest = dest.value
             if not isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
                 continue
             block = dest.block

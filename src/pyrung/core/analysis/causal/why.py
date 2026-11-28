@@ -335,7 +335,7 @@ def _rung_aims(rung: Rung, nodes: Mapping[tuple[int, ...], int], view: Any) -> d
     from pyrung.core.instruction import CallInstruction, ForLoopInstruction
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
     from pyrung.core.rung import Rung as RungClass
-    from pyrung.core.tag import ImmediateRef, Tag
+    from pyrung.core.tag import Tag
 
     found = {node: _Aims() for node in nodes.values()}
     written: set[str] = set()
@@ -388,8 +388,6 @@ def _rung_aims(rung: Rung, nodes: Mapping[tuple[int, ...], int], view: Any) -> d
             # An instruction reads its pointers as it starts, before any write of its own.
             stores: list[str] = []
             for dest in instruction_write_targets(item):
-                if isinstance(dest, ImmediateRef):
-                    dest = dest.value
                 names = targets(dest)
                 if names is None:
                     lost = True
@@ -605,14 +603,11 @@ def _instruction_label(
     from pyrung.core.analysis.write_sites import instruction_write_targets
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
-    from pyrung.core.tag import ImmediateRef
 
     def reaches_by_pointer(instr: Any) -> bool:
         if reaches is None:
             return False
         for dest in instruction_write_targets(instr):
-            if isinstance(dest, ImmediateRef):
-                dest = dest.value
             if isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)) and reaches(
                 dest.block
             ):
