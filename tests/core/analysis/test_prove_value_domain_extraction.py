@@ -711,6 +711,60 @@ def test_a_power_of_single_values_holds_what_a_scan_stores(make, dest_type):
     assert stored in produced.get("D3", (stored,))
 
 
+_BIG = 2**20 + 1
+
+#: Formulas with an int step past 2 ** 53, and the value a scan stores for each.
+_STEPS_PAST_2_53 = {
+    "dint_product_of_three": (
+        lambda: (
+            _one_value(Dint, "A", _BIG) * _one_value(Dint, "B", _BIG) * _one_value(Dint, "C", _BIG)
+        ),
+        Dint,
+        3145728,
+    ),
+    "dint_product_with_a_constant": (
+        lambda: (
+            LiteralExpr(2**31 - 1) * _one_value(Dint, "A", 2**31 - 1) * _one_value(Dint, "B", 3)
+        ),
+        Dint,
+        0,
+    ),
+    "hex_word_3_to_35": (lambda: _one_value(Word, "A", 3) ** 35, Word, 38808),
+    "hex_word_3_to_41": (lambda: _one_value(Word, "A", 3) ** 41, Word, 49152),
+}
+
+
+@pytest.mark.xfail(strict=True, reason="the prover keeps a step past 2 ** 53 exact")
+@pytest.mark.parametrize(
+    "make, dest_type, expected", _STEPS_PAST_2_53.values(), ids=_STEPS_PAST_2_53
+)
+def test_a_step_past_2_53_holds_the_rounded_value_a_scan_stores(make, dest_type, expected):
+    """Check that each domain of D3 lists what a scan stores for a step past 2 ** 53.
+
+    A Math rounds each int step past 2 ** 53 to the nearest double.  The exact step
+    has other low bits, so a domain built from it leaves out the stored value.
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import (
+        _collect_all_exprs,
+        _collect_structural_domains,
+        collect_produced_value_domains,
+    )
+
+    with Program(strict=False) as logic:
+        formula = make()
+        with rung():
+            math(formula, dest_type("D3"))
+    graph = build_program_graph(logic)
+    plc = PLC(logic)
+    plc.step()
+    assert plc.current_state.tags["D3"] == expected
+    produced = collect_produced_value_domains(logic, graph)
+    structural = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+    assert expected in structural["D3"]
+    assert expected in produced["D3"]
+
+
 def test_check_keeps_a_comparison_with_a_value_an_xor_stores():
     """``math(A ^ 1, D3)`` with A = 4 stores 5, so ``D3 == 5`` is not always false.
 
