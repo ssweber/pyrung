@@ -16,7 +16,8 @@
 ### Fixes
 
 - `how()` now finds a plan through an `IntEnum` command register that the ladder clears with `copy(Cmd.NONE, Request)` (it found none). `how()` reads a `copy()` or `fill()` of an `IntEnum` member as the member's number (it read `Cmd.NONE` as a tag named `NONE`). A plan no longer waits for a tag named after a member.
-- `fork()`, `how()` and `replay_to()` now read the clock that `set_rtc()` set since the last scan (they read the clock from before the call). A `fork()` taken before the first scan now keeps a `stop()` or a `battery_present` change (the fork ran in RUN with the battery present).
+- If you call `set_rtc()` after the last scan, `fork()`, `how()` and `replay_to()` now run on the clock you set (they ran on the clock from before the call).
+- A `fork()` taken before the first scan is now stopped after `stop()`, and has `battery_present` False after you clear it (it was in RUN with the battery present).
 - `math()` no longer hangs on a power past the double range, such as `5 ** DD[1]` with DD1 = 2147483647, in any runner or in the generated CircuitPython code. Into an `Int`, a `Dint` or a `Word` it stores 0 and sets `system.fault.out_of_range`, as a CLICK does.
 
 ## v0.19.0 (2026-11-27)

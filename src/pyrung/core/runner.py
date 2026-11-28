@@ -1803,6 +1803,9 @@ class PLC:
         else:
             self._time_mode = TimeMode.FIXED_STEP
         self._scan_log = ScanLog(time_mode=self._time_mode)
+        # True while the log holds every scan of this runner's history, its parents' scans
+        # included.  A fork made with inherit_log=False starts a log of its own scans only.
+        self._log_holds_lineage = True
         self._checkpoint_interval = checkpoint_interval
         self._checkpoints: dict[int, SystemState] = {}
         self._forces_last_recorded: dict[str, bool | int | float | str] = {}
@@ -3034,12 +3037,12 @@ class PLC:
         if historical_owner is None:
             raise KeyError(target_scan_id)
         # The tip state holds each stop() and battery change made since the last scan.
-        # A runner's first scan belongs to its parent's epoch, but this runner ran on from
-        # its own edit of that state (a harness moving a count, a tip seed).
         at_tip = target_scan_id == self._state.scan_id
         if at_tip:
             historical_state = self._state
         elif target_scan_id == self._initial_scan_id:
+            # A runner's first scan belongs to its parent's epoch, but this runner ran on from
+            # its own edit of that state (a harness moving a count, a tip seed).
             historical_state = self._initial_state
         else:
             historical_state = historical_owner.state_at(target_scan_id)
@@ -3074,8 +3077,17 @@ class PLC:
         fork._search_refuses_restart = self._search_refuses_restart
         fork._modbus_stubbed = self._modbus_stubbed
         fork._reconstructs_history = self._reconstructs_history
-        parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
-        fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
+        timestamp = historical_state.timestamp
+        if at_tip:
+            # A set_rtc() made after the last scan is only in the live clock.
+            rtc_base = (self._rtc_base, self._rtc_base_sim_time)
+        elif target_scan_id >= self._initial_scan_id or self._log_holds_lineage:
+            # This runner's log holds the clock that each scan ran on, including a clock that
+            # a fork recorded at its first scan.  The parent's epoch does not hold that one.
+            rtc_base = (self._replay_rtc_at_state(historical_state, self._scan_log), timestamp)
+        else:
+            rtc_base = (historical_owner.rtc_at(historical_state), timestamp)
+        fork._set_rtc_internal(*rtc_base)
         if inherit_log:
             # Continue the parent's recording instead of starting a fresh log, so
             # a chain of execution forks accumulates the whole history —
@@ -3087,10 +3099,16 @@ class PLC:
                 self._causal_lineage.seal_through(target_scan_id),
             )
             fork._causal_initial_tags = dict(self._causal_initial_tags)
-        if at_tip and self._rtc_at_sim_time(historical_state.timestamp) != parent_rtc_at_fork_point:
-            # The log records a set_rtc() made after the last scan for the next scan, so the
-            # read above misses it.  The fork records it again for its own next scan.
-            fork._set_rtc_and_record(self._rtc_base, self._rtc_base_sim_time)
+            fork._log_holds_lineage = self._log_holds_lineage
+        else:
+            fork._log_holds_lineage = False
+        if at_tip and fork._replay_rtc_at_state(seeded, fork._scan_log) != fork._rtc_at_sim_time(
+            timestamp
+        ):
+            # The log files a set_rtc() made after the last scan under the next scan, so the
+            # fork's log returns the clock from before the call.  The fork records the live
+            # clock in its own log at its first scan.  Its replays and its own forks read it there.
+            fork._set_rtc_and_record(*rtc_base, scan_id=target_scan_id)
         if self._harness is not None:
             # Re-install the feedback harness on the fork (it rebuilds its plant
             # rungs against the fork's tags; accumulator state rides the inherited
@@ -3851,9 +3869,9 @@ class PLC:
         current_plant = self._earlier_plant_at(target_scan_id) is None
         if current_plant and self._harness is not None:
             self._harness.fork_onto(replay, as_recorded=True)
-        # A stop() or a battery change after the last scan is in history's tip state, and a
-        # set_rtc() is in the live clock.  Each one after an earlier scan belongs to the next
-        # scan, as a force or a patch does.
+        # A stop() or a battery change made after the last scan is in the tip state.  A
+        # set_rtc() made after the last scan is only in the live clock.  A replay of an earlier
+        # scan leaves each of these to the scan after it.  Forces and patches work the same way.
         if target_scan_id == self._state.scan_id:
             for event in lifecycle_by_scan.get(target_scan_id + 1, []):
                 _apply_lifecycle_to_replay(replay, event)
