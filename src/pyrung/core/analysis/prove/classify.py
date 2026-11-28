@@ -1101,11 +1101,7 @@ def _interval_bounds(
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[float, float] | None:
     """Resolve min/max interval for an expression node, or None if unbounded."""
-    from pyrung.core.expression import (
-        BinaryExpr,
-        DoubleBinaryExpr,
-        RangeAggregateExpr,
-    )
+    from pyrung.core.expression import BinaryExpr, CalcBinaryExpr, RangeAggregateExpr
 
     if isinstance(node, RangeAggregateExpr):
         # max/min/median/mean all lie in the hull of the member intervals.
@@ -1144,6 +1140,21 @@ def _interval_bounds(
     right = _interval_bounds(node.right, graph, all_exprs, known_domains, atom_index)
     if left is None or right is None:
         return None
+    bounds = _binary_bounds(node, left, right)
+    if bounds is None or not isinstance(node, CalcBinaryExpr):
+        return bounds
+    return _math_step_bounds(bounds)
+
+
+def _binary_bounds(
+    node: Any, left: tuple[float, float], right: tuple[float, float]
+) -> tuple[float, float] | None:
+    """Return bounds for *node* over two intervals, or None.
+
+    The bounds of an int step are exact, and ``_interval_bounds`` then rounds them as a
+    Math step rounds its result (``_math_step_bounds``).
+    """
+    from pyrung.core.expression import DoubleBinaryExpr
 
     a_lo, a_hi = left
     b_lo, b_hi = right
@@ -1188,18 +1199,21 @@ def _interval_bounds(
         if max(abs(b_lo), abs(b_hi)) > _WIDEST_SHIFT:
             # The corner would build a huge int.
             return None
-        bounds = _power_bounds(node.op, a_lo, a_hi, b_lo, b_hi)
-        if bounds is None or not isinstance(node, DoubleBinaryExpr):
-            return bounds
         if not all(type(end) is int for end in ends):
-            return bounds
+            return _power_bounds(node.op, a_lo, a_hi, b_lo, b_hi)
         # A scan rounds the exact power of two ints to a double, and it calls pow() when
         # either operand is a float.  Int ends do not tell which.  A Real with a choice
-        # key of 10 holds 10.0, and a mean() of ints divides.  So the bounds cover both.
-        exact = _power_bounds(node.op, *ends, rounded=True)
-        if exact is None:
+        # key of 10 holds 10.0, and a mean() of ints divides.  So the bounds cover both,
+        # in a hex Math too.  _interval_bounds then rounds the ends of the exact power to
+        # doubles.
+        try:
+            floats = _power_bounds(node.op, *(float(end) for end in ends))
+        except OverflowError:
             return None
-        return (min(bounds[0], exact[0]), max(bounds[1], exact[1]))
+        exact = _power_bounds(node.op, *ends)
+        if floats is None or exact is None:
+            return None
+        return (min(floats[0], exact[0]), max(floats[1], exact[1]))
 
     try:
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
@@ -1213,28 +1227,41 @@ def _interval_bounds(
     return (min(corners), max(corners))
 
 
+def _math_step_bounds(bounds: tuple[float, float]) -> tuple[float, float] | None:
+    """Return *bounds* of a Math step's exact result, rounded as the step rounds, or None.
+
+    A Math rounds an int step past 2 ** 53 to the nearest double (``CalcBinaryExpr``).
+    Rounding never reverses the order of two values, and it leaves a double unchanged.  So
+    the rounded ends bound each rounded int result and each double result.  An end past
+    the double range rounds to Inf.  An Int, Dint or Word stores 0 for Inf, and the ends
+    do not bound 0.  So the function returns None when either end rounds to Inf.
+    """
+    from pyrung.core.expression import DOUBLE_EXACT_LIMIT, to_double
+
+    lo, hi = (
+        to_double(end) if type(end) is int and abs(end) > DOUBLE_EXACT_LIMIT else end
+        for end in bounds
+    )
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return None
+    return (lo, hi)
+
+
 #: The operations whose extremes over two intervals lie at the four corners.  Hold one
 #: operand, and the result only rises or only falls as the other operand rises.  A power
-#: does that only for a base of 0 or more.  ``_interval_bounds`` handles a negative base,
+#: does that only for a base of 0 or more.  ``_binary_bounds`` handles a negative base,
 #: and a divisor that can be 0, before it computes the corners.
 _CORNER_SYMBOLS = frozenset({"+", "-", "*", "/", "//", "**", "<<", ">>"})
 
-#: The widest left shift, and the largest exponent, that ``_interval_bounds`` computes.
+#: The widest left shift, and the largest exponent, that ``_binary_bounds`` computes.
 #: 2 ** 1024 is past a double.
 _WIDEST_SHIFT = 1024
 
 
 def _power_bounds(
-    op: Any, a_lo: float, a_hi: float, b_lo: float, b_hi: float, *, rounded: bool = False
+    op: Any, a_lo: float, a_hi: float, b_lo: float, b_hi: float
 ) -> tuple[float, float] | None:
-    """Return bounds for ``op(a, b)``, a power, over two intervals, or None.
-
-    With *rounded*, each corner that is an int is rounded to a double, as a scan rounds
-    the exact power of two ints.  Rounding never reverses the order of two values, so the
-    rounded corners bound the rounded power.
-    """
-    from pyrung.core.expression import to_double
-
+    """Return bounds for ``op(a, b)``, a power, over two intervals, or None."""
     try:
         if a_lo < 0:
             bounds = _negative_base_power_bounds(a_lo, a_hi, b_lo, b_hi)
@@ -1243,8 +1270,6 @@ def _power_bounds(
             corners = [op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
         if corners is None:
             return None
-        if rounded:
-            corners = [to_double(c) if type(c) is int else c for c in corners]
         # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer
         # stores 0 for it, and the corners do not bound 0.
         if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
@@ -1403,7 +1428,7 @@ def _power_point_values(
     """Return what a Math stores for a double power of two single ints, or None.
 
     A scan gives either the exact power rounded to a double or ``pow()`` on floats
-    (``_interval_bounds``).  Past 2 ** 53 the two can be a double apart, which is wider
+    (``_binary_bounds``).  Past 2 ** 53 the two can be a double apart, which is wider
     than ``_INTERVAL_DOMAIN_CAP``.  So this function lists both values.
     """
     from pyrung.core.expression import DoubleBinaryExpr, to_double
